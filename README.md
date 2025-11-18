@@ -2,6 +2,8 @@
 
 A modern, full-featured email marketing platform built with React, TypeScript, Supabase, and SendGrid. Designed for managing contacts, creating campaigns, and tracking analytics with support for multiple clients and dedicated IP pools.
 
+**Live Demo:** https://mail.sagerock.com
+
 ## Features
 
 - **Contact Management**
@@ -279,6 +281,21 @@ Make sure to set all required environment variables in your hosting platform.
 - Validate webhook signatures from SendGrid
 - Store API keys securely (environment variables, secrets manager)
 
+## Completed Features
+
+- ✅ **Unsubscribe System** - Full CAN-SPAM and GDPR compliant unsubscribe handling
+  - Public unsubscribe page with resubscribe option
+  - Automatic contact filtering for unsubscribed users
+  - List-Unsubscribe headers for one-click unsubscribe
+  - Webhook integration for unsubscribe events
+  - See `UNSUBSCRIBE_SETUP.md` for details
+
+- ✅ **Deployment Ready** - Production deployment configurations
+  - Vercel configuration for frontend
+  - Railway configuration for backend
+  - Complete deployment guide
+  - See `DEPLOYMENT.md` for step-by-step instructions
+
 ## Roadmap
 
 Future enhancements:
@@ -288,8 +305,6 @@ Future enhancements:
 - [ ] A/B testing for campaigns
 - [ ] Automated campaign sequences
 - [ ] Advanced reporting and exports
-- [ ] Contact list management
-- [ ] Unsubscribe handling
 - [ ] Suppression list management
 
 ## License
