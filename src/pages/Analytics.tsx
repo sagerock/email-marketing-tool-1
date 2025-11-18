@@ -105,7 +105,6 @@ export default function Analytics() {
   }
 
   const stats = getStats()
-  const campaign = campaigns.find((c) => c.id === selectedCampaign)
 
   return (
     <div className="space-y-6">

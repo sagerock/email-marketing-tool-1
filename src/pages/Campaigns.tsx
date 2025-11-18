@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
 import type { Campaign, Template, Contact } from '../types/index.js'
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
+import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Send, Calendar, X } from 'lucide-react'
+import { Plus, Send, X } from 'lucide-react'
 
 export default function Campaigns() {
   const { selectedClient } = useClient()
