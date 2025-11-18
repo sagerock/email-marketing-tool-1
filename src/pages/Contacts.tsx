@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Search, Upload, X, UserX, UserCheck } from 'lucide-react'
+import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2 } from 'lucide-react'
 
 export default function Contacts() {
   const { selectedClient } = useClient()
@@ -14,6 +14,7 @@ export default function Contacts() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [showAddModal, setShowAddModal] = useState(false)
+  const [showImportModal, setShowImportModal] = useState(false)
   const [editingContact, setEditingContact] = useState<Contact | null>(null)
   const [loading, setLoading] = useState(true)
 
@@ -83,7 +84,7 @@ export default function Contacts() {
           </p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" onClick={() => {}}>
+          <Button variant="outline" onClick={() => setShowImportModal(true)}>
             <Upload className="h-4 w-4 mr-2" />
             Import CSV
           </Button>
@@ -207,6 +208,18 @@ export default function Contacts() {
           onClose={() => setEditingContact(null)}
           onSuccess={() => {
             setEditingContact(null)
+            fetchContacts()
+          }}
+        />
+      )}
+
+      {/* Import CSV Modal */}
+      {showImportModal && selectedClient && (
+        <ImportCSVModal
+          clientId={selectedClient.id}
+          onClose={() => setShowImportModal(false)}
+          onSuccess={() => {
+            setShowImportModal(false)
             fetchContacts()
           }}
         />
@@ -720,6 +733,324 @@ function EditContactModal({
             </Button>
           </div>
         </form>
+      </div>
+    </div>
+  )
+}
+
+// Import CSV Modal Component
+function ImportCSVModal({
+  clientId,
+  onClose,
+  onSuccess,
+}: {
+  clientId: string
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [progress, setProgress] = useState<{
+    total: number
+    imported: number
+    skipped: number
+    errors: string[]
+  } | null>(null)
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0]
+    if (selectedFile && selectedFile.type === 'text/csv') {
+      setFile(selectedFile)
+      setProgress(null)
+    } else {
+      alert('Please select a valid CSV file')
+    }
+  }
+
+  const parseCSV = (text: string): any[] => {
+    const lines = text.split('\n').filter((line) => line.trim())
+    if (lines.length === 0) return []
+
+    const headers = lines[0].split(',').map((h) => h.trim().toLowerCase())
+    const rows = []
+
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(',').map((v) => v.trim())
+      const row: any = {}
+
+      headers.forEach((header, index) => {
+        row[header] = values[index] || ''
+      })
+
+      rows.push(row)
+    }
+
+    return rows
+  }
+
+  const handleImport = async () => {
+    if (!file) return
+
+    setImporting(true)
+    setProgress({ total: 0, imported: 0, skipped: 0, errors: [] })
+
+    try {
+      const text = await file.text()
+      const rows = parseCSV(text)
+
+      setProgress((prev) => ({ ...prev!, total: rows.length }))
+
+      let imported = 0
+      let skipped = 0
+      const errors: string[] = []
+
+      for (const row of rows) {
+        // Map CSV columns to database fields (flexible column names)
+        const email = row.email || row['e-mail'] || row['email address']
+        const firstName = row['first name'] || row.firstname || row.first_name || ''
+        const lastName = row['last name'] || row.lastname || row.last_name || ''
+        const unsubscribed =
+          row.unsubscribed === 'true' ||
+          row.unsubscribed === '1' ||
+          row.unsubscribed === 'yes' ||
+          row.subscribed === 'false' ||
+          row.subscribed === '0' ||
+          row.subscribed === 'no'
+
+        // Parse tags (comma-separated or semicolon-separated)
+        let tags: string[] = []
+        if (row.tags) {
+          tags = row.tags
+            .split(/[,;]/)
+            .map((t: string) => t.trim())
+            .filter((t: string) => t.length > 0)
+        }
+
+        // Validate email
+        if (!email || !email.includes('@')) {
+          skipped++
+          errors.push(`Row ${rows.indexOf(row) + 2}: Invalid or missing email`)
+          continue
+        }
+
+        try {
+          // Insert contact
+          const { error } = await supabase.from('contacts').insert({
+            email: email.toLowerCase(),
+            first_name: firstName || null,
+            last_name: lastName || null,
+            tags: tags.length > 0 ? tags : [],
+            unsubscribed: unsubscribed,
+            unsubscribed_at: unsubscribed ? new Date().toISOString() : null,
+            client_id: clientId,
+          })
+
+          if (error) {
+            // Check if it's a duplicate email
+            if (error.message.includes('unique') || error.message.includes('duplicate')) {
+              skipped++
+              errors.push(`Row ${rows.indexOf(row) + 2}: ${email} already exists`)
+            } else {
+              skipped++
+              errors.push(`Row ${rows.indexOf(row) + 2}: ${error.message}`)
+            }
+          } else {
+            imported++
+          }
+        } catch (err) {
+          skipped++
+          errors.push(`Row ${rows.indexOf(row) + 2}: ${err}`)
+        }
+
+        // Update progress
+        setProgress({
+          total: rows.length,
+          imported,
+          skipped,
+          errors,
+        })
+      }
+
+      // Show completion message
+      if (imported > 0) {
+        setTimeout(() => {
+          onSuccess()
+        }, 2000)
+      }
+    } catch (error) {
+      console.error('Error importing CSV:', error)
+      alert('Failed to import CSV. Please check the file format.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const downloadSampleCSV = () => {
+    const sample = `email,first name,last name,subscribed,tags
+john@example.com,John,Doe,yes,customer;vip
+jane@example.com,Jane,Smith,yes,customer
+bob@example.com,Bob,Jones,no,prospect`
+
+    const blob = new Blob([sample], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'sample-contacts.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Import Contacts from CSV</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {!progress ? (
+          <>
+            {/* Instructions */}
+            <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+              <div className="flex items-start gap-3">
+                <FileText className="h-5 w-5 text-blue-600 mt-0.5" />
+                <div className="text-sm text-blue-900">
+                  <p className="font-medium mb-2">CSV Format:</p>
+                  <ul className="list-disc list-inside space-y-1 text-blue-800">
+                    <li>
+                      <strong>email</strong> (required) - Contact's email address
+                    </li>
+                    <li>
+                      <strong>first name</strong> (optional) - First name
+                    </li>
+                    <li>
+                      <strong>last name</strong> (optional) - Last name
+                    </li>
+                    <li>
+                      <strong>subscribed</strong> (optional) - yes/no or true/false
+                    </li>
+                    <li>
+                      <strong>tags</strong> (optional) - Comma or semicolon separated tags
+                    </li>
+                  </ul>
+                  <p className="mt-3 text-blue-700">
+                    Duplicate emails will be skipped automatically.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Download Sample */}
+            <div className="mb-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={downloadSampleCSV}
+                className="w-full"
+              >
+                <FileText className="h-4 w-4 mr-2" />
+                Download Sample CSV
+              </Button>
+            </div>
+
+            {/* File Upload */}
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Select CSV File
+              </label>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleFileChange}
+                className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none"
+              />
+              {file && (
+                <p className="mt-2 text-sm text-green-600">
+                  <CheckCircle2 className="h-4 w-4 inline mr-1" />
+                  {file.name} selected
+                </p>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={handleImport} disabled={!file || importing}>
+                {importing ? 'Importing...' : 'Import Contacts'}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {/* Progress Display */}
+            <div className="space-y-4">
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  <div>
+                    <p className="text-2xl font-bold text-gray-900">{progress.total}</p>
+                    <p className="text-sm text-gray-600">Total Rows</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-green-600">{progress.imported}</p>
+                    <p className="text-sm text-gray-600">Imported</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold text-orange-600">{progress.skipped}</p>
+                    <p className="text-sm text-gray-600">Skipped</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Errors */}
+              {progress.errors.length > 0 && (
+                <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg max-h-60 overflow-y-auto">
+                  <div className="flex items-start gap-2 mb-2">
+                    <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5" />
+                    <p className="font-medium text-orange-900">
+                      Issues Found ({progress.errors.length})
+                    </p>
+                  </div>
+                  <ul className="text-sm text-orange-800 space-y-1">
+                    {progress.errors.slice(0, 10).map((error, i) => (
+                      <li key={i} className="font-mono">
+                        {error}
+                      </li>
+                    ))}
+                    {progress.errors.length > 10 && (
+                      <li className="text-orange-600 italic">
+                        ... and {progress.errors.length - 10} more
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+
+              {/* Completion Message */}
+              {!importing && progress.imported > 0 && (
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-5 w-5 text-green-600" />
+                    <p className="font-medium text-green-900">
+                      Successfully imported {progress.imported} contact
+                      {progress.imported !== 1 ? 's' : ''}!
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Close Button */}
+              <div className="flex justify-end">
+                <Button onClick={onClose} disabled={importing}>
+                  {importing ? 'Importing...' : 'Close'}
+                </Button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
