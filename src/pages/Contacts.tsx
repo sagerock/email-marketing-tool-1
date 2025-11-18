@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Search, Upload, X } from 'lucide-react'
+import { Plus, Search, Upload, X, UserX, UserCheck } from 'lucide-react'
 
 export default function Contacts() {
   const { selectedClient } = useClient()
@@ -238,6 +238,66 @@ function ContactRow({
     }
   }
 
+  const handleUnsubscribe = async () => {
+    const contactName = contact.first_name
+      ? `${contact.first_name} ${contact.last_name || ''}`.trim()
+      : contact.email
+
+    if (
+      !confirm(
+        `Are you sure you want to unsubscribe ${contactName}?\n\nThey will no longer receive any campaigns until they are manually resubscribed.`
+      )
+    ) {
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('contacts')
+        .update({
+          unsubscribed: true,
+          unsubscribed_at: new Date().toISOString(),
+        })
+        .eq('id', contact.id)
+
+      if (error) throw error
+      onUpdate()
+    } catch (error) {
+      console.error('Error unsubscribing contact:', error)
+      alert('Failed to unsubscribe contact')
+    }
+  }
+
+  const handleResubscribe = async () => {
+    const contactName = contact.first_name
+      ? `${contact.first_name} ${contact.last_name || ''}`.trim()
+      : contact.email
+
+    if (
+      !confirm(
+        `Are you sure you want to resubscribe ${contactName}?\n\nThey will start receiving campaigns again.`
+      )
+    ) {
+      return
+    }
+
+    try {
+      const { error } = await supabase
+        .from('contacts')
+        .update({
+          unsubscribed: false,
+          unsubscribed_at: null,
+        })
+        .eq('id', contact.id)
+
+      if (error) throw error
+      onUpdate()
+    } catch (error) {
+      console.error('Error resubscribing contact:', error)
+      alert('Failed to resubscribe contact')
+    }
+  }
+
   return (
     <tr className="hover:bg-gray-50">
       <td className="py-3 px-4 text-sm text-gray-900">{contact.email}</td>
@@ -260,11 +320,20 @@ function ContactRow({
         </div>
       </td>
       <td className="py-3 px-4">
-        {contact.unsubscribed ? (
-          <Badge variant="danger">Unsubscribed</Badge>
-        ) : (
-          <Badge variant="success">Subscribed</Badge>
-        )}
+        <div className="flex flex-col gap-1">
+          {contact.unsubscribed ? (
+            <>
+              <Badge variant="danger">Unsubscribed</Badge>
+              {contact.unsubscribed_at && (
+                <span className="text-xs text-gray-500">
+                  {new Date(contact.unsubscribed_at).toLocaleDateString()}
+                </span>
+              )}
+            </>
+          ) : (
+            <Badge variant="success">Subscribed</Badge>
+          )}
+        </div>
       </td>
       <td className="py-3 px-4 text-sm text-gray-600">
         {new Date(contact.created_at).toLocaleDateString()}
@@ -274,6 +343,27 @@ function ContactRow({
           <Button variant="outline" size="sm" onClick={() => onEdit(contact)}>
             Edit
           </Button>
+          {contact.unsubscribed ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleResubscribe}
+              className="text-green-600 hover:text-green-700 hover:border-green-600"
+            >
+              <UserCheck className="h-4 w-4 mr-1" />
+              Resubscribe
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleUnsubscribe}
+              className="text-orange-600 hover:text-orange-700 hover:border-orange-600"
+            >
+              <UserX className="h-4 w-4 mr-1" />
+              Unsubscribe
+            </Button>
+          )}
           <Button variant="ghost" size="sm" onClick={handleDelete}>
             Delete
           </Button>
