@@ -11,6 +11,7 @@ import Campaigns from './pages/Campaigns'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import Unsubscribe from './pages/Unsubscribe'
+import Admin from './pages/Admin'
 
 function App() {
   return (
@@ -70,6 +71,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Settings />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Admin />
                   </Layout>
                 </ProtectedRoute>
               }

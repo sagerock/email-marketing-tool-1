@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { cn } from '../lib/utils'
-import { Users, Mail, BarChart3, FileText, Settings, Building2, LogOut } from 'lucide-react'
+import { Users, Mail, BarChart3, FileText, Settings, Building2, LogOut, Shield } from 'lucide-react'
 import { useClient } from '../context/ClientContext'
 import { useAuth } from '../contexts/AuthContext'
 import Button from './ui/Button'
@@ -22,7 +22,7 @@ export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
   const navigate = useNavigate()
   const { selectedClient, setSelectedClient, clients, loading } = useClient()
-  const { user, signOut } = useAuth()
+  const { user, signOut, isSuperAdmin } = useAuth()
 
   const handleSignOut = async () => {
     try {
@@ -98,6 +98,22 @@ export default function Layout({ children }: LayoutProps) {
               </Link>
             )
           })}
+
+          {/* Admin link - only visible to super admins */}
+          {isSuperAdmin && (
+            <Link
+              to="/admin"
+              className={cn(
+                'flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-md transition-colors',
+                location.pathname === '/admin'
+                  ? 'bg-blue-50 text-blue-600'
+                  : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+              )}
+            >
+              <Shield className="h-5 w-5" />
+              Admin Panel
+            </Link>
+          )}
         </nav>
 
         {/* User info and logout */}
