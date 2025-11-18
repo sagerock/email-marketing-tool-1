@@ -771,11 +771,44 @@ function ImportCSVModal({
     const lines = text.split('\n').filter((line) => line.trim())
     if (lines.length === 0) return []
 
-    const headers = lines[0].split(',').map((h) => h.trim().toLowerCase())
+    // Parse CSV properly handling quoted values
+    const parseCSVLine = (line: string): string[] => {
+      const values: string[] = []
+      let current = ''
+      let inQuotes = false
+
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i]
+        const nextChar = line[i + 1]
+
+        if (char === '"') {
+          if (inQuotes && nextChar === '"') {
+            // Escaped quote
+            current += '"'
+            i++ // Skip next quote
+          } else {
+            // Toggle quote mode
+            inQuotes = !inQuotes
+          }
+        } else if (char === ',' && !inQuotes) {
+          // End of value
+          values.push(current.trim())
+          current = ''
+        } else {
+          current += char
+        }
+      }
+
+      // Add last value
+      values.push(current.trim())
+      return values
+    }
+
+    const headers = parseCSVLine(lines[0]).map((h) => h.toLowerCase())
     const rows = []
 
     for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(',').map((v) => v.trim())
+      const values = parseCSVLine(lines[i])
       const row: any = {}
 
       headers.forEach((header, index) => {
@@ -887,9 +920,9 @@ function ImportCSVModal({
 
   const downloadSampleCSV = () => {
     const sample = `email,first name,last name,subscribed,tags
-john@example.com,John,Doe,yes,customer;vip
-jane@example.com,Jane,Smith,yes,customer
-bob@example.com,Bob,Jones,no,prospect`
+john@example.com,John,Doe,yes,"VIP Customer;Gold Member"
+jane@example.com,Jane,Smith,yes,"New Customer"
+bob@example.com,Bob,Jones,no,"prospect;cold lead"`
 
     const blob = new Blob([sample], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
@@ -932,7 +965,8 @@ bob@example.com,Bob,Jones,no,prospect`
                       <strong>subscribed</strong> (optional) - yes/no or true/false
                     </li>
                     <li>
-                      <strong>tags</strong> (optional) - Comma or semicolon separated tags
+                      <strong>tags</strong> (optional) - Semicolon separated tags (use quotes for
+                      tags with commas)
                     </li>
                   </ul>
                   <p className="mt-3 text-blue-700">
