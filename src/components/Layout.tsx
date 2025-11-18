@@ -1,8 +1,10 @@
 import type { ReactNode } from 'react'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { cn } from '../lib/utils'
-import { Users, Mail, BarChart3, FileText, Settings, Building2 } from 'lucide-react'
+import { Users, Mail, BarChart3, FileText, Settings, Building2, LogOut } from 'lucide-react'
 import { useClient } from '../context/ClientContext'
+import { useAuth } from '../contexts/AuthContext'
+import Button from './ui/Button'
 
 interface LayoutProps {
   children: ReactNode
@@ -18,7 +20,18 @@ const navigation = [
 
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
+  const navigate = useNavigate()
   const { selectedClient, setSelectedClient, clients, loading } = useClient()
+  const { user, signOut } = useAuth()
+
+  const handleSignOut = async () => {
+    try {
+      await signOut()
+      navigate('/login')
+    } catch (error) {
+      console.error('Error signing out:', error)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -65,7 +78,7 @@ export default function Layout({ children }: LayoutProps) {
           </div>
         )}
 
-        <nav className="px-3 py-4 space-y-1">
+        <nav className="px-3 py-4 space-y-1 flex-1">
           {navigation.map((item) => {
             const Icon = item.icon
             const isActive = location.pathname === item.href
@@ -86,6 +99,23 @@ export default function Layout({ children }: LayoutProps) {
             )
           })}
         </nav>
+
+        {/* User info and logout */}
+        <div className="px-3 py-4 border-t border-gray-200">
+          <div className="px-3 mb-3">
+            <p className="text-xs font-medium text-gray-500 mb-1">SIGNED IN AS</p>
+            <p className="text-sm text-gray-900 truncate">{user?.email}</p>
+          </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleSignOut}
+            className="w-full justify-start text-gray-700 hover:text-gray-900 hover:bg-gray-100"
+          >
+            <LogOut className="h-4 w-4 mr-2" />
+            Sign Out
+          </Button>
+        </div>
       </aside>
 
       {/* Main content */}

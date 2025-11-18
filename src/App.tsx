@@ -1,6 +1,10 @@
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom'
+import { AuthProvider } from './contexts/AuthContext'
 import { ClientProvider } from './context/ClientContext'
+import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
+import Login from './pages/auth/Login'
+import Signup from './pages/auth/Signup'
 import Contacts from './pages/Contacts'
 import Templates from './pages/Templates'
 import Campaigns from './pages/Campaigns'
@@ -10,21 +14,70 @@ import Unsubscribe from './pages/Unsubscribe'
 
 function App() {
   return (
-    <ClientProvider>
-      <Router>
-        <Routes>
-          {/* Public route - no layout */}
-          <Route path="/unsubscribe" element={<Unsubscribe />} />
+    <AuthProvider>
+      <ClientProvider>
+        <Router>
+          <Routes>
+            {/* Public routes - no authentication required */}
+            <Route path="/login" element={<Login />} />
+            <Route path="/signup" element={<Signup />} />
+            <Route path="/unsubscribe" element={<Unsubscribe />} />
 
-          {/* Authenticated routes with layout */}
-          <Route path="/" element={<Layout><Contacts /></Layout>} />
-          <Route path="/templates" element={<Layout><Templates /></Layout>} />
-          <Route path="/campaigns" element={<Layout><Campaigns /></Layout>} />
-          <Route path="/analytics" element={<Layout><Analytics /></Layout>} />
-          <Route path="/settings" element={<Layout><Settings /></Layout>} />
-        </Routes>
-      </Router>
-    </ClientProvider>
+            {/* Protected routes - authentication required */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Contacts />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/templates"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Templates />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/campaigns"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Campaigns />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/analytics"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Analytics />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/settings"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Settings />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </Router>
+      </ClientProvider>
+    </AuthProvider>
   )
 }
 
