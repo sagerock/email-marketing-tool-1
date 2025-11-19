@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const checkAdminStatus = async (userId: string) => {
+  const checkAdminStatus = async (_userId: string) => {
     // TEMPORARILY DISABLED - uncomment when admin system is needed
     // The admin check is causing issues with session restoration
     console.log('ℹ️ Admin check skipped (feature disabled)')
