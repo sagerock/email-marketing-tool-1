@@ -442,6 +442,37 @@ function CreateCampaignModal({
             </select>
           </div>
 
+          {/* Merge Tags Help */}
+          <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+            <h3 className="text-sm font-semibold text-blue-900 mb-2">
+              📝 Available Merge Tags
+            </h3>
+            <p className="text-xs text-blue-800 mb-2">
+              Use these tags in your email template to personalize each email:
+            </p>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                <code className="text-blue-700 font-mono">{'{{first_name}}'}</code>
+                <span className="text-gray-600 ml-2">→ Recipient's first name</span>
+              </div>
+              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                <code className="text-blue-700 font-mono">{'{{last_name}}'}</code>
+                <span className="text-gray-600 ml-2">→ Recipient's last name</span>
+              </div>
+              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                <code className="text-blue-700 font-mono">{'{{email}}'}</code>
+                <span className="text-gray-600 ml-2">→ Recipient's email</span>
+              </div>
+              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                <code className="text-blue-700 font-mono">{'{{unsubscribe_url}}'}</code>
+                <span className="text-gray-600 ml-2">→ Unsubscribe link</span>
+              </div>
+            </div>
+            <p className="text-xs text-blue-700 mt-3 font-medium">
+              💡 Example: "Hi {'{{first_name}}'}, click <a href="{'{{unsubscribe_url}}'}">here</a> to unsubscribe"
+            </p>
+          </div>
+
           <Input
             label="Email Subject *"
             required

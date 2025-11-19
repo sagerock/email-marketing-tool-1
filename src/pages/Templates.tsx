@@ -58,6 +58,55 @@ export default function Templates() {
         </Button>
       </div>
 
+      {/* Merge Tags Info */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">📝 Personalization Tags</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-gray-600 mb-3">
+            Use these merge tags in your email designs to personalize content for each recipient:
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="flex items-start gap-2 p-3 bg-gray-50 rounded-md">
+              <code className="text-sm font-mono text-blue-600 bg-white px-2 py-1 rounded border">
+                {'{{first_name}}'}
+              </code>
+              <span className="text-sm text-gray-700">Recipient's first name</span>
+            </div>
+            <div className="flex items-start gap-2 p-3 bg-gray-50 rounded-md">
+              <code className="text-sm font-mono text-blue-600 bg-white px-2 py-1 rounded border">
+                {'{{last_name}}'}
+              </code>
+              <span className="text-sm text-gray-700">Recipient's last name</span>
+            </div>
+            <div className="flex items-start gap-2 p-3 bg-gray-50 rounded-md">
+              <code className="text-sm font-mono text-blue-600 bg-white px-2 py-1 rounded border">
+                {'{{email}}'}
+              </code>
+              <span className="text-sm text-gray-700">Recipient's email address</span>
+            </div>
+            <div className="flex items-start gap-2 p-3 bg-gray-50 rounded-md">
+              <code className="text-sm font-mono text-blue-600 bg-white px-2 py-1 rounded border">
+                {'{{unsubscribe_url}}'}
+              </code>
+              <span className="text-sm text-gray-700">Unsubscribe link (required)</span>
+            </div>
+          </div>
+          <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
+            <p className="text-sm text-blue-800">
+              <strong>Example:</strong> "Hi {'{{first_name}}'}, thanks for subscribing!
+              <a href="{'{{unsubscribe_url}}'}" className="underline">Click here to unsubscribe</a>."
+            </p>
+          </div>
+          <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
+            <p className="text-sm text-amber-800">
+              <strong>⚠️ Important:</strong> Always include {'{{unsubscribe_url}}'} in your emails to comply with CAN-SPAM and GDPR regulations.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Email Designs Grid */}
       {loading ? (
         <div className="text-center py-12 text-gray-500">Loading email designs...</div>
