@@ -204,6 +204,7 @@ function AddClientModal({
     name: '',
     sendgrid_api_key: '',
     ip_pools: '',
+    mailing_address: '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -221,6 +222,7 @@ function AddClientModal({
         name: formData.name,
         sendgrid_api_key: formData.sendgrid_api_key,
         ip_pools: ip_pools.length > 0 ? ip_pools : null,
+        mailing_address: formData.mailing_address || null,
       })
 
       if (error) throw error
@@ -270,6 +272,25 @@ function AddClientModal({
             }
           />
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Mailing Address (CAN-SPAM Compliance) *
+            </label>
+            <textarea
+              required
+              rows={3}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm resize-none"
+              placeholder="123 Main St&#10;Suite 100&#10;San Francisco, CA 94105"
+              value={formData.mailing_address}
+              onChange={(e) =>
+                setFormData({ ...formData, mailing_address: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Required by CAN-SPAM law. This will be included in all emails via {'{{mailing_address}}'} merge tag.
+            </p>
+          </div>
+
           <div className="flex justify-end gap-3 pt-4">
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
@@ -297,6 +318,7 @@ function EditClientModal({
     name: client.name,
     sendgrid_api_key: client.sendgrid_api_key,
     ip_pools: client.ip_pools?.join(', ') || '',
+    mailing_address: client.mailing_address || '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -310,12 +332,13 @@ function EditClientModal({
         .map((p) => p.trim())
         .filter(Boolean)
 
-      const { error } = await supabase
+      const { error} = await supabase
         .from('clients')
         .update({
           name: formData.name,
           sendgrid_api_key: formData.sendgrid_api_key,
           ip_pools: ip_pools.length > 0 ? ip_pools : null,
+          mailing_address: formData.mailing_address || null,
         })
         .eq('id', client.id)
 
@@ -365,6 +388,25 @@ function EditClientModal({
               setFormData({ ...formData, ip_pools: e.target.value })
             }
           />
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Mailing Address (CAN-SPAM Compliance) *
+            </label>
+            <textarea
+              required
+              rows={3}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm resize-none"
+              placeholder="123 Main St&#10;Suite 100&#10;San Francisco, CA 94105"
+              value={formData.mailing_address}
+              onChange={(e) =>
+                setFormData({ ...formData, mailing_address: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Required by CAN-SPAM law. This will be included in all emails via {'{{mailing_address}}'} merge tag.
+            </p>
+          </div>
 
           <div className="flex justify-end gap-3 pt-4">
             <Button type="button" variant="outline" onClick={onClose}>

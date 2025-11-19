@@ -92,6 +92,12 @@ export default function Templates() {
               </code>
               <span className="text-sm text-gray-700">Unsubscribe link (required)</span>
             </div>
+            <div className="flex items-start gap-2 p-3 bg-gray-50 rounded-md col-span-full">
+              <code className="text-sm font-mono text-blue-600 bg-white px-2 py-1 rounded border">
+                {'{{mailing_address}}'}
+              </code>
+              <span className="text-sm text-gray-700">Your company's mailing address (required by CAN-SPAM)</span>
+            </div>
           </div>
           <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-md">
             <p className="text-sm text-blue-800">
@@ -101,7 +107,10 @@ export default function Templates() {
           </div>
           <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-md">
             <p className="text-sm text-amber-800">
-              <strong>⚠️ Important:</strong> Always include {'{{unsubscribe_url}}'} in your emails to comply with CAN-SPAM and GDPR regulations.
+              <strong>⚠️ Important:</strong> Always include both {'{{unsubscribe_url}}'} and {'{{mailing_address}}'} in your emails to comply with CAN-SPAM and GDPR regulations.
+            </p>
+            <p className="text-xs text-amber-700 mt-2">
+              Set your mailing address in Settings → Edit Client
             </p>
           </div>
         </CardContent>

@@ -59,6 +59,7 @@ export interface Client {
   name: string
   sendgrid_api_key: string
   ip_pools?: string[]
+  mailing_address?: string
   created_at: string
   updated_at: string
 }

@@ -453,23 +453,27 @@ function CreateCampaignModal({
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
                 <code className="text-blue-700 font-mono">{'{{first_name}}'}</code>
-                <span className="text-gray-600 ml-2">→ Recipient's first name</span>
+                <span className="text-gray-600 ml-2">→ First name</span>
               </div>
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
                 <code className="text-blue-700 font-mono">{'{{last_name}}'}</code>
-                <span className="text-gray-600 ml-2">→ Recipient's last name</span>
+                <span className="text-gray-600 ml-2">→ Last name</span>
               </div>
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
                 <code className="text-blue-700 font-mono">{'{{email}}'}</code>
-                <span className="text-gray-600 ml-2">→ Recipient's email</span>
+                <span className="text-gray-600 ml-2">→ Email</span>
               </div>
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
                 <code className="text-blue-700 font-mono">{'{{unsubscribe_url}}'}</code>
                 <span className="text-gray-600 ml-2">→ Unsubscribe link</span>
               </div>
+              <div className="bg-white rounded px-2 py-1.5 border border-blue-100 col-span-2">
+                <code className="text-blue-700 font-mono">{'{{mailing_address}}'}</code>
+                <span className="text-gray-600 ml-2">→ Your mailing address (CAN-SPAM required)</span>
+              </div>
             </div>
             <p className="text-xs text-blue-700 mt-3 font-medium">
-              💡 Example: "Hi {'{{first_name}}'}, click <a href="{'{{unsubscribe_url}}'}">here</a> to unsubscribe"
+              💡 Example footer: "{'{{mailing_address}}'} | <a href="{'{{unsubscribe_url}}'}">Unsubscribe</a>"
             </p>
           </div>
 

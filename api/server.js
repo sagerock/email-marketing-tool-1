@@ -148,11 +148,13 @@ app.post('/api/send-test-email', async (req, res) => {
     const testUnsubscribeUrl = `${baseUrl}/unsubscribe?token=TEST_TOKEN`
 
     // Replace merge tags with test data
+    const mailingAddress = client.mailing_address || 'No mailing address configured'
     let personalizedHtml = htmlContent
       .replace(/{{email}}/gi, testEmail)
       .replace(/{{first_name}}/gi, 'John')
       .replace(/{{last_name}}/gi, 'Doe')
       .replace(/{{unsubscribe_url}}/gi, testUnsubscribeUrl)
+      .replace(/{{mailing_address}}/gi, mailingAddress)
 
     const msg = {
       to: testEmail,
@@ -260,6 +262,7 @@ app.post('/api/send-campaign', async (req, res) => {
 
     // 6. Send emails
     const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
+    const mailingAddress = client.mailing_address || 'No mailing address configured'
 
     const emailPromises = contacts.map((contact) => {
       // Generate unsubscribe URL
@@ -271,6 +274,7 @@ app.post('/api/send-campaign', async (req, res) => {
         .replace(/{{first_name}}/gi, contact.first_name || '')
         .replace(/{{last_name}}/gi, contact.last_name || '')
         .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
+        .replace(/{{mailing_address}}/gi, mailingAddress)
 
       const msg = {
         to: contact.email,
