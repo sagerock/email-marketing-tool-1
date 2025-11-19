@@ -61,27 +61,49 @@ app.post('/api/send-test-email', async (req, res) => {
   try {
     const { campaignId, testEmail } = req.body
 
+    console.log('📧 Test email request:', { campaignId, testEmail })
+
     if (!testEmail) {
       return res.status(400).json({ error: 'Test email address is required' })
     }
 
+    if (!campaignId) {
+      return res.status(400).json({ error: 'Campaign ID is required' })
+    }
+
     // 1. Fetch campaign
+    console.log('📋 Fetching campaign:', campaignId)
     const { data: campaign, error: campaignError } = await supabase
       .from('campaigns')
       .select('*')
       .eq('id', campaignId)
       .single()
 
-    if (campaignError) throw campaignError
+    if (campaignError) {
+      console.error('❌ Campaign fetch error:', campaignError)
+      throw new Error(`Campaign not found: ${campaignError.message}`)
+    }
+
+    console.log('✅ Campaign found:', campaign.name)
 
     // 2. Fetch client to get API key
+    console.log('🔑 Fetching client:', campaign.client_id)
     const { data: client, error: clientError } = await supabase
       .from('clients')
       .select('*')
       .eq('id', campaign.client_id)
       .single()
 
-    if (clientError) throw clientError
+    if (clientError) {
+      console.error('❌ Client fetch error:', clientError)
+      throw new Error(`Client not found: ${clientError.message}`)
+    }
+
+    console.log('✅ Client found:', client.name)
+
+    if (!client.sendgrid_api_key) {
+      throw new Error('Client does not have a SendGrid API key configured')
+    }
 
     // Set SendGrid API key
     sgMail.setApiKey(client.sendgrid_api_key)
@@ -89,13 +111,36 @@ app.post('/api/send-test-email', async (req, res) => {
     // 3. Fetch template if specified
     let htmlContent = ''
     if (campaign.template_id) {
-      const { data: template } = await supabase
+      console.log('📄 Fetching template:', campaign.template_id)
+      const { data: template, error: templateError } = await supabase
         .from('templates')
         .select('html_content')
         .eq('id', campaign.template_id)
         .single()
 
-      htmlContent = template?.html_content || ''
+      if (templateError) {
+        console.error('⚠️ Template fetch error:', templateError)
+      } else {
+        htmlContent = template?.html_content || ''
+        console.log('✅ Template loaded, length:', htmlContent.length)
+      }
+    } else {
+      console.log('⚠️ No template specified for campaign')
+    }
+
+    // Check if we have HTML content
+    if (!htmlContent || htmlContent.trim().length === 0) {
+      htmlContent = `
+        <html>
+          <body>
+            <h1>Test Email</h1>
+            <p>This is a test email for campaign: ${campaign.name}</p>
+            <p>Subject: ${campaign.subject}</p>
+            <p><strong>Note:</strong> This campaign doesn't have a template selected yet.</p>
+          </body>
+        </html>
+      `
+      console.log('⚠️ Using fallback HTML (no template content)')
     }
 
     // 4. Generate test email with placeholder data
@@ -125,12 +170,22 @@ app.post('/api/send-test-email', async (req, res) => {
       },
     }
 
+    console.log('📤 Sending test email to:', testEmail)
     await sgMail.send(msg)
 
+    console.log('✅ Test email sent successfully')
     res.json({ success: true, message: `Test email sent to ${testEmail}` })
   } catch (error) {
-    console.error('Error sending test email:', error)
-    res.status(500).json({ error: error.message })
+    console.error('❌ Error sending test email:', error)
+
+    // Provide more helpful error messages
+    let errorMessage = error.message
+    if (error.response && error.response.body) {
+      console.error('SendGrid error details:', error.response.body)
+      errorMessage = `SendGrid error: ${JSON.stringify(error.response.body.errors || error.response.body)}`
+    }
+
+    res.status(500).json({ error: errorMessage })
   }
 })
 
