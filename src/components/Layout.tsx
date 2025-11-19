@@ -37,8 +37,12 @@ export default function Layout({ children }: LayoutProps) {
     <div className="min-h-screen bg-gray-50">
       {/* Sidebar */}
       <aside className="fixed inset-y-0 left-0 w-64 bg-white border-r border-gray-200">
-        <div className="flex h-16 items-center px-6 border-b border-gray-200">
-          <h1 className="text-xl font-bold text-gray-900">Email Marketing</h1>
+        <div className="flex h-16 items-center justify-center px-4 border-b border-gray-200">
+          <img
+            src="https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png"
+            alt="SageRock Email Marketing"
+            className="h-10 w-auto"
+          />
         </div>
 
         {/* Client Selector */}
