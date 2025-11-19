@@ -12,6 +12,7 @@ import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import Unsubscribe from './pages/Unsubscribe'
 import Admin from './pages/Admin'
+import DebugAuth from './pages/DebugAuth'
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
+            <Route path="/debug" element={<DebugAuth />} />
 
             {/* Protected routes - authentication required */}
             <Route

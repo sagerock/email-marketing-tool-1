@@ -6,12 +6,15 @@ import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Send, X } from 'lucide-react'
+import { Plus, Send, X, Mail, Edit2 } from 'lucide-react'
 
 export default function Campaigns() {
   const { selectedClient } = useClient()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null)
+  const [sendingCampaignId, setSendingCampaignId] = useState<string | null>(null)
+  const [showTestEmailModal, setShowTestEmailModal] = useState<Campaign | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -56,6 +59,36 @@ export default function Campaigns() {
         return 'danger'
       default:
         return 'default'
+    }
+  }
+
+  const handleSendCampaign = async (campaignId: string) => {
+    if (!confirm('Are you sure you want to send this campaign? This cannot be undone.')) {
+      return
+    }
+
+    setSendingCampaignId(campaignId)
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/send-campaign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ campaignId }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send campaign')
+      }
+
+      alert(`Campaign sent successfully to ${data.sent} recipients!`)
+      fetchCampaigns()
+    } catch (error) {
+      console.error('Error sending campaign:', error)
+      alert(error instanceof Error ? error.message : 'Failed to send campaign')
+    } finally {
+      setSendingCampaignId(null)
     }
   }
 
@@ -143,9 +176,32 @@ export default function Campaigns() {
                   </div>
                   <div className="flex gap-2">
                     {campaign.status === 'draft' && (
-                      <Button size="sm" variant="outline">
-                        Edit
-                      </Button>
+                      <>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setEditingCampaign(campaign)}
+                        >
+                          <Edit2 className="h-4 w-4 mr-1" />
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setShowTestEmailModal(campaign)}
+                        >
+                          <Mail className="h-4 w-4 mr-1" />
+                          Send Test
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={() => handleSendCampaign(campaign.id)}
+                          disabled={sendingCampaignId === campaign.id}
+                        >
+                          <Send className="h-4 w-4 mr-1" />
+                          {sendingCampaignId === campaign.id ? 'Sending...' : 'Send Now'}
+                        </Button>
+                      </>
                     )}
                     <Button
                       size="sm"
@@ -173,6 +229,27 @@ export default function Campaigns() {
           }}
         />
       )}
+
+      {/* Edit Campaign Modal */}
+      {editingCampaign && selectedClient && (
+        <CreateCampaignModal
+          clientId={selectedClient.id}
+          campaign={editingCampaign}
+          onClose={() => setEditingCampaign(null)}
+          onSuccess={() => {
+            setEditingCampaign(null)
+            fetchCampaigns()
+          }}
+        />
+      )}
+
+      {/* Send Test Email Modal */}
+      {showTestEmailModal && (
+        <SendTestEmailModal
+          campaign={showTestEmailModal}
+          onClose={() => setShowTestEmailModal(null)}
+        />
+      )}
     </div>
   )
 
@@ -194,24 +271,27 @@ function CreateCampaignModal({
   onClose,
   onSuccess,
   clientId,
+  campaign,
 }: {
   onClose: () => void
   onSuccess: () => void
   clientId: string
+  campaign?: Campaign
 }) {
+  const isEditing = !!campaign
   const [templates, setTemplates] = useState<Template[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
   const [allTags, setAllTags] = useState<string[]>([])
   const [formData, setFormData] = useState({
-    name: '',
-    template_id: '',
-    subject: '',
-    from_email: '',
-    from_name: '',
-    reply_to: '',
-    filter_tags: [] as string[],
-    scheduled_at: '',
-    ip_pool: '',
+    name: campaign?.name || '',
+    template_id: campaign?.template_id || '',
+    subject: campaign?.subject || '',
+    from_email: campaign?.from_email || '',
+    from_name: campaign?.from_name || '',
+    reply_to: campaign?.reply_to || '',
+    filter_tags: campaign?.filter_tags || ([] as string[]),
+    scheduled_at: campaign?.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
+    ip_pool: campaign?.ip_pool || '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -219,6 +299,23 @@ function CreateCampaignModal({
     fetchTemplates()
     fetchContacts()
   }, [])
+
+  // Update form data when campaign prop changes
+  useEffect(() => {
+    if (campaign) {
+      setFormData({
+        name: campaign.name || '',
+        template_id: campaign.template_id || '',
+        subject: campaign.subject || '',
+        from_email: campaign.from_email || '',
+        from_name: campaign.from_name || '',
+        reply_to: campaign.reply_to || '',
+        filter_tags: campaign.filter_tags || [],
+        scheduled_at: campaign.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
+        ip_pool: campaign.ip_pool || '',
+      })
+    }
+  }, [campaign])
 
   const fetchTemplates = async () => {
     const { data } = await supabase
@@ -287,12 +384,21 @@ function CreateCampaignModal({
         client_id: clientId,
       }
 
-      const { error } = await supabase.from('campaigns').insert(campaignData)
-      if (error) throw error
+      if (isEditing && campaign) {
+        const { error } = await supabase
+          .from('campaigns')
+          .update(campaignData)
+          .eq('id', campaign.id)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('campaigns').insert(campaignData)
+        if (error) throw error
+      }
+
       onSuccess()
     } catch (error) {
-      console.error('Error creating campaign:', error)
-      alert('Failed to create campaign')
+      console.error(`Error ${isEditing ? 'updating' : 'creating'} campaign:`, error)
+      alert(`Failed to ${isEditing ? 'update' : 'create'} campaign`)
     } finally {
       setSubmitting(false)
     }
@@ -302,7 +408,9 @@ function CreateCampaignModal({
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-semibold">Create New Campaign</h2>
+          <h2 className="text-xl font-semibold">
+            {isEditing ? 'Edit Campaign' : 'Create New Campaign'}
+          </h2>
           <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
             <X className="h-5 w-5" />
           </button>
@@ -417,10 +525,102 @@ function CreateCampaignModal({
             </Button>
             <Button type="submit" disabled={submitting}>
               {submitting
-                ? 'Creating...'
+                ? isEditing ? 'Saving...' : 'Creating...'
+                : isEditing ? 'Save Changes'
                 : formData.scheduled_at
                 ? 'Schedule Campaign'
                 : 'Create Draft'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function SendTestEmailModal({
+  campaign,
+  onClose,
+}: {
+  campaign: Campaign
+  onClose: () => void
+}) {
+  const [testEmail, setTestEmail] = useState('')
+  const [sending, setSending] = useState(false)
+
+  const handleSendTest = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSending(true)
+
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/send-test-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignId: campaign.id,
+          testEmail,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send test email')
+      }
+
+      alert(data.message)
+      onClose()
+    } catch (error) {
+      console.error('Error sending test email:', error)
+      alert(error instanceof Error ? error.message : 'Failed to send test email')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Send Test Email</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSendTest} className="space-y-4">
+          <div>
+            <p className="text-sm text-gray-600 mb-3">
+              Campaign: <strong>{campaign.name}</strong>
+            </p>
+            <p className="text-sm text-gray-600 mb-3">
+              Subject: <strong>{campaign.subject}</strong>
+            </p>
+          </div>
+
+          <Input
+            label="Test Email Address *"
+            type="email"
+            required
+            value={testEmail}
+            onChange={(e) => setTestEmail(e.target.value)}
+            placeholder="your.email@example.com"
+          />
+
+          <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
+            <p className="text-sm text-blue-800">
+              The test email will be sent with placeholder data (First Name: John, Last Name: Doe)
+              and the subject will be prefixed with [TEST].
+            </p>
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={sending}>
+              {sending ? 'Sending...' : 'Send Test'}
             </Button>
           </div>
         </form>

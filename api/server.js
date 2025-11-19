@@ -55,6 +55,86 @@ const supabase = createClient(
 )
 
 /**
+ * Send a test email
+ */
+app.post('/api/send-test-email', async (req, res) => {
+  try {
+    const { campaignId, testEmail } = req.body
+
+    if (!testEmail) {
+      return res.status(400).json({ error: 'Test email address is required' })
+    }
+
+    // 1. Fetch campaign
+    const { data: campaign, error: campaignError } = await supabase
+      .from('campaigns')
+      .select('*')
+      .eq('id', campaignId)
+      .single()
+
+    if (campaignError) throw campaignError
+
+    // 2. Fetch client to get API key
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('*')
+      .eq('id', campaign.client_id)
+      .single()
+
+    if (clientError) throw clientError
+
+    // Set SendGrid API key
+    sgMail.setApiKey(client.sendgrid_api_key)
+
+    // 3. Fetch template if specified
+    let htmlContent = ''
+    if (campaign.template_id) {
+      const { data: template } = await supabase
+        .from('templates')
+        .select('html_content')
+        .eq('id', campaign.template_id)
+        .single()
+
+      htmlContent = template?.html_content || ''
+    }
+
+    // 4. Generate test email with placeholder data
+    const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
+    const testUnsubscribeUrl = `${baseUrl}/unsubscribe?token=TEST_TOKEN`
+
+    // Replace merge tags with test data
+    let personalizedHtml = htmlContent
+      .replace(/{{email}}/gi, testEmail)
+      .replace(/{{first_name}}/gi, 'John')
+      .replace(/{{last_name}}/gi, 'Doe')
+      .replace(/{{unsubscribe_url}}/gi, testUnsubscribeUrl)
+
+    const msg = {
+      to: testEmail,
+      from: {
+        email: campaign.from_email,
+        name: campaign.from_name,
+      },
+      replyTo: campaign.reply_to || undefined,
+      subject: `[TEST] ${campaign.subject}`,
+      html: personalizedHtml,
+      ipPoolName: campaign.ip_pool || undefined,
+      headers: {
+        'List-Unsubscribe': `<${testUnsubscribeUrl}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
+    }
+
+    await sgMail.send(msg)
+
+    res.json({ success: true, message: `Test email sent to ${testEmail}` })
+  } catch (error) {
+    console.error('Error sending test email:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Send a campaign
  */
 app.post('/api/send-campaign', async (req, res) => {

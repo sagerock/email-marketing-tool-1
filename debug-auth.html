@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Supabase Auth Debugger</title>
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        h2 { color: #666; font-size: 18px; margin-top: 0; }
+        pre {
+            background: #f8f8f8;
+            padding: 12px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-size: 13px;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .status.success { background: #d4edda; color: #155724; }
+        .status.error { background: #f8d7da; color: #721c24; }
+        .status.warning { background: #fff3cd; color: #856404; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <h1>🔍 Supabase Auth Debugger</h1>
+    <p>This page helps debug authentication issues with your Supabase connection.</p>
+
+    <div class="card">
+        <h2>1. LocalStorage Check</h2>
+        <div id="localStorage-status"></div>
+        <button onclick="checkLocalStorage()">Check LocalStorage</button>
+        <button onclick="clearLocalStorage()">Clear LocalStorage</button>
+    </div>
+
+    <div class="card">
+        <h2>2. Supabase Connection</h2>
+        <div id="supabase-status"></div>
+        <button onclick="testSupabaseConnection()">Test Connection</button>
+    </div>
+
+    <div class="card">
+        <h2>3. Session Status</h2>
+        <div id="session-status"></div>
+        <button onclick="checkSession()">Check Session</button>
+    </div>
+
+    <div class="card">
+        <h2>4. User Status</h2>
+        <div id="user-status"></div>
+        <button onclick="checkUser()">Check User</button>
+    </div>
+
+    <script type="module">
+        import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+        const SUPABASE_URL = 'https://ckloewflialohuvixmvd.supabase.co'
+        const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNrbG9ld2ZsaWFsb2h1dml4bXZkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjM0Mjg0NTIsImV4cCI6MjA3OTAwNDQ1Mn0.W3GFbdfx0a05J_OksNIQ7SngCAf-7ytcRUZUhDIgHJo'
+
+        window.supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+            auth: {
+                autoRefreshToken: true,
+                persistSession: true,
+                detectSessionInUrl: true,
+                storage: window.localStorage,
+                storageKey: 'supabase.auth.token',
+                flowType: 'pkce'
+            }
+        })
+
+        window.checkLocalStorage = function() {
+            const el = document.getElementById('localStorage-status')
+            const token = localStorage.getItem('supabase.auth.token')
+
+            if (token) {
+                try {
+                    const parsed = JSON.parse(token)
+                    el.innerHTML = `
+                        <span class="status success">✓ Session Found</span>
+                        <pre>${JSON.stringify(parsed, null, 2)}</pre>
+                    `
+                } catch (e) {
+                    el.innerHTML = `
+                        <span class="status error">✗ Invalid Session Data</span>
+                        <pre>${token}</pre>
+                    `
+                }
+            } else {
+                el.innerHTML = '<span class="status warning">⚠ No Session in LocalStorage</span>'
+            }
+        }
+
+        window.clearLocalStorage = function() {
+            localStorage.removeItem('supabase.auth.token')
+            alert('LocalStorage cleared! Refresh the page to start fresh.')
+        }
+
+        window.testSupabaseConnection = async function() {
+            const el = document.getElementById('supabase-status')
+            el.innerHTML = '<span class="status warning">⏳ Testing connection...</span>'
+
+            try {
+                const { data, error } = await supabase.from('clients').select('count')
+
+                if (error) throw error
+
+                el.innerHTML = `
+                    <span class="status success">✓ Connected to Supabase</span>
+                    <p>Successfully connected to database</p>
+                `
+            } catch (error) {
+                el.innerHTML = `
+                    <span class="status error">✗ Connection Failed</span>
+                    <pre>${error.message}</pre>
+                `
+            }
+        }
+
+        window.checkSession = async function() {
+            const el = document.getElementById('session-status')
+            el.innerHTML = '<span class="status warning">⏳ Checking session...</span>'
+
+            try {
+                const { data, error } = await supabase.auth.getSession()
+
+                if (error) throw error
+
+                if (data.session) {
+                    el.innerHTML = `
+                        <span class="status success">✓ Session Active</span>
+                        <pre>${JSON.stringify(data.session, null, 2)}</pre>
+                    `
+                } else {
+                    el.innerHTML = '<span class="status warning">⚠ No Active Session</span>'
+                }
+            } catch (error) {
+                el.innerHTML = `
+                    <span class="status error">✗ Error</span>
+                    <pre>${error.message}</pre>
+                `
+            }
+        }
+
+        window.checkUser = async function() {
+            const el = document.getElementById('user-status')
+            el.innerHTML = '<span class="status warning">⏳ Checking user...</span>'
+
+            try {
+                const { data, error } = await supabase.auth.getUser()
+
+                if (error) throw error
+
+                if (data.user) {
+                    el.innerHTML = `
+                        <span class="status success">✓ User Authenticated</span>
+                        <pre>${JSON.stringify(data.user, null, 2)}</pre>
+                    `
+                } else {
+                    el.innerHTML = '<span class="status warning">⚠ No User</span>'
+                }
+            } catch (error) {
+                el.innerHTML = `
+                    <span class="status error">✗ Error</span>
+                    <pre>${error.message}</pre>
+                `
+            }
+        }
+
+        // Auto-run checks on load
+        window.addEventListener('load', () => {
+            checkLocalStorage()
+            checkSession()
+        })
+    </script>
+</body>
+</html>
