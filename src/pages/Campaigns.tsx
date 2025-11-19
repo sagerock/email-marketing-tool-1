@@ -62,7 +62,42 @@ export default function Campaigns() {
     }
   }
 
-  const handleSendCampaign = async (campaignId: string) => {
+  const handleSendCampaign = async (campaignId: string, campaign: Campaign) => {
+    // Check for compliance tags before sending
+    if (campaign.template_id) {
+      try {
+        const { data: template, error } = await supabase
+          .from('templates')
+          .select('html_content')
+          .eq('id', campaign.template_id)
+          .single()
+
+        if (!error && template) {
+          const html = template.html_content.toLowerCase()
+          const hasUnsubscribe = html.includes('{{unsubscribe_url}}')
+          const hasMailingAddress = html.includes('{{mailing_address}}')
+
+          if (!hasUnsubscribe || !hasMailingAddress) {
+            const missing = []
+            if (!hasUnsubscribe) missing.push('{{unsubscribe_url}}')
+            if (!hasMailingAddress) missing.push('{{mailing_address}}')
+
+            if (!confirm(
+              `⚠️ CAN-SPAM WARNING\n\n` +
+              `Your template is missing required tags:\n${missing.join(', ')}\n\n` +
+              `Sending without these tags may violate CAN-SPAM law.\n` +
+              `Penalties can reach $51,744 per email.\n\n` +
+              `Are you SURE you want to send anyway?`
+            )) {
+              return
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error checking template compliance:', error)
+      }
+    }
+
     if (!confirm('Are you sure you want to send this campaign? This cannot be undone.')) {
       return
     }
@@ -195,7 +230,7 @@ export default function Campaigns() {
                         </Button>
                         <Button
                           size="sm"
-                          onClick={() => handleSendCampaign(campaign.id)}
+                          onClick={() => handleSendCampaign(campaign.id, campaign)}
                           disabled={sendingCampaignId === campaign.id}
                         >
                           <Send className="h-4 w-4 mr-1" />
@@ -351,6 +386,20 @@ function CreateCampaignModal({
     }
   }
 
+  const checkComplianceTags = () => {
+    const selectedTemplate = templates.find((t) => t.id === formData.template_id)
+    if (!selectedTemplate) return { hasUnsubscribe: true, hasMailingAddress: true }
+
+    const html = selectedTemplate.html_content.toLowerCase()
+    const hasUnsubscribe = html.includes('{{unsubscribe_url}}')
+    const hasMailingAddress = html.includes('{{mailing_address}}')
+
+    return { hasUnsubscribe, hasMailingAddress }
+  }
+
+  const complianceCheck = checkComplianceTags()
+  const hasMissingTags = !complianceCheck.hasUnsubscribe || !complianceCheck.hasMailingAddress
+
   const toggleTag = (tag: string) => {
     setFormData({
       ...formData,
@@ -441,6 +490,43 @@ function CreateCampaignModal({
               ))}
             </select>
           </div>
+
+          {/* CAN-SPAM Compliance Warning */}
+          {formData.template_id && hasMissingTags && (
+            <div className="bg-amber-50 border-l-4 border-amber-400 p-4 rounded">
+              <div className="flex items-start">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-amber-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="ml-3">
+                  <h3 className="text-sm font-medium text-amber-800">
+                    ⚠️ Missing Required CAN-SPAM Tags
+                  </h3>
+                  <div className="mt-2 text-sm text-amber-700">
+                    <p className="mb-1">Your template is missing:</p>
+                    <ul className="list-disc list-inside space-y-1">
+                      {!complianceCheck.hasUnsubscribe && (
+                        <li>
+                          <code className="bg-amber-100 px-1 rounded">{'{{unsubscribe_url}}'}</code> - Required by law
+                        </li>
+                      )}
+                      {!complianceCheck.hasMailingAddress && (
+                        <li>
+                          <code className="bg-amber-100 px-1 rounded">{'{{mailing_address}}'}</code> - Required by CAN-SPAM
+                        </li>
+                      )}
+                    </ul>
+                    <p className="mt-2 text-xs">
+                      <strong>Important:</strong> Sending emails without these tags may violate CAN-SPAM law.
+                      Penalties can reach $51,744 per email. Please edit your template to include these tags.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Merge Tags Help */}
           <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
