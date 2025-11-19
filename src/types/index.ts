@@ -54,12 +54,18 @@ export interface AnalyticsEvent {
   user_agent?: string
 }
 
+export interface VerifiedSender {
+  email: string
+  name: string
+}
+
 export interface Client {
   id: string
   name: string
   sendgrid_api_key: string
   ip_pools?: string[]
   mailing_address?: string
+  verified_senders?: VerifiedSender[]
   created_at: string
   updated_at: string
 }

@@ -317,6 +317,7 @@ function CreateCampaignModal({
   const [templates, setTemplates] = useState<Template[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
   const [allTags, setAllTags] = useState<string[]>([])
+  const [verifiedSenders, setVerifiedSenders] = useState<{email: string, name: string}[]>([])
   const [formData, setFormData] = useState({
     name: campaign?.name || '',
     template_id: campaign?.template_id || '',
@@ -333,7 +334,20 @@ function CreateCampaignModal({
   useEffect(() => {
     fetchTemplates()
     fetchContacts()
+    fetchVerifiedSenders()
   }, [])
+
+  const fetchVerifiedSenders = async () => {
+    const { data } = await supabase
+      .from('clients')
+      .select('verified_senders')
+      .eq('id', clientId)
+      .single()
+
+    if (data?.verified_senders) {
+      setVerifiedSenders(data.verified_senders)
+    }
+  }
 
   // Update form data when campaign prop changes
   useEffect(() => {
@@ -570,24 +584,35 @@ function CreateCampaignModal({
             onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
           />
 
-          <div className="grid grid-cols-2 gap-4">
-            <Input
-              label="From Name *"
-              required
-              value={formData.from_name}
-              onChange={(e) =>
-                setFormData({ ...formData, from_name: e.target.value })
-              }
-            />
-            <Input
-              label="From Email *"
-              type="email"
-              required
-              value={formData.from_email}
-              onChange={(e) =>
-                setFormData({ ...formData, from_email: e.target.value })
-              }
-            />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              From Sender *
+            </label>
+            {verifiedSenders.length > 0 ? (
+              <select
+                required
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                value={`${formData.from_email}|||${formData.from_name}`}
+                onChange={(e) => {
+                  const [email, name] = e.target.value.split('|||')
+                  setFormData({ ...formData, from_email: email, from_name: name })
+                }}
+              >
+                <option value="">Select a verified sender</option>
+                {verifiedSenders.map((sender, index) => (
+                  <option key={index} value={`${sender.email}|||${sender.name}`}>
+                    {sender.name} &lt;{sender.email}&gt;
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded text-sm text-amber-800">
+                No verified senders configured. Please add verified senders in Settings first.
+              </div>
+            )}
+            <p className="mt-1 text-xs text-gray-500">
+              This email must be verified in SendGrid. Manage senders in Settings.
+            </p>
           </div>
 
           <Input

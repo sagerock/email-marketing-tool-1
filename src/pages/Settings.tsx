@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Client } from '../types/index.js'
+import type { Client, VerifiedSender } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, Settings as SettingsIcon, X } from 'lucide-react'
+import { Plus, Settings as SettingsIcon, X, Trash2 } from 'lucide-react'
 
 export default function Settings() {
   const { refreshClients } = useClient()
@@ -206,6 +206,8 @@ function AddClientModal({
     ip_pools: '',
     mailing_address: '',
   })
+  const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>([])
+  const [newSender, setNewSender] = useState({ email: '', name: '' })
   const [submitting, setSubmitting] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -223,6 +225,7 @@ function AddClientModal({
         sendgrid_api_key: formData.sendgrid_api_key,
         ip_pools: ip_pools.length > 0 ? ip_pools : null,
         mailing_address: formData.mailing_address || null,
+        verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
       })
 
       if (error) throw error
@@ -291,6 +294,74 @@ function AddClientModal({
             </p>
           </div>
 
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Verified Sender Emails *
+            </label>
+            <p className="text-xs text-gray-500 mb-3">
+              Add sender emails that are verified in SendGrid. You must verify these in SendGrid before using them.
+            </p>
+
+            {/* List of current senders */}
+            {verifiedSenders.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {verifiedSenders.map((sender, index) => (
+                  <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded border border-gray-200">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{sender.name}</p>
+                      <p className="text-xs text-gray-600">{sender.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVerifiedSenders(verifiedSenders.filter((_, i) => i !== index))}
+                      className="text-red-600 hover:text-red-800"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add new sender form */}
+            <div className="space-y-2 p-3 bg-blue-50 border border-blue-200 rounded">
+              <Input
+                label="Sender Email"
+                type="email"
+                placeholder="hello@example.com"
+                value={newSender.email}
+                onChange={(e) => setNewSender({ ...newSender, email: e.target.value })}
+              />
+              <Input
+                label="Sender Name"
+                placeholder="Marketing Team"
+                value={newSender.name}
+                onChange={(e) => setNewSender({ ...newSender, name: e.target.value })}
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  if (newSender.email && newSender.name) {
+                    setVerifiedSenders([...verifiedSenders, newSender])
+                    setNewSender({ email: '', name: '' })
+                  } else {
+                    alert('Please enter both email and name')
+                  }
+                }}
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                Add Sender
+              </Button>
+            </div>
+
+            {verifiedSenders.length === 0 && (
+              <p className="mt-2 text-xs text-amber-600">
+                You must add at least one verified sender to send campaigns.
+              </p>
+            )}
+          </div>
+
           <div className="flex justify-end gap-3 pt-4">
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
@@ -320,6 +391,10 @@ function EditClientModal({
     ip_pools: client.ip_pools?.join(', ') || '',
     mailing_address: client.mailing_address || '',
   })
+  const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>(
+    client.verified_senders || []
+  )
+  const [newSender, setNewSender] = useState({ email: '', name: '' })
   const [submitting, setSubmitting] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -339,6 +414,7 @@ function EditClientModal({
           sendgrid_api_key: formData.sendgrid_api_key,
           ip_pools: ip_pools.length > 0 ? ip_pools : null,
           mailing_address: formData.mailing_address || null,
+          verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
         })
         .eq('id', client.id)
 
@@ -406,6 +482,74 @@ function EditClientModal({
             <p className="mt-1 text-xs text-gray-500">
               Required by CAN-SPAM law. This will be included in all emails via {'{{mailing_address}}'} merge tag.
             </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Verified Sender Emails *
+            </label>
+            <p className="text-xs text-gray-500 mb-3">
+              Add sender emails that are verified in SendGrid. You must verify these in SendGrid before using them.
+            </p>
+
+            {/* List of current senders */}
+            {verifiedSenders.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {verifiedSenders.map((sender, index) => (
+                  <div key={index} className="flex items-center gap-2 p-2 bg-gray-50 rounded border border-gray-200">
+                    <div className="flex-1">
+                      <p className="text-sm font-medium">{sender.name}</p>
+                      <p className="text-xs text-gray-600">{sender.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVerifiedSenders(verifiedSenders.filter((_, i) => i !== index))}
+                      className="text-red-600 hover:text-red-800"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Add new sender form */}
+            <div className="space-y-2 p-3 bg-blue-50 border border-blue-200 rounded">
+              <Input
+                label="Sender Email"
+                type="email"
+                placeholder="hello@example.com"
+                value={newSender.email}
+                onChange={(e) => setNewSender({ ...newSender, email: e.target.value })}
+              />
+              <Input
+                label="Sender Name"
+                placeholder="Marketing Team"
+                value={newSender.name}
+                onChange={(e) => setNewSender({ ...newSender, name: e.target.value })}
+              />
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => {
+                  if (newSender.email && newSender.name) {
+                    setVerifiedSenders([...verifiedSenders, newSender])
+                    setNewSender({ email: '', name: '' })
+                  } else {
+                    alert('Please enter both email and name')
+                  }
+                }}
+              >
+                <Plus className="h-4 w-4 mr-1" />
+                Add Sender
+              </Button>
+            </div>
+
+            {verifiedSenders.length === 0 && (
+              <p className="mt-2 text-xs text-amber-600">
+                You must add at least one verified sender to send campaigns.
+              </p>
+            )}
           </div>
 
           <div className="flex justify-end gap-3 pt-4">
