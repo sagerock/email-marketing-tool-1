@@ -338,24 +338,40 @@ function CreateSequenceModal({
     from_name: verifiedSenders[0]?.name || '',
     reply_to: '',
     start_time: '', // HH:MM format or empty for immediate
+    trigger_type: 'manual' as 'manual' | 'tag_added',
+    trigger_tag: '',
   })
   const [sequenceSteps, setSequenceSteps] = useState<Partial<SequenceStep>[]>([
     { step_order: 1, subject: '', delay_days: 0, delay_hours: 0 }
   ])
   const [templates, setTemplates] = useState<Template[]>([])
+  const [availableTags, setAvailableTags] = useState<string[]>([])
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
-    fetchTemplates()
+    fetchData()
   }, [])
 
-  const fetchTemplates = async () => {
-    const { data } = await supabase
+  const fetchData = async () => {
+    // Fetch templates
+    const { data: templatesData } = await supabase
       .from('templates')
       .select('*')
       .eq('client_id', clientId)
       .order('name')
-    setTemplates(data || [])
+    setTemplates(templatesData || [])
+
+    // Fetch all unique tags from contacts
+    const { data: contacts } = await supabase
+      .from('contacts')
+      .select('tags')
+      .eq('client_id', clientId)
+
+    const tags = new Set<string>()
+    contacts?.forEach(contact => {
+      contact.tags?.forEach((tag: string) => tags.add(tag))
+    })
+    setAvailableTags(Array.from(tags).sort())
   }
 
   const addStep = () => {
@@ -408,6 +424,10 @@ function CreateSequenceModal({
           from_name: formData.from_name,
           reply_to: formData.reply_to || null,
           start_time: formData.start_time || null,
+          trigger_type: formData.trigger_type,
+          trigger_config: formData.trigger_type === 'tag_added' && formData.trigger_tag
+            ? { tag: formData.trigger_tag }
+            : {},
           client_id: clientId,
           status: 'draft',
         })
@@ -533,6 +553,43 @@ function CreateSequenceModal({
                     ? `First email will be scheduled for ${formData.start_time} (contact's next occurrence of this time)`
                     : 'First email sends right away when a contact is enrolled'}
                 </p>
+              </div>
+
+              {/* Auto-enrollment trigger */}
+              <div className="pt-4 border-t">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Auto-Enrollment Trigger
+                </label>
+                <select
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm mb-2"
+                  value={formData.trigger_type}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    trigger_type: e.target.value as 'manual' | 'tag_added',
+                    trigger_tag: e.target.value === 'manual' ? '' : formData.trigger_tag
+                  })}
+                >
+                  <option value="manual">Manual enrollment only</option>
+                  <option value="tag_added">Auto-enroll when tag is added</option>
+                </select>
+
+                {formData.trigger_type === 'tag_added' && (
+                  <div>
+                    <select
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.trigger_tag}
+                      onChange={(e) => setFormData({ ...formData, trigger_tag: e.target.value })}
+                    >
+                      <option value="">Select a tag...</option>
+                      {availableTags.map((tag) => (
+                        <option key={tag} value={tag}>{tag}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Contacts will be automatically enrolled when they receive this tag
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -662,9 +719,12 @@ function EditSequenceModal({
     from_name: sequence.from_name,
     reply_to: sequence.reply_to || '',
     start_time: sequence.start_time || '',
+    trigger_type: sequence.trigger_type || 'manual',
+    trigger_tag: (sequence.trigger_config as any)?.tag || '',
   })
   const [steps, setSteps] = useState<SequenceStep[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
+  const [availableTags, setAvailableTags] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [activeTab, setActiveTab] = useState<'settings' | 'steps'>('steps')
@@ -676,7 +736,7 @@ function EditSequenceModal({
   const fetchData = async () => {
     setLoading(true)
     try {
-      const [stepsRes, templatesRes] = await Promise.all([
+      const [stepsRes, templatesRes, contactsRes] = await Promise.all([
         supabase
           .from('sequence_steps')
           .select('*')
@@ -686,12 +746,23 @@ function EditSequenceModal({
           .from('templates')
           .select('*')
           .eq('client_id', clientId)
-          .order('name')
+          .order('name'),
+        supabase
+          .from('contacts')
+          .select('tags')
+          .eq('client_id', clientId)
       ])
 
       if (stepsRes.error) throw stepsRes.error
       setSteps(stepsRes.data || [])
       setTemplates(templatesRes.data || [])
+
+      // Extract unique tags
+      const tags = new Set<string>()
+      contactsRes.data?.forEach(contact => {
+        contact.tags?.forEach((tag: string) => tags.add(tag))
+      })
+      setAvailableTags(Array.from(tags).sort())
     } catch (error) {
       console.error('Error fetching sequence data:', error)
     } finally {
@@ -786,6 +857,10 @@ function EditSequenceModal({
           from_name: formData.from_name,
           reply_to: formData.reply_to || null,
           start_time: formData.start_time || null,
+          trigger_type: formData.trigger_type,
+          trigger_config: formData.trigger_type === 'tag_added' && formData.trigger_tag
+            ? { tag: formData.trigger_tag }
+            : {},
         })
         .eq('id', sequence.id)
 
@@ -998,6 +1073,43 @@ function EditSequenceModal({
                     ? `First email scheduled for ${formData.start_time}`
                     : 'First email sends immediately when enrolled'}
                 </p>
+              </div>
+
+              {/* Auto-enrollment trigger */}
+              <div className="pt-4 border-t">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Auto-Enrollment Trigger
+                </label>
+                <select
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm mb-2"
+                  value={formData.trigger_type}
+                  onChange={(e) => setFormData({
+                    ...formData,
+                    trigger_type: e.target.value as 'manual' | 'tag_added',
+                    trigger_tag: e.target.value === 'manual' ? '' : formData.trigger_tag
+                  })}
+                >
+                  <option value="manual">Manual enrollment only</option>
+                  <option value="tag_added">Auto-enroll when tag is added</option>
+                </select>
+
+                {formData.trigger_type === 'tag_added' && (
+                  <div>
+                    <select
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.trigger_tag}
+                      onChange={(e) => setFormData({ ...formData, trigger_tag: e.target.value })}
+                    >
+                      <option value="">Select a tag...</option>
+                      {availableTags.map((tag) => (
+                        <option key={tag} value={tag}>{tag}</option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Contacts will be automatically enrolled when they receive this tag
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -746,8 +746,103 @@ app.listen(PORT, () => {
 
   // Start cron job to process sequence emails every minute
   cron.schedule('* * * * *', async () => {
-    console.log('⏰ Running sequence processor...')
     try {
+      // ============ PART 1: Auto-enroll contacts based on tag triggers ============
+      const { data: activeSequences } = await supabase
+        .from('email_sequences')
+        .select('*')
+        .eq('status', 'active')
+        .eq('trigger_type', 'tag_added')
+
+      if (activeSequences && activeSequences.length > 0) {
+        for (const sequence of activeSequences) {
+          const triggerTag = sequence.trigger_config?.tag
+          if (!triggerTag) continue
+
+          // Find contacts with this tag who aren't enrolled yet
+          const { data: contacts } = await supabase
+            .from('contacts')
+            .select('id')
+            .eq('client_id', sequence.client_id)
+            .eq('unsubscribed', false)
+            .contains('tags', [triggerTag])
+
+          if (!contacts || contacts.length === 0) continue
+
+          const contactIds = contacts.map(c => c.id)
+
+          // Get already enrolled contacts
+          const { data: enrolled } = await supabase
+            .from('sequence_enrollments')
+            .select('contact_id')
+            .eq('sequence_id', sequence.id)
+            .in('contact_id', contactIds)
+
+          const enrolledIds = new Set(enrolled?.map(e => e.contact_id) || [])
+          const newContactIds = contactIds.filter(id => !enrolledIds.has(id))
+
+          if (newContactIds.length === 0) continue
+
+          // Get first step
+          const { data: firstStep } = await supabase
+            .from('sequence_steps')
+            .select('*')
+            .eq('sequence_id', sequence.id)
+            .eq('step_order', 1)
+            .single()
+
+          if (!firstStep) continue
+
+          const now = new Date()
+
+          // Create enrollments
+          const enrollments = newContactIds.map(contactId => ({
+            sequence_id: sequence.id,
+            contact_id: contactId,
+            status: 'active',
+            current_step: 0,
+            next_email_scheduled_at: now.toISOString(),
+          }))
+
+          const { error: enrollError } = await supabase
+            .from('sequence_enrollments')
+            .insert(enrollments)
+
+          if (enrollError) {
+            console.error('❌ Error auto-enrolling contacts:', enrollError)
+            continue
+          }
+
+          // Get the new enrollments to schedule emails
+          const { data: newEnrollments } = await supabase
+            .from('sequence_enrollments')
+            .select('id, contact_id')
+            .eq('sequence_id', sequence.id)
+            .in('contact_id', newContactIds)
+
+          if (newEnrollments) {
+            const scheduledEmails = newEnrollments.map(enrollment => ({
+              enrollment_id: enrollment.id,
+              step_id: firstStep.id,
+              contact_id: enrollment.contact_id,
+              scheduled_for: now.toISOString(),
+              status: 'pending',
+            }))
+
+            await supabase.from('scheduled_emails').insert(scheduledEmails)
+          }
+
+          // Update total enrolled count
+          await supabase
+            .from('email_sequences')
+            .update({ total_enrolled: sequence.total_enrolled + newContactIds.length })
+            .eq('id', sequence.id)
+
+          console.log(`✅ Auto-enrolled ${newContactIds.length} contacts in "${sequence.name}" (tag: ${triggerTag})`)
+        }
+      }
+
+      // ============ PART 2: Process scheduled emails ============
       const now = new Date().toISOString()
 
       // Get pending scheduled emails that are due
