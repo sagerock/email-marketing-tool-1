@@ -337,6 +337,7 @@ function CreateSequenceModal({
     from_email: verifiedSenders[0]?.email || '',
     from_name: verifiedSenders[0]?.name || '',
     reply_to: '',
+    start_time: '', // HH:MM format or empty for immediate
   })
   const [sequenceSteps, setSequenceSteps] = useState<Partial<SequenceStep>[]>([
     { step_order: 1, subject: '', delay_days: 0, delay_hours: 0 }
@@ -406,6 +407,7 @@ function CreateSequenceModal({
           from_email: formData.from_email,
           from_name: formData.from_name,
           reply_to: formData.reply_to || null,
+          start_time: formData.start_time || null,
           client_id: clientId,
           status: 'draft',
         })
@@ -498,6 +500,40 @@ function CreateSequenceModal({
                 onChange={(e) => setFormData({ ...formData, reply_to: e.target.value })}
                 placeholder="Optional reply-to address"
               />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  First Email Send Time
+                </label>
+                <div className="flex items-center gap-3">
+                  <select
+                    className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    value={formData.start_time ? 'scheduled' : 'immediate'}
+                    onChange={(e) => {
+                      if (e.target.value === 'immediate') {
+                        setFormData({ ...formData, start_time: '' })
+                      } else {
+                        setFormData({ ...formData, start_time: '09:00' })
+                      }
+                    }}
+                  >
+                    <option value="immediate">Send immediately when enrolled</option>
+                    <option value="scheduled">Send at specific time</option>
+                  </select>
+                  {formData.start_time && (
+                    <input
+                      type="time"
+                      className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.start_time}
+                      onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
+                    />
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  {formData.start_time
+                    ? `First email will be scheduled for ${formData.start_time} (contact's next occurrence of this time)`
+                    : 'First email sends right away when a contact is enrolled'}
+                </p>
+              </div>
             </div>
           ) : (
             <div className="space-y-4">
@@ -625,6 +661,7 @@ function EditSequenceModal({
     from_email: sequence.from_email,
     from_name: sequence.from_name,
     reply_to: sequence.reply_to || '',
+    start_time: sequence.start_time || '',
   })
   const [steps, setSteps] = useState<SequenceStep[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
@@ -748,6 +785,7 @@ function EditSequenceModal({
           from_email: formData.from_email,
           from_name: formData.from_name,
           reply_to: formData.reply_to || null,
+          start_time: formData.start_time || null,
         })
         .eq('id', sequence.id)
 
@@ -927,6 +965,40 @@ function EditSequenceModal({
                 value={formData.reply_to}
                 onChange={(e) => setFormData({ ...formData, reply_to: e.target.value })}
               />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  First Email Send Time
+                </label>
+                <div className="flex items-center gap-3">
+                  <select
+                    className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    value={formData.start_time ? 'scheduled' : 'immediate'}
+                    onChange={(e) => {
+                      if (e.target.value === 'immediate') {
+                        setFormData({ ...formData, start_time: '' })
+                      } else {
+                        setFormData({ ...formData, start_time: '09:00' })
+                      }
+                    }}
+                  >
+                    <option value="immediate">Send immediately when enrolled</option>
+                    <option value="scheduled">Send at specific time</option>
+                  </select>
+                  {formData.start_time && (
+                    <input
+                      type="time"
+                      className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.start_time}
+                      onChange={(e) => setFormData({ ...formData, start_time: e.target.value })}
+                    />
+                  )}
+                </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  {formData.start_time
+                    ? `First email scheduled for ${formData.start_time}`
+                    : 'First email sends immediately when enrolled'}
+                </p>
+              </div>
             </div>
           )}
         </div>

@@ -98,6 +98,7 @@ export interface EmailSequence {
   from_name: string
   reply_to?: string
   filter_tags?: string[]
+  start_time?: string // HH:MM format for preferred send time
   total_enrolled: number
   total_completed: number
   client_id?: string
