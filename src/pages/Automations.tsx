@@ -17,6 +17,7 @@ import {
   Clock,
   ChevronRight,
   Trash2,
+  Edit,
   Eye
 } from 'lucide-react'
 
@@ -26,6 +27,7 @@ export default function Automations() {
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [selectedSequence, setSelectedSequence] = useState<EmailSequence | null>(null)
+  const [editingSequence, setEditingSequence] = useState<EmailSequence | null>(null)
   const [showEnrollModal, setShowEnrollModal] = useState(false)
   const [enrollingSequence, setEnrollingSequence] = useState<EmailSequence | null>(null)
 
@@ -233,6 +235,14 @@ export default function Automations() {
                     <Button
                       variant="outline"
                       size="sm"
+                      onClick={() => setEditingSequence(sequence)}
+                    >
+                      <Edit className="h-4 w-4 mr-1" />
+                      Edit
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
                       onClick={() => setSelectedSequence(sequence)}
                     >
                       <Eye className="h-4 w-4 mr-1" />
@@ -261,6 +271,20 @@ export default function Automations() {
           onClose={() => setShowCreateModal(false)}
           onSuccess={() => {
             setShowCreateModal(false)
+            fetchSequences()
+          }}
+        />
+      )}
+
+      {/* Edit Sequence Modal */}
+      {editingSequence && selectedClient && (
+        <EditSequenceModal
+          sequence={editingSequence}
+          clientId={selectedClient.id}
+          verifiedSenders={selectedClient.verified_senders || []}
+          onClose={() => setEditingSequence(null)}
+          onSuccess={() => {
+            setEditingSequence(null)
             fetchSequences()
           }}
         />
@@ -574,6 +598,347 @@ function CreateSequenceModal({
                 <ChevronRight className="h-4 w-4 ml-1" />
               </Button>
             </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Edit Sequence Modal
+function EditSequenceModal({
+  sequence,
+  clientId,
+  verifiedSenders,
+  onClose,
+  onSuccess,
+}: {
+  sequence: EmailSequence
+  clientId: string
+  verifiedSenders: { email: string; name: string }[]
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [formData, setFormData] = useState({
+    name: sequence.name,
+    description: sequence.description || '',
+    from_email: sequence.from_email,
+    from_name: sequence.from_name,
+    reply_to: sequence.reply_to || '',
+  })
+  const [steps, setSteps] = useState<SequenceStep[]>([])
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [activeTab, setActiveTab] = useState<'settings' | 'steps'>('steps')
+
+  useEffect(() => {
+    fetchData()
+  }, [])
+
+  const fetchData = async () => {
+    setLoading(true)
+    try {
+      const [stepsRes, templatesRes] = await Promise.all([
+        supabase
+          .from('sequence_steps')
+          .select('*')
+          .eq('sequence_id', sequence.id)
+          .order('step_order'),
+        supabase
+          .from('templates')
+          .select('*')
+          .eq('client_id', clientId)
+          .order('name')
+      ])
+
+      if (stepsRes.error) throw stepsRes.error
+      setSteps(stepsRes.data || [])
+      setTemplates(templatesRes.data || [])
+    } catch (error) {
+      console.error('Error fetching sequence data:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const addStep = async () => {
+    const newStepOrder = steps.length + 1
+    try {
+      const { data, error } = await supabase
+        .from('sequence_steps')
+        .insert({
+          sequence_id: sequence.id,
+          step_order: newStepOrder,
+          subject: `Email ${newStepOrder}`,
+          delay_days: newStepOrder === 1 ? 0 : 1,
+          delay_hours: 0,
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+      setSteps([...steps, data])
+    } catch (error) {
+      console.error('Error adding step:', error)
+      alert('Failed to add step')
+    }
+  }
+
+  const updateStep = async (stepId: string, field: string, value: any) => {
+    try {
+      const { error } = await supabase
+        .from('sequence_steps')
+        .update({ [field]: value })
+        .eq('id', stepId)
+
+      if (error) throw error
+
+      setSteps(steps.map(s =>
+        s.id === stepId ? { ...s, [field]: value } : s
+      ))
+    } catch (error) {
+      console.error('Error updating step:', error)
+    }
+  }
+
+  const deleteStep = async (stepId: string) => {
+    if (steps.length === 1) {
+      alert('Sequence must have at least one step')
+      return
+    }
+
+    if (!confirm('Delete this step?')) return
+
+    try {
+      const { error } = await supabase
+        .from('sequence_steps')
+        .delete()
+        .eq('id', stepId)
+
+      if (error) throw error
+
+      // Reorder remaining steps
+      const remainingSteps = steps.filter(s => s.id !== stepId)
+      for (let i = 0; i < remainingSteps.length; i++) {
+        if (remainingSteps[i].step_order !== i + 1) {
+          await supabase
+            .from('sequence_steps')
+            .update({ step_order: i + 1 })
+            .eq('id', remainingSteps[i].id)
+          remainingSteps[i].step_order = i + 1
+        }
+      }
+
+      setSteps(remainingSteps)
+    } catch (error) {
+      console.error('Error deleting step:', error)
+      alert('Failed to delete step')
+    }
+  }
+
+  const saveSettings = async () => {
+    setSubmitting(true)
+    try {
+      const { error } = await supabase
+        .from('email_sequences')
+        .update({
+          name: formData.name,
+          description: formData.description || null,
+          from_email: formData.from_email,
+          from_name: formData.from_name,
+          reply_to: formData.reply_to || null,
+        })
+        .eq('id', sequence.id)
+
+      if (error) throw error
+      onSuccess()
+    } catch (error) {
+      console.error('Error saving sequence:', error)
+      alert('Failed to save sequence')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b">
+          <h2 className="text-xl font-semibold">Edit Sequence: {sequence.name}</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b">
+          <button
+            className={`px-6 py-3 text-sm font-medium ${
+              activeTab === 'steps'
+                ? 'border-b-2 border-blue-500 text-blue-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+            onClick={() => setActiveTab('steps')}
+          >
+            Email Steps ({steps.length})
+          </button>
+          <button
+            className={`px-6 py-3 text-sm font-medium ${
+              activeTab === 'settings'
+                ? 'border-b-2 border-blue-500 text-blue-600'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+            onClick={() => setActiveTab('settings')}
+          >
+            Settings
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {loading ? (
+            <div className="text-center py-8 text-gray-500">Loading...</div>
+          ) : activeTab === 'steps' ? (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <p className="text-sm text-gray-600">
+                  Add and configure the emails in your sequence
+                </p>
+                <Button variant="outline" size="sm" onClick={addStep}>
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Step
+                </Button>
+              </div>
+
+              {steps.map((step, index) => (
+                <Card key={step.id}>
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-4">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                        <span className="text-blue-600 font-medium text-sm">{step.step_order}</span>
+                      </div>
+                      <div className="flex-1 space-y-3">
+                        {index > 0 && (
+                          <div className="flex items-center gap-2 pb-2 border-b">
+                            <Clock className="h-4 w-4 text-gray-400" />
+                            <span className="text-sm text-gray-600">Wait</span>
+                            <input
+                              type="number"
+                              min="0"
+                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              value={step.delay_days}
+                              onChange={(e) => updateStep(step.id, 'delay_days', parseInt(e.target.value) || 0)}
+                            />
+                            <span className="text-sm text-gray-600">days</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="23"
+                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              value={step.delay_hours}
+                              onChange={(e) => updateStep(step.id, 'delay_hours', parseInt(e.target.value) || 0)}
+                            />
+                            <span className="text-sm text-gray-600">hours</span>
+                          </div>
+                        )}
+                        <Input
+                          label="Subject"
+                          value={step.subject}
+                          onChange={(e) => updateStep(step.id, 'subject', e.target.value)}
+                          placeholder="Email subject line"
+                        />
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Template
+                          </label>
+                          <select
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                            value={step.template_id || ''}
+                            onChange={(e) => updateStep(step.id, 'template_id', e.target.value || null)}
+                          >
+                            <option value="">Select a template...</option>
+                            {templates.map((t) => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="text-xs text-gray-500">
+                          {step.sent_count} sent · {step.open_count} opens · {step.click_count} clicks
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => deleteStep(step.id)}
+                        className="text-gray-400 hover:text-red-500"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+
+              {steps.length === 0 && (
+                <div className="text-center py-8 text-gray-500">
+                  <Mail className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                  <p>No steps yet. Add your first email step.</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <Input
+                label="Sequence Name"
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+              />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Description
+                </label>
+                <textarea
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  rows={2}
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  From Sender
+                </label>
+                <select
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  value={`${formData.from_email}|${formData.from_name}`}
+                  onChange={(e) => {
+                    const [email, name] = e.target.value.split('|')
+                    setFormData({ ...formData, from_email: email, from_name: name })
+                  }}
+                >
+                  {verifiedSenders.map((sender) => (
+                    <option key={sender.email} value={`${sender.email}|${sender.name}`}>
+                      {sender.name} &lt;{sender.email}&gt;
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Input
+                label="Reply-To Email"
+                type="email"
+                value={formData.reply_to}
+                onChange={(e) => setFormData({ ...formData, reply_to: e.target.value })}
+              />
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-3 p-6 border-t bg-gray-50">
+          <Button variant="outline" onClick={onClose}>
+            Close
+          </Button>
+          {activeTab === 'settings' && (
+            <Button onClick={saveSettings} disabled={submitting}>
+              {submitting ? 'Saving...' : 'Save Settings'}
+            </Button>
           )}
         </div>
       </div>
