@@ -1195,6 +1195,10 @@ function EnrollContactsModal({
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
+  const [enrollMode, setEnrollMode] = useState<'individual' | 'tags'>('individual')
+  const [allTags, setAllTags] = useState<string[]>([])
+  const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [tagMatchMode, setTagMatchMode] = useState<'any' | 'all'>('any')
 
   useEffect(() => {
     fetchEligibleContacts()
@@ -1226,6 +1230,13 @@ function EnrollContactsModal({
 
       if (error) throw error
       setContacts(data || [])
+
+      // Extract all unique tags
+      const tags = new Set<string>()
+      data?.forEach(contact => {
+        contact.tags?.forEach((tag: string) => tags.add(tag))
+      })
+      setAllTags(Array.from(tags).sort())
     } catch (error) {
       console.error('Error fetching contacts:', error)
     } finally {
@@ -1233,11 +1244,29 @@ function EnrollContactsModal({
     }
   }
 
-  const filteredContacts = contacts.filter(c =>
-    c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.first_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    c.last_name?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  // Filter contacts based on mode
+  const filteredContacts = contacts.filter(c => {
+    const matchesSearch =
+      c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.first_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.last_name?.toLowerCase().includes(searchTerm.toLowerCase())
+
+    if (enrollMode === 'tags' && selectedTags.length > 0) {
+      const hasMatchingTags = tagMatchMode === 'any'
+        ? selectedTags.some(tag => c.tags?.includes(tag))
+        : selectedTags.every(tag => c.tags?.includes(tag))
+      return matchesSearch && hasMatchingTags
+    }
+
+    return matchesSearch
+  })
+
+  // Auto-select all when filtering by tags
+  useEffect(() => {
+    if (enrollMode === 'tags' && selectedTags.length > 0) {
+      setSelectedContacts(filteredContacts.map(c => c.id))
+    }
+  }, [selectedTags, tagMatchMode, enrollMode])
 
   const toggleContact = (id: string) => {
     setSelectedContacts(prev =>
@@ -1339,7 +1368,84 @@ function EnrollContactsModal({
           </button>
         </div>
 
-        <div className="p-4 border-b">
+        {/* Mode Selection */}
+        <div className="p-4 border-b space-y-3">
+          <div className="flex gap-2">
+            <button
+              className={`px-3 py-1.5 text-sm rounded-md ${
+                enrollMode === 'individual'
+                  ? 'bg-blue-100 text-blue-700 font-medium'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+              onClick={() => {
+                setEnrollMode('individual')
+                setSelectedTags([])
+                setSelectedContacts([])
+              }}
+            >
+              Select Individually
+            </button>
+            <button
+              className={`px-3 py-1.5 text-sm rounded-md ${
+                enrollMode === 'tags'
+                  ? 'bg-blue-100 text-blue-700 font-medium'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+              onClick={() => {
+                setEnrollMode('tags')
+                setSelectedContacts([])
+              }}
+            >
+              Select by Tags
+            </button>
+          </div>
+
+          {enrollMode === 'tags' && allTags.length > 0 && (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-600">Match:</span>
+                <select
+                  className="text-sm rounded-md border border-gray-300 px-2 py-1"
+                  value={tagMatchMode}
+                  onChange={(e) => setTagMatchMode(e.target.value as 'any' | 'all')}
+                >
+                  <option value="any">Any selected tag</option>
+                  <option value="all">All selected tags</option>
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {allTags.map((tag) => (
+                  <button
+                    key={tag}
+                    className={`px-2 py-1 text-xs rounded-full ${
+                      selectedTags.includes(tag)
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                    }`}
+                    onClick={() => {
+                      setSelectedTags(prev =>
+                        prev.includes(tag)
+                          ? prev.filter(t => t !== tag)
+                          : [...prev, tag]
+                      )
+                    }}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+              {selectedTags.length > 0 && (
+                <p className="text-xs text-gray-500">
+                  {filteredContacts.length} contact(s) match selected tags
+                </p>
+              )}
+            </div>
+          )}
+
+          {enrollMode === 'tags' && allTags.length === 0 && (
+            <p className="text-sm text-gray-500">No tags found in your contacts.</p>
+          )}
+
           <Input
             placeholder="Search contacts..."
             value={searchTerm}
@@ -1352,14 +1458,16 @@ function EnrollContactsModal({
             <div className="text-center py-8 text-gray-500">Loading contacts...</div>
           ) : filteredContacts.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
-              No eligible contacts found.
+              {enrollMode === 'tags' && selectedTags.length > 0
+                ? 'No contacts match the selected tags.'
+                : 'No eligible contacts found.'}
             </div>
           ) : (
             <div className="divide-y">
               <div className="px-4 py-2 bg-gray-50 flex items-center gap-3">
                 <input
                   type="checkbox"
-                  checked={selectedContacts.length === filteredContacts.length}
+                  checked={selectedContacts.length === filteredContacts.length && filteredContacts.length > 0}
                   onChange={toggleAll}
                   className="rounded border-gray-300"
                 />
@@ -1379,12 +1487,29 @@ function EnrollContactsModal({
                     onChange={() => toggleContact(contact.id)}
                     className="rounded border-gray-300"
                   />
-                  <div>
+                  <div className="flex-1">
                     <p className="text-sm font-medium text-gray-900">
                       {contact.first_name} {contact.last_name}
                     </p>
                     <p className="text-sm text-gray-600">{contact.email}</p>
                   </div>
+                  {contact.tags && contact.tags.length > 0 && (
+                    <div className="flex gap-1">
+                      {contact.tags.slice(0, 3).map((tag: string) => (
+                        <span
+                          key={tag}
+                          className="px-1.5 py-0.5 text-xs bg-gray-100 text-gray-600 rounded"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                      {contact.tags.length > 3 && (
+                        <span className="text-xs text-gray-400">
+                          +{contact.tags.length - 3}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
