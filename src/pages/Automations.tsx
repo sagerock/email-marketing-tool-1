@@ -1,0 +1,973 @@
+import { useState, useEffect } from 'react'
+import { supabase } from '../lib/supabase'
+import { useClient } from '../context/ClientContext'
+import type { EmailSequence, SequenceStep, Template, Contact, SequenceEnrollment } from '../types/index.js'
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
+import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
+import Badge from '../components/ui/Badge'
+import {
+  Plus,
+  X,
+  Zap,
+  Play,
+  Pause,
+  Users,
+  Mail,
+  Clock,
+  ChevronRight,
+  Trash2,
+  Eye
+} from 'lucide-react'
+
+export default function Automations() {
+  const { selectedClient } = useClient()
+  const [sequences, setSequences] = useState<EmailSequence[]>([])
+  const [loading, setLoading] = useState(true)
+  const [showCreateModal, setShowCreateModal] = useState(false)
+  const [selectedSequence, setSelectedSequence] = useState<EmailSequence | null>(null)
+  const [showEnrollModal, setShowEnrollModal] = useState(false)
+  const [enrollingSequence, setEnrollingSequence] = useState<EmailSequence | null>(null)
+
+  useEffect(() => {
+    fetchSequences()
+  }, [selectedClient])
+
+  const fetchSequences = async () => {
+    if (!selectedClient) {
+      setSequences([])
+      setLoading(false)
+      return
+    }
+
+    setLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('email_sequences')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setSequences(data || [])
+    } catch (error) {
+      console.error('Error fetching sequences:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleStatusChange = async (sequence: EmailSequence, newStatus: 'active' | 'paused') => {
+    try {
+      const { error } = await supabase
+        .from('email_sequences')
+        .update({ status: newStatus })
+        .eq('id', sequence.id)
+
+      if (error) throw error
+      fetchSequences()
+    } catch (error) {
+      console.error('Error updating sequence status:', error)
+      alert('Failed to update sequence status')
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this sequence? All enrollments will be cancelled.')) return
+
+    try {
+      const { error } = await supabase.from('email_sequences').delete().eq('id', id)
+      if (error) throw error
+      fetchSequences()
+    } catch (error) {
+      console.error('Error deleting sequence:', error)
+      alert('Failed to delete sequence')
+    }
+  }
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'active':
+        return <Badge variant="success">Active</Badge>
+      case 'paused':
+        return <Badge variant="warning">Paused</Badge>
+      case 'draft':
+        return <Badge variant="default">Draft</Badge>
+      case 'archived':
+        return <Badge variant="default">Archived</Badge>
+      default:
+        return <Badge variant="default">{status}</Badge>
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Automations</h1>
+          <p className="mt-1 text-sm text-gray-600">
+            Create email sequences that automatically send over time
+          </p>
+        </div>
+        <Button onClick={() => setShowCreateModal(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          Create Sequence
+        </Button>
+      </div>
+
+      {/* Info Card */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Zap className="h-5 w-5 text-yellow-500" />
+            How Automations Work
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <span className="text-blue-600 font-medium">1</span>
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">Create a Sequence</p>
+                <p className="text-gray-600">Define a series of emails with delays between each</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <span className="text-blue-600 font-medium">2</span>
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">Enroll Contacts</p>
+                <p className="text-gray-600">Add contacts manually or set up automatic triggers</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                <span className="text-blue-600 font-medium">3</span>
+              </div>
+              <div>
+                <p className="font-medium text-gray-900">Emails Send Automatically</p>
+                <p className="text-gray-600">The scheduler sends emails at the configured intervals</p>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Sequences List */}
+      {loading ? (
+        <div className="text-center py-12 text-gray-500">Loading sequences...</div>
+      ) : sequences.length === 0 ? (
+        <Card>
+          <CardContent className="py-12">
+            <div className="text-center text-gray-500">
+              <Zap className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+              <p>No automation sequences yet.</p>
+              <p className="text-sm mt-1">Create your first sequence to start automating your emails.</p>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-4">
+          {sequences.map((sequence) => (
+            <Card key={sequence.id} className="hover:shadow-md transition-shadow">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-2">
+                      <h3 className="text-lg font-semibold text-gray-900">{sequence.name}</h3>
+                      {getStatusBadge(sequence.status)}
+                    </div>
+                    {sequence.description && (
+                      <p className="text-sm text-gray-600 mb-3">{sequence.description}</p>
+                    )}
+                    <div className="flex items-center gap-6 text-sm text-gray-500">
+                      <div className="flex items-center gap-1">
+                        <Users className="h-4 w-4" />
+                        <span>{sequence.total_enrolled} enrolled</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Mail className="h-4 w-4" />
+                        <span>From: {sequence.from_name}</span>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <Clock className="h-4 w-4" />
+                        <span>{new Date(sequence.created_at).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {sequence.status === 'active' ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleStatusChange(sequence, 'paused')}
+                      >
+                        <Pause className="h-4 w-4 mr-1" />
+                        Pause
+                      </Button>
+                    ) : sequence.status === 'paused' || sequence.status === 'draft' ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleStatusChange(sequence, 'active')}
+                      >
+                        <Play className="h-4 w-4 mr-1" />
+                        Activate
+                      </Button>
+                    ) : null}
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setEnrollingSequence(sequence)
+                        setShowEnrollModal(true)
+                      }}
+                    >
+                      <Users className="h-4 w-4 mr-1" />
+                      Enroll
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setSelectedSequence(sequence)}
+                    >
+                      <Eye className="h-4 w-4 mr-1" />
+                      View
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => handleDelete(sequence.id)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Create Sequence Modal */}
+      {showCreateModal && selectedClient && (
+        <CreateSequenceModal
+          clientId={selectedClient.id}
+          verifiedSenders={selectedClient.verified_senders || []}
+          onClose={() => setShowCreateModal(false)}
+          onSuccess={() => {
+            setShowCreateModal(false)
+            fetchSequences()
+          }}
+        />
+      )}
+
+      {/* View Sequence Modal */}
+      {selectedSequence && (
+        <ViewSequenceModal
+          sequence={selectedSequence}
+          onClose={() => setSelectedSequence(null)}
+        />
+      )}
+
+      {/* Enroll Contacts Modal */}
+      {showEnrollModal && enrollingSequence && selectedClient && (
+        <EnrollContactsModal
+          sequence={enrollingSequence}
+          clientId={selectedClient.id}
+          onClose={() => {
+            setShowEnrollModal(false)
+            setEnrollingSequence(null)
+          }}
+          onSuccess={() => {
+            setShowEnrollModal(false)
+            setEnrollingSequence(null)
+            fetchSequences()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Create Sequence Modal
+function CreateSequenceModal({
+  clientId,
+  verifiedSenders,
+  onClose,
+  onSuccess,
+}: {
+  clientId: string
+  verifiedSenders: { email: string; name: string }[]
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [step, setStep] = useState<'info' | 'steps'>('info')
+  const [formData, setFormData] = useState({
+    name: '',
+    description: '',
+    from_email: verifiedSenders[0]?.email || '',
+    from_name: verifiedSenders[0]?.name || '',
+    reply_to: '',
+  })
+  const [sequenceSteps, setSequenceSteps] = useState<Partial<SequenceStep>[]>([
+    { step_order: 1, subject: '', delay_days: 0, delay_hours: 0 }
+  ])
+  const [templates, setTemplates] = useState<Template[]>([])
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    fetchTemplates()
+  }, [])
+
+  const fetchTemplates = async () => {
+    const { data } = await supabase
+      .from('templates')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('name')
+    setTemplates(data || [])
+  }
+
+  const addStep = () => {
+    setSequenceSteps([
+      ...sequenceSteps,
+      {
+        step_order: sequenceSteps.length + 1,
+        subject: '',
+        delay_days: 1,
+        delay_hours: 0
+      }
+    ])
+  }
+
+  const removeStep = (index: number) => {
+    if (sequenceSteps.length === 1) return
+    const updated = sequenceSteps.filter((_, i) => i !== index)
+    // Reorder steps
+    updated.forEach((s, i) => s.step_order = i + 1)
+    setSequenceSteps(updated)
+  }
+
+  const updateStep = (index: number, field: string, value: any) => {
+    const updated = [...sequenceSteps]
+    updated[index] = { ...updated[index], [field]: value }
+    setSequenceSteps(updated)
+  }
+
+  const handleSubmit = async () => {
+    if (!formData.name || !formData.from_email) {
+      alert('Please fill in all required fields')
+      return
+    }
+
+    const hasEmptySteps = sequenceSteps.some(s => !s.subject)
+    if (hasEmptySteps) {
+      alert('Please add a subject for all steps')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      // Create sequence
+      const { data: sequence, error: seqError } = await supabase
+        .from('email_sequences')
+        .insert({
+          name: formData.name,
+          description: formData.description,
+          from_email: formData.from_email,
+          from_name: formData.from_name,
+          reply_to: formData.reply_to || null,
+          client_id: clientId,
+          status: 'draft',
+        })
+        .select()
+        .single()
+
+      if (seqError) throw seqError
+
+      // Create steps
+      const stepsToInsert = sequenceSteps.map(s => ({
+        sequence_id: sequence.id,
+        step_order: s.step_order,
+        subject: s.subject,
+        template_id: s.template_id || null,
+        html_content: s.html_content || null,
+        delay_days: s.delay_days || 0,
+        delay_hours: s.delay_hours || 0,
+      }))
+
+      const { error: stepsError } = await supabase
+        .from('sequence_steps')
+        .insert(stepsToInsert)
+
+      if (stepsError) throw stepsError
+
+      onSuccess()
+    } catch (error) {
+      console.error('Error creating sequence:', error)
+      alert('Failed to create sequence')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b">
+          <h2 className="text-xl font-semibold">Create Email Sequence</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {step === 'info' ? (
+            <div className="space-y-4">
+              <Input
+                label="Sequence Name *"
+                required
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                placeholder="e.g., Welcome Series"
+              />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Description
+                </label>
+                <textarea
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  rows={2}
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Optional description for this sequence"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  From Sender *
+                </label>
+                <select
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  value={`${formData.from_email}|${formData.from_name}`}
+                  onChange={(e) => {
+                    const [email, name] = e.target.value.split('|')
+                    setFormData({ ...formData, from_email: email, from_name: name })
+                  }}
+                >
+                  {verifiedSenders.map((sender) => (
+                    <option key={sender.email} value={`${sender.email}|${sender.name}`}>
+                      {sender.name} &lt;{sender.email}&gt;
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <Input
+                label="Reply-To Email"
+                type="email"
+                value={formData.reply_to}
+                onChange={(e) => setFormData({ ...formData, reply_to: e.target.value })}
+                placeholder="Optional reply-to address"
+              />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-medium text-gray-900">Email Steps</h3>
+                <Button variant="outline" size="sm" onClick={addStep}>
+                  <Plus className="h-4 w-4 mr-1" />
+                  Add Step
+                </Button>
+              </div>
+
+              {sequenceSteps.map((stepData, index) => (
+                <Card key={index} className="relative">
+                  <CardContent className="p-4">
+                    <div className="flex items-start gap-4">
+                      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                        <span className="text-blue-600 font-medium text-sm">{index + 1}</span>
+                      </div>
+                      <div className="flex-1 space-y-3">
+                        {index > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm text-gray-600">Wait</span>
+                            <input
+                              type="number"
+                              min="0"
+                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              value={stepData.delay_days || 0}
+                              onChange={(e) => updateStep(index, 'delay_days', parseInt(e.target.value) || 0)}
+                            />
+                            <span className="text-sm text-gray-600">days</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="23"
+                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              value={stepData.delay_hours || 0}
+                              onChange={(e) => updateStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
+                            />
+                            <span className="text-sm text-gray-600">hours after previous step</span>
+                          </div>
+                        )}
+                        <Input
+                          label="Subject *"
+                          required
+                          value={stepData.subject || ''}
+                          onChange={(e) => updateStep(index, 'subject', e.target.value)}
+                          placeholder="Email subject line"
+                        />
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Email Template
+                          </label>
+                          <select
+                            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                            value={stepData.template_id || ''}
+                            onChange={(e) => updateStep(index, 'template_id', e.target.value || null)}
+                          >
+                            <option value="">Select a template...</option>
+                            {templates.map((t) => (
+                              <option key={t.id} value={t.id}>{t.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      {sequenceSteps.length > 1 && (
+                        <button
+                          onClick={() => removeStep(index)}
+                          className="text-gray-400 hover:text-red-500"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-between p-6 border-t bg-gray-50">
+          {step === 'steps' ? (
+            <>
+              <Button variant="outline" onClick={() => setStep('info')}>
+                Back
+              </Button>
+              <Button onClick={handleSubmit} disabled={submitting}>
+                {submitting ? 'Creating...' : 'Create Sequence'}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Button variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button onClick={() => setStep('steps')}>
+                Next: Add Email Steps
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// View Sequence Modal
+function ViewSequenceModal({
+  sequence,
+  onClose,
+}: {
+  sequence: EmailSequence
+  onClose: () => void
+}) {
+  const [steps, setSteps] = useState<SequenceStep[]>([])
+  const [enrollments, setEnrollments] = useState<SequenceEnrollment[]>([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    fetchDetails()
+  }, [sequence.id])
+
+  const fetchDetails = async () => {
+    setLoading(true)
+    try {
+      const [stepsRes, enrollmentsRes] = await Promise.all([
+        supabase
+          .from('sequence_steps')
+          .select('*')
+          .eq('sequence_id', sequence.id)
+          .order('step_order'),
+        supabase
+          .from('sequence_enrollments')
+          .select(`
+            *,
+            contact:contacts(email, first_name, last_name)
+          `)
+          .eq('sequence_id', sequence.id)
+          .order('enrolled_at', { ascending: false })
+          .limit(50)
+      ])
+
+      if (stepsRes.error) throw stepsRes.error
+      if (enrollmentsRes.error) throw enrollmentsRes.error
+
+      setSteps(stepsRes.data || [])
+      setEnrollments(enrollmentsRes.data || [])
+    } catch (error) {
+      console.error('Error fetching sequence details:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const getEnrollmentStatusBadge = (status: string) => {
+    switch (status) {
+      case 'active':
+        return <Badge variant="success">Active</Badge>
+      case 'completed':
+        return <Badge variant="default">Completed</Badge>
+      case 'paused':
+        return <Badge variant="warning">Paused</Badge>
+      case 'cancelled':
+        return <Badge variant="default">Cancelled</Badge>
+      default:
+        return <Badge variant="default">{status}</Badge>
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b">
+          <div>
+            <h2 className="text-xl font-semibold">{sequence.name}</h2>
+            <p className="text-sm text-gray-600">
+              From: {sequence.from_name} &lt;{sequence.from_email}&gt;
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6">
+          {loading ? (
+            <div className="text-center py-8 text-gray-500">Loading...</div>
+          ) : (
+            <div className="space-y-6">
+              {/* Steps */}
+              <div>
+                <h3 className="font-medium text-gray-900 mb-3">Email Steps ({steps.length})</h3>
+                <div className="space-y-3">
+                  {steps.map((step, index) => (
+                    <div key={step.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
+                      <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                        <span className="text-blue-600 font-medium text-xs">{step.step_order}</span>
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-medium text-sm">{step.subject}</p>
+                        {index > 0 && (
+                          <p className="text-xs text-gray-500">
+                            After {step.delay_days}d {step.delay_hours}h
+                          </p>
+                        )}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {step.sent_count} sent
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Enrollments */}
+              <div>
+                <h3 className="font-medium text-gray-900 mb-3">
+                  Recent Enrollments ({sequence.total_enrolled} total)
+                </h3>
+                {enrollments.length === 0 ? (
+                  <p className="text-sm text-gray-500">No contacts enrolled yet.</p>
+                ) : (
+                  <div className="border rounded-lg overflow-hidden">
+                    <table className="min-w-full divide-y divide-gray-200">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Contact</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Status</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Step</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Enrolled</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {enrollments.map((enrollment) => (
+                          <tr key={enrollment.id}>
+                            <td className="px-4 py-2 text-sm">
+                              {enrollment.contact?.email || 'Unknown'}
+                            </td>
+                            <td className="px-4 py-2">
+                              {getEnrollmentStatusBadge(enrollment.status)}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-600">
+                              {enrollment.current_step} / {steps.length}
+                            </td>
+                            <td className="px-4 py-2 text-sm text-gray-500">
+                              {new Date(enrollment.enrolled_at).toLocaleDateString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-end p-6 border-t bg-gray-50">
+          <Button onClick={onClose}>Close</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Enroll Contacts Modal
+function EnrollContactsModal({
+  sequence,
+  clientId,
+  onClose,
+  onSuccess,
+}: {
+  sequence: EmailSequence
+  clientId: string
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [contacts, setContacts] = useState<Contact[]>([])
+  const [selectedContacts, setSelectedContacts] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
+
+  useEffect(() => {
+    fetchEligibleContacts()
+  }, [])
+
+  const fetchEligibleContacts = async () => {
+    setLoading(true)
+    try {
+      // Get contacts that are not already enrolled in this sequence
+      const { data: enrolled } = await supabase
+        .from('sequence_enrollments')
+        .select('contact_id')
+        .eq('sequence_id', sequence.id)
+
+      const enrolledIds = enrolled?.map(e => e.contact_id) || []
+
+      let query = supabase
+        .from('contacts')
+        .select('*')
+        .eq('client_id', clientId)
+        .eq('unsubscribed', false)
+        .order('email')
+
+      if (enrolledIds.length > 0) {
+        query = query.not('id', 'in', `(${enrolledIds.join(',')})`)
+      }
+
+      const { data, error } = await query
+
+      if (error) throw error
+      setContacts(data || [])
+    } catch (error) {
+      console.error('Error fetching contacts:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const filteredContacts = contacts.filter(c =>
+    c.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.first_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    c.last_name?.toLowerCase().includes(searchTerm.toLowerCase())
+  )
+
+  const toggleContact = (id: string) => {
+    setSelectedContacts(prev =>
+      prev.includes(id)
+        ? prev.filter(cId => cId !== id)
+        : [...prev, id]
+    )
+  }
+
+  const toggleAll = () => {
+    if (selectedContacts.length === filteredContacts.length) {
+      setSelectedContacts([])
+    } else {
+      setSelectedContacts(filteredContacts.map(c => c.id))
+    }
+  }
+
+  const handleEnroll = async () => {
+    if (selectedContacts.length === 0) {
+      alert('Please select at least one contact')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      // Get the first step to calculate next email time
+      const { data: firstStep } = await supabase
+        .from('sequence_steps')
+        .select('*')
+        .eq('sequence_id', sequence.id)
+        .eq('step_order', 1)
+        .single()
+
+      const now = new Date()
+
+      // Create enrollments
+      const enrollments = selectedContacts.map(contactId => ({
+        sequence_id: sequence.id,
+        contact_id: contactId,
+        status: 'active',
+        current_step: 0,
+        next_email_scheduled_at: now.toISOString(),
+      }))
+
+      const { error: enrollError } = await supabase
+        .from('sequence_enrollments')
+        .insert(enrollments)
+
+      if (enrollError) throw enrollError
+
+      // Update sequence total enrolled count
+      await supabase
+        .from('email_sequences')
+        .update({ total_enrolled: sequence.total_enrolled + selectedContacts.length })
+        .eq('id', sequence.id)
+
+      // Schedule the first emails
+      if (firstStep) {
+        const { data: newEnrollments } = await supabase
+          .from('sequence_enrollments')
+          .select('id, contact_id')
+          .eq('sequence_id', sequence.id)
+          .in('contact_id', selectedContacts)
+
+        if (newEnrollments) {
+          const scheduledEmails = newEnrollments.map(enrollment => ({
+            enrollment_id: enrollment.id,
+            step_id: firstStep.id,
+            contact_id: enrollment.contact_id,
+            scheduled_for: now.toISOString(),
+            status: 'pending',
+          }))
+
+          await supabase.from('scheduled_emails').insert(scheduledEmails)
+        }
+      }
+
+      onSuccess()
+    } catch (error) {
+      console.error('Error enrolling contacts:', error)
+      alert('Failed to enroll contacts')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between p-6 border-b">
+          <div>
+            <h2 className="text-xl font-semibold">Enroll Contacts</h2>
+            <p className="text-sm text-gray-600">
+              Select contacts to add to "{sequence.name}"
+            </p>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <div className="p-4 border-b">
+          <Input
+            placeholder="Search contacts..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="text-center py-8 text-gray-500">Loading contacts...</div>
+          ) : filteredContacts.length === 0 ? (
+            <div className="text-center py-8 text-gray-500">
+              No eligible contacts found.
+            </div>
+          ) : (
+            <div className="divide-y">
+              <div className="px-4 py-2 bg-gray-50 flex items-center gap-3">
+                <input
+                  type="checkbox"
+                  checked={selectedContacts.length === filteredContacts.length}
+                  onChange={toggleAll}
+                  className="rounded border-gray-300"
+                />
+                <span className="text-sm font-medium text-gray-700">
+                  Select all ({filteredContacts.length})
+                </span>
+              </div>
+              {filteredContacts.map((contact) => (
+                <div
+                  key={contact.id}
+                  className="px-4 py-3 flex items-center gap-3 hover:bg-gray-50 cursor-pointer"
+                  onClick={() => toggleContact(contact.id)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedContacts.includes(contact.id)}
+                    onChange={() => toggleContact(contact.id)}
+                    className="rounded border-gray-300"
+                  />
+                  <div>
+                    <p className="text-sm font-medium text-gray-900">
+                      {contact.first_name} {contact.last_name}
+                    </p>
+                    <p className="text-sm text-gray-600">{contact.email}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="flex justify-between items-center p-6 border-t bg-gray-50">
+          <span className="text-sm text-gray-600">
+            {selectedContacts.length} contact(s) selected
+          </span>
+          <div className="flex gap-3">
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={handleEnroll} disabled={submitting || selectedContacts.length === 0}>
+              {submitting ? 'Enrolling...' : `Enroll ${selectedContacts.length} Contact(s)`}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

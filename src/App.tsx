@@ -8,6 +8,7 @@ import Signup from './pages/auth/Signup'
 import Contacts from './pages/Contacts'
 import Templates from './pages/Templates'
 import Campaigns from './pages/Campaigns'
+import Automations from './pages/Automations'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import Unsubscribe from './pages/Unsubscribe'
@@ -53,6 +54,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Campaigns />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/automations"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Automations />
                   </Layout>
                 </ProtectedRoute>
               }

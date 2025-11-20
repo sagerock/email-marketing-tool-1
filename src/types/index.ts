@@ -82,3 +82,100 @@ export interface CampaignStats {
   spam_reports: number
   unsubscribes: number
 }
+
+// Automation Sequences Types
+export type SequenceStatus = 'draft' | 'active' | 'paused' | 'archived'
+export type EnrollmentStatus = 'active' | 'completed' | 'paused' | 'cancelled' | 'failed'
+
+export interface EmailSequence {
+  id: string
+  name: string
+  description?: string
+  status: SequenceStatus
+  trigger_type: 'manual' | 'tag_added' | 'contact_created'
+  trigger_config: Record<string, any>
+  from_email: string
+  from_name: string
+  reply_to?: string
+  filter_tags?: string[]
+  total_enrolled: number
+  total_completed: number
+  client_id?: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SequenceStep {
+  id: string
+  sequence_id: string
+  step_order: number
+  subject: string
+  template_id?: string
+  html_content?: string
+  delay_days: number
+  delay_hours: number
+  send_time?: string
+  sent_count: number
+  open_count: number
+  click_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SequenceEnrollment {
+  id: string
+  sequence_id: string
+  contact_id: string
+  status: EnrollmentStatus
+  current_step: number
+  enrolled_at: string
+  completed_at?: string
+  paused_at?: string
+  cancelled_at?: string
+  last_email_sent_at?: string
+  next_email_scheduled_at?: string
+  // Joined fields
+  contact?: Contact
+}
+
+export interface ScheduledEmail {
+  id: string
+  enrollment_id: string
+  step_id: string
+  contact_id: string
+  scheduled_for: string
+  status: 'pending' | 'sent' | 'failed' | 'cancelled'
+  sent_at?: string
+  error_message?: string
+  attempts: number
+  created_at: string
+}
+
+export interface SequenceAnalytics {
+  id: string
+  sequence_id: string
+  step_id: string
+  enrollment_id?: string
+  email: string
+  event_type: string
+  timestamp: string
+  url?: string
+  user_agent?: string
+  ip_address?: string
+  sg_event_id?: string
+  created_at: string
+}
+
+export interface SequenceStats {
+  sequence_id: string
+  total_enrolled: number
+  active: number
+  completed: number
+  paused: number
+  cancelled: number
+  emails_sent: number
+  opens: number
+  clicks: number
+  bounces: number
+  unsubscribes: number
+}
