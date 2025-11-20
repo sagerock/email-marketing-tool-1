@@ -14,6 +14,7 @@
 
 const express = require('express')
 const cors = require('cors')
+const cron = require('node-cron')
 const sgMail = require('@sendgrid/mail')
 const sgClient = require('@sendgrid/client')
 const { createClient } = require('@supabase/supabase-js')
@@ -742,4 +743,219 @@ app.post('/api/webhook/sequence', async (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`)
+
+  // Start cron job to process sequence emails every minute
+  cron.schedule('* * * * *', async () => {
+    console.log('⏰ Running sequence processor...')
+    try {
+      const now = new Date().toISOString()
+
+      // Get pending scheduled emails that are due
+      const { data: scheduledEmails, error: fetchError } = await supabase
+        .from('scheduled_emails')
+        .select(`
+          *,
+          enrollment:sequence_enrollments(
+            *,
+            sequence:email_sequences(*),
+            contact:contacts(*)
+          ),
+          step:sequence_steps(*)
+        `)
+        .eq('status', 'pending')
+        .lte('scheduled_for', now)
+        .limit(50)
+
+      if (fetchError) {
+        console.error('❌ Error fetching scheduled emails:', fetchError)
+        return
+      }
+
+      if (!scheduledEmails || scheduledEmails.length === 0) {
+        return // No emails to process
+      }
+
+      console.log(`📬 Processing ${scheduledEmails.length} scheduled sequence emails`)
+
+      let sent = 0
+      let failed = 0
+
+      for (const scheduledEmail of scheduledEmails) {
+        try {
+          const { enrollment, step } = scheduledEmail
+          const { sequence, contact } = enrollment
+
+          // Skip if sequence is not active or contact is unsubscribed
+          if (sequence.status !== 'active' || contact.unsubscribed) {
+            await supabase
+              .from('scheduled_emails')
+              .update({ status: 'cancelled' })
+              .eq('id', scheduledEmail.id)
+            continue
+          }
+
+          // Skip if enrollment is not active
+          if (enrollment.status !== 'active') {
+            await supabase
+              .from('scheduled_emails')
+              .update({ status: 'cancelled' })
+              .eq('id', scheduledEmail.id)
+            continue
+          }
+
+          // Get client for API key
+          const { data: client } = await supabase
+            .from('clients')
+            .select('*')
+            .eq('id', sequence.client_id)
+            .single()
+
+          if (!client || !client.sendgrid_api_key) {
+            throw new Error('Client or API key not found')
+          }
+
+          sgMail.setApiKey(client.sendgrid_api_key)
+
+          // Get template content if specified
+          let htmlContent = step.html_content || ''
+          if (step.template_id && !htmlContent) {
+            const { data: template } = await supabase
+              .from('templates')
+              .select('html_content')
+              .eq('id', step.template_id)
+              .single()
+            htmlContent = template?.html_content || ''
+          }
+
+          // Personalize content
+          const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
+          const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}`
+          const mailingAddress = client.mailing_address || 'No mailing address configured'
+
+          let personalizedHtml = htmlContent
+            .replace(/{{email}}/gi, contact.email)
+            .replace(/{{first_name}}/gi, contact.first_name || '')
+            .replace(/{{last_name}}/gi, contact.last_name || '')
+            .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
+            .replace(/{{mailing_address}}/gi, mailingAddress)
+
+          // Send email
+          const msg = {
+            to: contact.email,
+            from: {
+              email: sequence.from_email,
+              name: sequence.from_name,
+            },
+            replyTo: sequence.reply_to || undefined,
+            subject: step.subject,
+            html: personalizedHtml,
+            customArgs: {
+              sequence_id: sequence.id,
+              step_id: step.id,
+              enrollment_id: enrollment.id,
+            },
+            headers: {
+              'List-Unsubscribe': `<${unsubscribeUrl}>`,
+              'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+            },
+          }
+
+          await sgMail.send(msg)
+
+          // Update scheduled email status
+          await supabase
+            .from('scheduled_emails')
+            .update({
+              status: 'sent',
+              sent_at: new Date().toISOString(),
+            })
+            .eq('id', scheduledEmail.id)
+
+          // Update step sent count
+          await supabase
+            .from('sequence_steps')
+            .update({ sent_count: step.sent_count + 1 })
+            .eq('id', step.id)
+
+          // Update enrollment
+          const nextStepOrder = step.step_order + 1
+
+          // Check if there's a next step
+          const { data: nextStep } = await supabase
+            .from('sequence_steps')
+            .select('*')
+            .eq('sequence_id', sequence.id)
+            .eq('step_order', nextStepOrder)
+            .single()
+
+          if (nextStep) {
+            // Schedule next email
+            const nextSendTime = new Date()
+            nextSendTime.setDate(nextSendTime.getDate() + (nextStep.delay_days || 0))
+            nextSendTime.setHours(nextSendTime.getHours() + (nextStep.delay_hours || 0))
+
+            await supabase.from('scheduled_emails').insert({
+              enrollment_id: enrollment.id,
+              step_id: nextStep.id,
+              contact_id: contact.id,
+              scheduled_for: nextSendTime.toISOString(),
+              status: 'pending',
+            })
+
+            await supabase
+              .from('sequence_enrollments')
+              .update({
+                current_step: step.step_order,
+                last_email_sent_at: new Date().toISOString(),
+                next_email_scheduled_at: nextSendTime.toISOString(),
+              })
+              .eq('id', enrollment.id)
+          } else {
+            // Sequence completed
+            await supabase
+              .from('sequence_enrollments')
+              .update({
+                current_step: step.step_order,
+                status: 'completed',
+                completed_at: new Date().toISOString(),
+                last_email_sent_at: new Date().toISOString(),
+                next_email_scheduled_at: null,
+              })
+              .eq('id', enrollment.id)
+
+            // Update sequence completed count
+            await supabase
+              .from('email_sequences')
+              .update({ total_completed: sequence.total_completed + 1 })
+              .eq('id', sequence.id)
+          }
+
+          sent++
+          console.log(`✅ Sent sequence email to ${contact.email} (step ${step.step_order})`)
+        } catch (emailError) {
+          console.error(`❌ Failed to send sequence email:`, emailError.message)
+
+          // Update scheduled email with error
+          await supabase
+            .from('scheduled_emails')
+            .update({
+              status: 'failed',
+              error_message: emailError.message,
+              attempts: scheduledEmail.attempts + 1,
+            })
+            .eq('id', scheduledEmail.id)
+
+          failed++
+        }
+      }
+
+      if (sent > 0 || failed > 0) {
+        console.log(`📊 Sequence processing complete: ${sent} sent, ${failed} failed`)
+      }
+    } catch (error) {
+      console.error('❌ Cron job error:', error.message)
+    }
+  })
+
+  console.log('✅ Sequence processor cron job started (runs every minute)')
 })

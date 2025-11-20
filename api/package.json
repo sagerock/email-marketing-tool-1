@@ -13,7 +13,8 @@
     "@sendgrid/mail": "^8.1.0",
     "@sendgrid/client": "^8.1.0",
     "@supabase/supabase-js": "^2.39.0",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "node-cron": "^3.0.3"
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
