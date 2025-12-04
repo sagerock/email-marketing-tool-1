@@ -19,6 +19,7 @@ export default function Contacts() {
   const [showImportModal, setShowImportModal] = useState(false)
   const [editingContact, setEditingContact] = useState<Contact | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showContacts, setShowContacts] = useState(false)
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -33,13 +34,10 @@ export default function Contacts() {
     }
   }, [selectedClient])
 
-  // Fetch contacts when tags are selected
+  // Reset contacts list when tags change
   useEffect(() => {
-    if (selectedClient && selectedTags.length > 0) {
-      fetchFilteredContacts()
-    } else {
-      setContacts([])
-    }
+    setContacts([])
+    setShowContacts(false)
   }, [selectedTags, selectedClient])
 
   const fetchTotalCount = async () => {
@@ -104,6 +102,14 @@ export default function Contacts() {
   // For backwards compatibility with modals that expect allTags as string[]
   const allTags = availableTags.map(t => t.name)
 
+  // Calculate filtered count from selected tags (uses smallest tag count as estimate)
+  const filteredCount = selectedTags.length > 0
+    ? Math.min(...selectedTags.map(tagName => {
+        const tag = availableTags.find(t => t.name === tagName)
+        return tag?.contact_count || 0
+      }))
+    : totalCount
+
   // Filter contacts by search term (client-side since we already fetched filtered data)
   const filteredContacts = contacts.filter((contact) => {
     if (searchTerm === '') return true
@@ -123,7 +129,7 @@ export default function Contacts() {
   const refreshData = () => {
     fetchTotalCount()
     fetchTags()
-    if (selectedTags.length > 0) {
+    if (selectedTags.length > 0 && showContacts) {
       fetchFilteredContacts()
     }
   }
@@ -189,9 +195,11 @@ export default function Contacts() {
       <Card>
         <CardHeader>
           <CardTitle>
-            {selectedTags.length > 0
+            {showContacts && contacts.length > 0
               ? `${filteredContacts.length.toLocaleString()} Contact${filteredContacts.length !== 1 ? 's' : ''}`
-              : `${totalCount.toLocaleString()} Contact${totalCount !== 1 ? 's' : ''}`
+              : selectedTags.length > 0
+                ? `~${filteredCount.toLocaleString()} Contact${filteredCount !== 1 ? 's' : ''}`
+                : `${totalCount.toLocaleString()} Contact${totalCount !== 1 ? 's' : ''}`
             }
           </CardTitle>
         </CardHeader>
@@ -207,6 +215,19 @@ export default function Contacts() {
               <p className="text-gray-500">
                 Select a tag above to view contacts
               </p>
+            </div>
+          ) : !showContacts ? (
+            <div className="text-center py-12">
+              <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-600 text-lg font-medium mb-2">
+                ~{filteredCount.toLocaleString()} contacts with selected tag{selectedTags.length !== 1 ? 's' : ''}
+              </p>
+              <p className="text-gray-500 mb-4">
+                {selectedTags.join(', ')}
+              </p>
+              <Button onClick={() => { setShowContacts(true); fetchFilteredContacts(); }}>
+                View Contacts
+              </Button>
             </div>
           ) : filteredContacts.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
