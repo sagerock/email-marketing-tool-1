@@ -66,7 +66,7 @@ export default function Contacts() {
         .from('tags')
         .select('*')
         .eq('client_id', selectedClient.id)
-        .order('contact_count', { ascending: false })
+        .order('name', { ascending: true })
 
       if (error) throw error
       setAvailableTags(data || [])
@@ -172,7 +172,18 @@ export default function Contacts() {
 
             {availableTags.length > 0 && (
               <div>
-                <p className="text-sm font-medium text-gray-700 mb-2">Filter by tags:</p>
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-sm font-medium text-gray-700">Filter by tags:</p>
+                  {selectedTags.length > 0 && (
+                    <button
+                      onClick={() => setSelectedTags([])}
+                      className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                    >
+                      <X className="h-3 w-3" />
+                      Clear filters
+                    </button>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
                   {availableTags.map((tag) => (
                     <Badge
