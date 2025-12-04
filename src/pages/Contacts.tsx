@@ -1,16 +1,18 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Contact } from '../types/index.js'
+import type { Contact, Tag } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users } from 'lucide-react'
 
 export default function Contacts() {
   const { selectedClient } = useClient()
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [totalCount, setTotalCount] = useState<number>(0)
+  const [availableTags, setAvailableTags] = useState<Tag[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [showAddModal, setShowAddModal] = useState(false)
@@ -18,15 +20,66 @@ export default function Contacts() {
   const [editingContact, setEditingContact] = useState<Contact | null>(null)
   const [loading, setLoading] = useState(true)
 
-  // Fetch contacts when client changes
+  // Fetch total count and tags when client changes
   useEffect(() => {
-    fetchContacts()
-  }, [selectedClient])
-
-  const fetchContacts = async () => {
-    if (!selectedClient) {
+    if (selectedClient) {
+      fetchTotalCount()
+      fetchTags()
+    } else {
+      setTotalCount(0)
+      setAvailableTags([])
       setContacts([])
       setLoading(false)
+    }
+  }, [selectedClient])
+
+  // Fetch contacts when tags are selected
+  useEffect(() => {
+    if (selectedClient && selectedTags.length > 0) {
+      fetchFilteredContacts()
+    } else {
+      setContacts([])
+    }
+  }, [selectedTags, selectedClient])
+
+  const fetchTotalCount = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { count, error } = await supabase
+        .from('contacts')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', selectedClient.id)
+
+      if (error) throw error
+      setTotalCount(count || 0)
+    } catch (error) {
+      console.error('Error fetching count:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const fetchTags = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { data, error } = await supabase
+        .from('tags')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('contact_count', { ascending: false })
+
+      if (error) throw error
+      setAvailableTags(data || [])
+    } catch (error) {
+      console.error('Error fetching tags:', error)
+    }
+  }
+
+  const fetchFilteredContacts = async () => {
+    if (!selectedClient || selectedTags.length === 0) {
+      setContacts([])
       return
     }
 
@@ -36,6 +89,7 @@ export default function Contacts() {
         .from('contacts')
         .select('*')
         .eq('client_id', selectedClient.id)
+        .contains('tags', selectedTags)
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -47,30 +101,31 @@ export default function Contacts() {
     }
   }
 
-  // Get unique tags from all contacts
-  const allTags = Array.from(
-    new Set(contacts.flatMap((contact) => contact.tags || []))
-  ).sort()
+  // For backwards compatibility with modals that expect allTags as string[]
+  const allTags = availableTags.map(t => t.name)
 
-  // Filter contacts
+  // Filter contacts by search term (client-side since we already fetched filtered data)
   const filteredContacts = contacts.filter((contact) => {
-    const matchesSearch =
-      searchTerm === '' ||
+    if (searchTerm === '') return true
+    return (
       contact.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
       contact.first_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       contact.last_name?.toLowerCase().includes(searchTerm.toLowerCase())
-
-    const matchesTags =
-      selectedTags.length === 0 ||
-      selectedTags.every((tag) => contact.tags?.includes(tag))
-
-    return matchesSearch && matchesTags
+    )
   })
 
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) =>
       prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]
     )
+  }
+
+  const refreshData = () => {
+    fetchTotalCount()
+    fetchTags()
+    if (selectedTags.length > 0) {
+      fetchFilteredContacts()
+    }
   }
 
   return (
@@ -109,18 +164,18 @@ export default function Contacts() {
               />
             </div>
 
-            {allTags.length > 0 && (
+            {availableTags.length > 0 && (
               <div>
                 <p className="text-sm font-medium text-gray-700 mb-2">Filter by tags:</p>
-                <div className="flex flex-wrap gap-2">
-                  {allTags.map((tag) => (
+                <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
+                  {availableTags.map((tag) => (
                     <Badge
-                      key={tag}
-                      variant={selectedTags.includes(tag) ? 'info' : 'default'}
+                      key={tag.id}
+                      variant={selectedTags.includes(tag.name) ? 'info' : 'default'}
                       className="cursor-pointer hover:opacity-80"
-                      onClick={() => toggleTag(tag)}
+                      onClick={() => toggleTag(tag.name)}
                     >
-                      {tag}
+                      {tag.name} ({tag.contact_count.toLocaleString()})
                     </Badge>
                   ))}
                 </div>
@@ -134,17 +189,30 @@ export default function Contacts() {
       <Card>
         <CardHeader>
           <CardTitle>
-            {filteredContacts.length} Contact{filteredContacts.length !== 1 ? 's' : ''}
+            {selectedTags.length > 0
+              ? `${filteredContacts.length.toLocaleString()} Contact${filteredContacts.length !== 1 ? 's' : ''}`
+              : `${totalCount.toLocaleString()} Contact${totalCount !== 1 ? 's' : ''}`
+            }
           </CardTitle>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="text-center py-12 text-gray-500">Loading contacts...</div>
+            <div className="text-center py-12 text-gray-500">Loading...</div>
+          ) : selectedTags.length === 0 ? (
+            <div className="text-center py-12">
+              <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-600 text-lg font-medium mb-2">
+                {totalCount.toLocaleString()} contacts total
+              </p>
+              <p className="text-gray-500">
+                Select a tag above to view contacts
+              </p>
+            </div>
           ) : filteredContacts.length === 0 ? (
             <div className="text-center py-12 text-gray-500">
-              {searchTerm || selectedTags.length > 0
-                ? 'No contacts match your filters'
-                : 'No contacts yet. Add your first contact to get started.'}
+              {searchTerm
+                ? 'No contacts match your search'
+                : 'No contacts match the selected tags'}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -176,7 +244,7 @@ export default function Contacts() {
                     <ContactRow
                       key={contact.id}
                       contact={contact}
-                      onUpdate={fetchContacts}
+                      onUpdate={refreshData}
                       onEdit={setEditingContact}
                     />
                   ))}
@@ -195,7 +263,7 @@ export default function Contacts() {
           onClose={() => setShowAddModal(false)}
           onSuccess={() => {
             setShowAddModal(false)
-            fetchContacts()
+            refreshData()
           }}
         />
       )}
@@ -208,7 +276,7 @@ export default function Contacts() {
           onClose={() => setEditingContact(null)}
           onSuccess={() => {
             setEditingContact(null)
-            fetchContacts()
+            refreshData()
           }}
         />
       )}
@@ -220,7 +288,7 @@ export default function Contacts() {
           onClose={() => setShowImportModal(false)}
           onSuccess={() => {
             setShowImportModal(false)
-            fetchContacts()
+            refreshData()
           }}
         />
       )}

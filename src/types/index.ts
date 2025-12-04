@@ -70,6 +70,14 @@ export interface Client {
   updated_at: string
 }
 
+export interface Tag {
+  id: string
+  name: string
+  client_id: string
+  contact_count: number
+  created_at: string
+}
+
 export interface CampaignStats {
   campaign_id: string
   sent: number
