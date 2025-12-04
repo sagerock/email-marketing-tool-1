@@ -107,17 +107,36 @@ export default function Contacts() {
     setLoading(true)
     setShowContacts(true)
     try {
-      const term = searchTerm.trim().toLowerCase()
+      const terms = searchTerm.trim().toLowerCase().split(/\s+/)
+
+      // Build OR conditions for each term across all searchable fields
+      const orConditions = terms.map(term =>
+        `email.ilike.%${term}%,first_name.ilike.%${term}%,last_name.ilike.%${term}%,company.ilike.%${term}%`
+      ).join(',')
+
       const { data, error } = await supabase
         .from('contacts')
         .select('*')
         .eq('client_id', selectedClient.id)
-        .or(`email.ilike.%${term}%,first_name.ilike.%${term}%,last_name.ilike.%${term}%,company.ilike.%${term}%`)
+        .or(orConditions)
         .order('created_at', { ascending: false })
         .limit(100)
 
       if (error) throw error
-      setContacts(data || [])
+
+      // Filter client-side to ensure ALL terms match (not just any)
+      const filtered = data?.filter(contact => {
+        const searchableText = [
+          contact.email,
+          contact.first_name,
+          contact.last_name,
+          contact.company
+        ].filter(Boolean).join(' ').toLowerCase()
+
+        return terms.every(term => searchableText.includes(term))
+      }) || []
+
+      setContacts(filtered)
     } catch (error) {
       console.error('Error searching contacts:', error)
     } finally {
