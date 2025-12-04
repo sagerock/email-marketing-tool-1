@@ -549,6 +549,7 @@ function AddContactModal({
     email: '',
     first_name: '',
     last_name: '',
+    company: '',
   })
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [newTag, setNewTag] = useState('')
@@ -564,6 +565,7 @@ function AddContactModal({
         email: formData.email,
         first_name: formData.first_name || null,
         last_name: formData.last_name || null,
+        company: formData.company || null,
         tags: selectedTags,
         client_id: clientId,
       })
@@ -649,6 +651,13 @@ function AddContactModal({
             value={formData.last_name}
             onChange={(e) =>
               setFormData({ ...formData, last_name: e.target.value })
+            }
+          />
+          <Input
+            label="Company"
+            value={formData.company}
+            onChange={(e) =>
+              setFormData({ ...formData, company: e.target.value })
             }
           />
 
@@ -764,6 +773,7 @@ function EditContactModal({
     email: contact.email,
     first_name: contact.first_name || '',
     last_name: contact.last_name || '',
+    company: contact.company || '',
   })
   const [selectedTags, setSelectedTags] = useState<string[]>(contact.tags || [])
   const [newTag, setNewTag] = useState('')
@@ -780,6 +790,7 @@ function EditContactModal({
           email: formData.email,
           first_name: formData.first_name || null,
           last_name: formData.last_name || null,
+          company: formData.company || null,
           tags: selectedTags,
         })
         .eq('id', contact.id)
@@ -865,6 +876,13 @@ function EditContactModal({
             value={formData.last_name}
             onChange={(e) =>
               setFormData({ ...formData, last_name: e.target.value })
+            }
+          />
+          <Input
+            label="Company"
+            value={formData.company}
+            onChange={(e) =>
+              setFormData({ ...formData, company: e.target.value })
             }
           />
 
