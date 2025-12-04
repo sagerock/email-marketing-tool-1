@@ -559,6 +559,7 @@ function AddContactModal({
     setSubmitting(true)
 
     try {
+      // Insert the contact
       const { error } = await supabase.from('contacts').insert({
         email: formData.email,
         first_name: formData.first_name || null,
@@ -568,6 +569,20 @@ function AddContactModal({
       })
 
       if (error) throw error
+
+      // Add any new tags to the tags table
+      const newTags = selectedTags.filter(tag => !allTags.includes(tag))
+      if (newTags.length > 0) {
+        await supabase.from('tags').upsert(
+          newTags.map(tag => ({
+            name: tag,
+            client_id: clientId,
+            contact_count: 1,
+          })),
+          { onConflict: 'name,client_id' }
+        )
+      }
+
       onSuccess()
     } catch (error) {
       console.error('Error adding contact:', error)
@@ -577,12 +592,21 @@ function AddContactModal({
     }
   }
 
-  const handleAddNewTag = () => {
-    if (newTag.trim() && !selectedTags.includes(newTag.trim())) {
-      setSelectedTags([...selectedTags, newTag.trim()])
+  const handleAddNewTag = (tagToAdd?: string) => {
+    const tag = (tagToAdd || newTag).trim()
+    if (tag && !selectedTags.includes(tag)) {
+      setSelectedTags([...selectedTags, tag])
       setNewTag('')
     }
   }
+
+  // Filter tags for autocomplete
+  const tagSuggestions = newTag.trim()
+    ? allTags.filter(tag =>
+        tag.toLowerCase().includes(newTag.toLowerCase()) &&
+        !selectedTags.includes(tag)
+      ).slice(0, 5)
+    : []
 
   const toggleTag = (tag: string) => {
     if (selectedTags.includes(tag)) {
@@ -653,25 +677,41 @@ function AddContactModal({
               </div>
             )}
 
-            {/* Add New Tag */}
+            {/* Add New Tag with Autocomplete */}
             <div>
-              <p className="text-xs text-gray-500 mb-2">Or add a new tag:</p>
+              <p className="text-xs text-gray-500 mb-2">Type to search or add a new tag:</p>
               <div className="flex gap-2">
-                <Input
-                  placeholder="Enter new tag"
-                  value={newTag}
-                  onChange={(e) => setNewTag(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      handleAddNewTag()
-                    }
-                  }}
-                />
+                <div className="flex-1 relative">
+                  <Input
+                    placeholder="Enter tag name..."
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        handleAddNewTag()
+                      }
+                    }}
+                  />
+                  {tagSuggestions.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg">
+                      {tagSuggestions.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 first:rounded-t-md last:rounded-b-md"
+                          onClick={() => handleAddNewTag(tag)}
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={handleAddNewTag}
+                  onClick={() => handleAddNewTag()}
                   disabled={!newTag.trim()}
                 >
                   <Plus className="h-4 w-4" />
@@ -745,6 +785,20 @@ function EditContactModal({
         .eq('id', contact.id)
 
       if (error) throw error
+
+      // Add any new tags to the tags table
+      const newTags = selectedTags.filter(tag => !allTags.includes(tag))
+      if (newTags.length > 0 && contact.client_id) {
+        await supabase.from('tags').upsert(
+          newTags.map(tag => ({
+            name: tag,
+            client_id: contact.client_id,
+            contact_count: 1,
+          })),
+          { onConflict: 'name,client_id' }
+        )
+      }
+
       onSuccess()
     } catch (error) {
       console.error('Error updating contact:', error)
@@ -754,12 +808,21 @@ function EditContactModal({
     }
   }
 
-  const handleAddNewTag = () => {
-    if (newTag.trim() && !selectedTags.includes(newTag.trim())) {
-      setSelectedTags([...selectedTags, newTag.trim()])
+  const handleAddNewTag = (tagToAdd?: string) => {
+    const tag = (tagToAdd || newTag).trim()
+    if (tag && !selectedTags.includes(tag)) {
+      setSelectedTags([...selectedTags, tag])
       setNewTag('')
     }
   }
+
+  // Filter tags for autocomplete
+  const tagSuggestions = newTag.trim()
+    ? allTags.filter(tag =>
+        tag.toLowerCase().includes(newTag.toLowerCase()) &&
+        !selectedTags.includes(tag)
+      ).slice(0, 5)
+    : []
 
   const toggleTag = (tag: string) => {
     if (selectedTags.includes(tag)) {
@@ -830,25 +893,41 @@ function EditContactModal({
               </div>
             )}
 
-            {/* Add New Tag */}
+            {/* Add New Tag with Autocomplete */}
             <div>
-              <p className="text-xs text-gray-500 mb-2">Or add a new tag:</p>
+              <p className="text-xs text-gray-500 mb-2">Type to search or add a new tag:</p>
               <div className="flex gap-2">
-                <Input
-                  placeholder="Enter new tag"
-                  value={newTag}
-                  onChange={(e) => setNewTag(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault()
-                      handleAddNewTag()
-                    }
-                  }}
-                />
+                <div className="flex-1 relative">
+                  <Input
+                    placeholder="Enter tag name..."
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        handleAddNewTag()
+                      }
+                    }}
+                  />
+                  {tagSuggestions.length > 0 && (
+                    <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg">
+                      {tagSuggestions.map((tag) => (
+                        <button
+                          key={tag}
+                          type="button"
+                          className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 first:rounded-t-md last:rounded-b-md"
+                          onClick={() => handleAddNewTag(tag)}
+                        >
+                          {tag}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={handleAddNewTag}
+                  onClick={() => handleAddNewTag()}
                   disabled={!newTag.trim()}
                 >
                   <Plus className="h-4 w-4" />
