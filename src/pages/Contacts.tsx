@@ -594,7 +594,7 @@ function AddContactModal({
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-semibold">Add New Contact</h2>
           <button
@@ -638,7 +638,7 @@ function AddContactModal({
             {allTags.length > 0 && (
               <div className="mb-3">
                 <p className="text-xs text-gray-500 mb-2">Select from existing tags:</p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
                   {allTags.map((tag) => (
                     <Badge
                       key={tag}
@@ -815,7 +815,7 @@ function EditContactModal({
             {allTags.length > 0 && (
               <div className="mb-3">
                 <p className="text-xs text-gray-500 mb-2">Select from existing tags:</p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
                   {allTags.map((tag) => (
                     <Badge
                       key={tag}
