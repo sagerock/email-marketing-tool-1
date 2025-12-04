@@ -3,6 +3,7 @@ export interface Contact {
   email: string
   first_name?: string
   last_name?: string
+  company?: string
   tags: string[]
   custom_fields?: Record<string, any>
   unsubscribed: boolean

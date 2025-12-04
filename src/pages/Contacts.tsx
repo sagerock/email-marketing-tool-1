@@ -99,6 +99,32 @@ export default function Contacts() {
     }
   }
 
+  const searchContacts = async () => {
+    if (!selectedClient || !searchTerm.trim()) {
+      return
+    }
+
+    setLoading(true)
+    setShowContacts(true)
+    try {
+      const term = searchTerm.trim().toLowerCase()
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .or(`email.ilike.%${term}%,first_name.ilike.%${term}%,last_name.ilike.%${term}%,company.ilike.%${term}%`)
+        .order('created_at', { ascending: false })
+        .limit(100)
+
+      if (error) throw error
+      setContacts(data || [])
+    } catch (error) {
+      console.error('Error searching contacts:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   // For backwards compatibility with modals that expect allTags as string[]
   const allTags = availableTags.map(t => t.name)
 
@@ -110,15 +136,8 @@ export default function Contacts() {
       }))
     : totalCount
 
-  // Filter contacts by search term (client-side since we already fetched filtered data)
-  const filteredContacts = contacts.filter((contact) => {
-    if (searchTerm === '') return true
-    return (
-      contact.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      contact.first_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      contact.last_name?.toLowerCase().includes(searchTerm.toLowerCase())
-    )
-  })
+  // When searching, contacts are already filtered server-side
+  const filteredContacts = contacts
 
   const toggleTag = (tag: string) => {
     setSelectedTags((prev) =>
@@ -160,14 +179,25 @@ export default function Contacts() {
       <Card>
         <CardContent className="pt-6">
           <div className="space-y-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <Input
-                placeholder="Search by email or name..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="pl-10"
-              />
+            <div className="relative flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                <Input
+                  placeholder="Search by email, name, or company..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault()
+                      searchContacts()
+                    }
+                  }}
+                  className="pl-10"
+                />
+              </div>
+              <Button onClick={searchContacts} disabled={!searchTerm.trim()}>
+                Search
+              </Button>
             </div>
 
             {availableTags.length > 0 && (
@@ -217,36 +247,7 @@ export default function Contacts() {
         <CardContent>
           {loading ? (
             <div className="text-center py-12 text-gray-500">Loading...</div>
-          ) : selectedTags.length === 0 ? (
-            <div className="text-center py-12">
-              <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-600 text-lg font-medium mb-2">
-                {totalCount.toLocaleString()} contacts total
-              </p>
-              <p className="text-gray-500">
-                Select a tag above to view contacts
-              </p>
-            </div>
-          ) : !showContacts ? (
-            <div className="text-center py-12">
-              <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-600 text-lg font-medium mb-2">
-                ~{filteredCount.toLocaleString()} contacts with selected tag{selectedTags.length !== 1 ? 's' : ''}
-              </p>
-              <p className="text-gray-500 mb-4">
-                {selectedTags.join(', ')}
-              </p>
-              <Button onClick={() => { setShowContacts(true); fetchFilteredContacts(); }}>
-                View Contacts
-              </Button>
-            </div>
-          ) : filteredContacts.length === 0 ? (
-            <div className="text-center py-12 text-gray-500">
-              {searchTerm
-                ? 'No contacts match your search'
-                : 'No contacts match the selected tags'}
-            </div>
-          ) : (
+          ) : showContacts && filteredContacts.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -258,13 +259,13 @@ export default function Contacts() {
                       Name
                     </th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">
+                      Company
+                    </th>
+                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">
                       Tags
                     </th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">
                       Status
-                    </th>
-                    <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">
-                      Added
                     </th>
                     <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">
                       Actions
@@ -283,7 +284,34 @@ export default function Contacts() {
                 </tbody>
               </table>
             </div>
-          )}
+          ) : showContacts && filteredContacts.length === 0 ? (
+            <div className="text-center py-12 text-gray-500">
+              No contacts found
+            </div>
+          ) : selectedTags.length === 0 ? (
+            <div className="text-center py-12">
+              <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-600 text-lg font-medium mb-2">
+                {totalCount.toLocaleString()} contacts total
+              </p>
+              <p className="text-gray-500">
+                Search or select a tag to view contacts
+              </p>
+            </div>
+          ) : !showContacts ? (
+            <div className="text-center py-12">
+              <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-600 text-lg font-medium mb-2">
+                ~{filteredCount.toLocaleString()} contacts with selected tag{selectedTags.length !== 1 ? 's' : ''}
+              </p>
+              <p className="text-gray-500 mb-4">
+                {selectedTags.join(', ')}
+              </p>
+              <Button onClick={() => { setShowContacts(true); fetchFilteredContacts(); }}>
+                View Contacts
+              </Button>
+            </div>
+          ) : null}
         </CardContent>
       </Card>
 
@@ -419,6 +447,9 @@ function ContactRow({
           ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
           : '-'}
       </td>
+      <td className="py-3 px-4 text-sm text-gray-900">
+        {contact.company || '-'}
+      </td>
       <td className="py-3 px-4">
         <div className="flex flex-wrap gap-1">
           {contact.tags && contact.tags.length > 0 ? (
@@ -447,9 +478,6 @@ function ContactRow({
             <Badge variant="success">Subscribed</Badge>
           )}
         </div>
-      </td>
-      <td className="py-3 px-4 text-sm text-gray-600">
-        {new Date(contact.created_at).toLocaleDateString()}
       </td>
       <td className="py-3 px-4 text-right">
         <div className="flex justify-end gap-2">
