@@ -45,8 +45,8 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
   }
 
   if (!user) {
-    console.log('ProtectedRoute - No user, redirecting to login')
-    return <Navigate to="/login" replace />
+    console.log('ProtectedRoute - No user, redirecting to landing page')
+    return <Navigate to="/welcome" replace />
   }
 
   console.log('ProtectedRoute - User authenticated, rendering children')
