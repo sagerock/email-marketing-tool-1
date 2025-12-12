@@ -5,13 +5,14 @@ import type { Template } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, FileText, X } from 'lucide-react'
+import { Plus, FileText, X, Pencil } from 'lucide-react'
 
 export default function Templates() {
   const { selectedClient } = useClient()
   const [templates, setTemplates] = useState<Template[]>([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null)
+  const [editingTemplate, setEditingTemplate] = useState<Template | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -170,16 +171,29 @@ export default function Templates() {
                     <span>
                       {new Date(template.created_at).toLocaleDateString()}
                     </span>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        handleDelete(template.id)
-                      }}
-                    >
-                      Delete
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setEditingTemplate(template)
+                        }}
+                      >
+                        <Pencil className="h-3 w-3 mr-1" />
+                        Edit
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleDelete(template.id)
+                        }}
+                      >
+                        Delete
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -205,6 +219,18 @@ export default function Templates() {
         <TemplatePreviewModal
           template={selectedTemplate}
           onClose={() => setSelectedTemplate(null)}
+        />
+      )}
+
+      {/* Edit Template Modal */}
+      {editingTemplate && (
+        <EditTemplateModal
+          template={editingTemplate}
+          onClose={() => setEditingTemplate(null)}
+          onSuccess={() => {
+            setEditingTemplate(null)
+            fetchTemplates()
+          }}
         />
       )}
     </div>
@@ -312,6 +338,109 @@ function AddTemplateModal({
             </Button>
             <Button type="submit" disabled={submitting}>
               {submitting ? 'Adding...' : 'Add Email Design'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function EditTemplateModal({
+  template,
+  onClose,
+  onSuccess,
+}: {
+  template: Template
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [formData, setFormData] = useState({
+    name: template.name,
+    subject: template.subject,
+    preview_text: template.preview_text || '',
+    html_content: template.html_content,
+  })
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+
+    try {
+      const { error } = await supabase
+        .from('templates')
+        .update({
+          name: formData.name,
+          subject: formData.subject,
+          preview_text: formData.preview_text,
+          html_content: formData.html_content,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', template.id)
+
+      if (error) throw error
+      onSuccess()
+    } catch (error) {
+      console.error('Error updating template:', error)
+      alert('Failed to update template')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Edit Email Design</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <Input
+            label="Design Name *"
+            required
+            value={formData.name}
+            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          />
+          <Input
+            label="Email Subject *"
+            required
+            value={formData.subject}
+            onChange={(e) => setFormData({ ...formData, subject: e.target.value })}
+          />
+          <Input
+            label="Preview Text"
+            placeholder="Optional preview text shown in email clients"
+            value={formData.preview_text}
+            onChange={(e) =>
+              setFormData({ ...formData, preview_text: e.target.value })
+            }
+          />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              HTML Content * (from Stripo)
+            </label>
+            <textarea
+              required
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm min-h-[200px] font-mono"
+              placeholder="Paste your HTML content from Stripo here..."
+              value={formData.html_content}
+              onChange={(e) =>
+                setFormData({ ...formData, html_content: e.target.value })
+              }
+            />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? 'Saving...' : 'Save Changes'}
             </Button>
           </div>
         </form>
