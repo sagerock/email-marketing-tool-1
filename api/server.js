@@ -57,16 +57,19 @@ const supabase = createClient(
 )
 
 /**
- * Send a test email
+ * Send test email(s)
  */
 app.post('/api/send-test-email', async (req, res) => {
   try {
-    const { campaignId, testEmail } = req.body
+    const { campaignId, testEmail, testEmails } = req.body
 
-    console.log('📧 Test email request:', { campaignId, testEmail })
+    // Support both single email (legacy) and multiple emails
+    const emails = testEmails || (testEmail ? [testEmail] : [])
 
-    if (!testEmail) {
-      return res.status(400).json({ error: 'Test email address is required' })
+    console.log('📧 Test email request:', { campaignId, emails })
+
+    if (emails.length === 0) {
+      return res.status(400).json({ error: 'At least one test email address is required' })
     }
 
     if (!campaignId) {
@@ -149,36 +152,47 @@ app.post('/api/send-test-email', async (req, res) => {
     const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
     const testUnsubscribeUrl = `${baseUrl}/unsubscribe?token=TEST_TOKEN`
 
-    // Replace merge tags with test data
+    // Send test email to each recipient
     const mailingAddress = client.mailing_address || 'No mailing address configured'
-    let personalizedHtml = htmlContent
-      .replace(/{{email}}/gi, testEmail)
-      .replace(/{{first_name}}/gi, 'John')
-      .replace(/{{last_name}}/gi, 'Doe')
-      .replace(/{{unsubscribe_url}}/gi, testUnsubscribeUrl)
-      .replace(/{{mailing_address}}/gi, mailingAddress)
+    let sentCount = 0
 
-    const msg = {
-      to: testEmail,
-      from: {
-        email: campaign.from_email,
-        name: campaign.from_name,
-      },
-      replyTo: campaign.reply_to || undefined,
-      subject: `[TEST] ${campaign.subject}`,
-      html: personalizedHtml,
-      ipPoolName: client.ip_pool || undefined,
-      headers: {
-        'List-Unsubscribe': `<${testUnsubscribeUrl}>`,
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      },
+    for (const email of emails) {
+      // Replace merge tags with test data
+      let personalizedHtml = htmlContent
+        .replace(/{{email}}/gi, email)
+        .replace(/{{first_name}}/gi, 'John')
+        .replace(/{{last_name}}/gi, 'Doe')
+        .replace(/{{unsubscribe_url}}/gi, testUnsubscribeUrl)
+        .replace(/{{mailing_address}}/gi, mailingAddress)
+
+      const msg = {
+        to: email,
+        from: {
+          email: campaign.from_email,
+          name: campaign.from_name,
+        },
+        replyTo: campaign.reply_to || undefined,
+        subject: `[TEST] ${campaign.subject}`,
+        html: personalizedHtml,
+        ipPoolName: client.ip_pool || undefined,
+        headers: {
+          'List-Unsubscribe': `<${testUnsubscribeUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        },
+      }
+
+      console.log('📤 Sending test email to:', email)
+      await sgMail.send(msg)
+      sentCount++
     }
 
-    console.log('📤 Sending test email to:', testEmail)
-    await sgMail.send(msg)
-
-    console.log('✅ Test email sent successfully')
-    res.json({ success: true, message: `Test email sent to ${testEmail}` })
+    console.log(`✅ Test email(s) sent successfully to ${sentCount} recipient(s)`)
+    res.json({
+      success: true,
+      message: emails.length === 1
+        ? `Test email sent to ${emails[0]}`
+        : `Test emails sent to ${sentCount} recipients`
+    })
   } catch (error) {
     console.error('❌ Error sending test email:', error)
 

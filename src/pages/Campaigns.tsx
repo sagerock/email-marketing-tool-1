@@ -701,7 +701,7 @@ function SendTestEmailModal({
   campaign: Campaign
   onClose: () => void
 }) {
-  const [testEmail, setTestEmail] = useState('')
+  const [testEmails, setTestEmails] = useState('')
   const [sending, setSending] = useState(false)
 
   const handleSendTest = async (e: React.FormEvent) => {
@@ -709,13 +709,23 @@ function SendTestEmailModal({
     setSending(true)
 
     try {
+      // Parse comma-separated emails
+      const emails = testEmails
+        .split(',')
+        .map(email => email.trim())
+        .filter(email => email.length > 0)
+
+      if (emails.length === 0) {
+        throw new Error('Please enter at least one email address')
+      }
+
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
       const response = await fetch(`${apiUrl}/api/send-test-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           campaignId: campaign.id,
-          testEmail,
+          testEmails: emails,
         }),
       })
 
@@ -734,6 +744,11 @@ function SendTestEmailModal({
       setSending(false)
     }
   }
+
+  const emailCount = testEmails
+    .split(',')
+    .map(email => email.trim())
+    .filter(email => email.length > 0).length
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -755,18 +770,26 @@ function SendTestEmailModal({
             </p>
           </div>
 
-          <Input
-            label="Test Email Address *"
-            type="email"
-            required
-            value={testEmail}
-            onChange={(e) => setTestEmail(e.target.value)}
-            placeholder="your.email@example.com"
-          />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Test Email Address(es) *
+            </label>
+            <input
+              type="text"
+              required
+              value={testEmails}
+              onChange={(e) => setTestEmails(e.target.value)}
+              placeholder="email1@example.com, email2@example.com"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Separate multiple emails with commas {emailCount > 0 && `(${emailCount} recipient${emailCount > 1 ? 's' : ''})`}
+            </p>
+          </div>
 
           <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
             <p className="text-sm text-blue-800">
-              The test email will be sent with placeholder data (First Name: John, Last Name: Doe)
+              Test emails will be sent with placeholder data (First Name: John, Last Name: Doe)
               and the subject will be prefixed with [TEST].
             </p>
           </div>
@@ -775,8 +798,8 @@ function SendTestEmailModal({
             <Button type="button" variant="outline" onClick={onClose}>
               Cancel
             </Button>
-            <Button type="submit" disabled={sending}>
-              {sending ? 'Sending...' : 'Send Test'}
+            <Button type="submit" disabled={sending || emailCount === 0}>
+              {sending ? 'Sending...' : `Send Test${emailCount > 1 ? ` (${emailCount})` : ''}`}
             </Button>
           </div>
         </form>
