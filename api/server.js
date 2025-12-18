@@ -18,6 +18,7 @@ const cron = require('node-cron')
 const sgMail = require('@sendgrid/mail')
 const sgClient = require('@sendgrid/client')
 const { createClient } = require('@supabase/supabase-js')
+const jsforce = require('jsforce')
 require('dotenv').config()
 
 const app = express()
@@ -846,6 +847,479 @@ app.post('/api/webhook/sequence', async (req, res) => {
     res.status(200).send('OK')
   } catch (error) {
     console.error('Sequence webhook error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ============ SALESFORCE INTEGRATION ============
+
+/**
+ * Initiate Salesforce OAuth flow
+ * Returns the authorization URL to redirect the user to
+ */
+app.get('/api/salesforce/authorize', async (req, res) => {
+  try {
+    const { clientId } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const sfClientId = process.env.SALESFORCE_CLIENT_ID
+    const sfClientSecret = process.env.SALESFORCE_CLIENT_SECRET
+    const callbackUrl = process.env.SALESFORCE_CALLBACK_URL || `${process.env.BASE_URL}/api/salesforce/callback`
+
+    if (!sfClientId || !sfClientSecret) {
+      return res.status(500).json({ error: 'Salesforce credentials not configured on server' })
+    }
+
+    const oauth2 = new jsforce.OAuth2({
+      clientId: sfClientId,
+      clientSecret: sfClientSecret,
+      redirectUri: callbackUrl,
+    })
+
+    // Include clientId in state so we know which client to update after OAuth
+    const state = Buffer.from(JSON.stringify({ clientId })).toString('base64')
+
+    const authUrl = oauth2.getAuthorizationUrl({
+      scope: 'api refresh_token',
+      state,
+    })
+
+    res.json({ authUrl })
+  } catch (error) {
+    console.error('Error generating Salesforce auth URL:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Salesforce OAuth callback
+ * Handles the redirect from Salesforce after user authorizes
+ */
+app.get('/api/salesforce/callback', async (req, res) => {
+  try {
+    const { code, state } = req.query
+
+    if (!code || !state) {
+      return res.status(400).send('Missing code or state parameter')
+    }
+
+    // Decode state to get clientId
+    const { clientId } = JSON.parse(Buffer.from(state, 'base64').toString())
+
+    const sfClientId = process.env.SALESFORCE_CLIENT_ID
+    const sfClientSecret = process.env.SALESFORCE_CLIENT_SECRET
+    const callbackUrl = process.env.SALESFORCE_CALLBACK_URL || `${process.env.BASE_URL}/api/salesforce/callback`
+
+    const oauth2 = new jsforce.OAuth2({
+      clientId: sfClientId,
+      clientSecret: sfClientSecret,
+      redirectUri: callbackUrl,
+    })
+
+    const conn = new jsforce.Connection({ oauth2 })
+
+    // Exchange code for tokens
+    await conn.authorize(code)
+
+    // Store tokens in database
+    const { error: updateError } = await supabase
+      .from('clients')
+      .update({
+        salesforce_instance_url: conn.instanceUrl,
+        salesforce_access_token: conn.accessToken,
+        salesforce_refresh_token: conn.refreshToken,
+        salesforce_connected_at: new Date().toISOString(),
+        salesforce_sync_status: 'idle',
+      })
+      .eq('id', clientId)
+
+    if (updateError) {
+      console.error('Error storing Salesforce tokens:', updateError)
+      return res.status(500).send('Failed to store Salesforce connection')
+    }
+
+    console.log(`✅ Salesforce connected for client ${clientId}`)
+
+    // Redirect back to the app settings page
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
+    res.redirect(`${frontendUrl}/settings?salesforce=connected`)
+  } catch (error) {
+    console.error('Salesforce OAuth callback error:', error)
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
+    res.redirect(`${frontendUrl}/settings?salesforce=error&message=${encodeURIComponent(error.message)}`)
+  }
+})
+
+/**
+ * Disconnect Salesforce from a client
+ */
+app.post('/api/salesforce/disconnect', async (req, res) => {
+  try {
+    const { clientId } = req.body
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const { error } = await supabase
+      .from('clients')
+      .update({
+        salesforce_instance_url: null,
+        salesforce_access_token: null,
+        salesforce_refresh_token: null,
+        salesforce_connected_at: null,
+        salesforce_sync_status: null,
+        salesforce_sync_message: null,
+        last_salesforce_sync: null,
+        salesforce_sync_count: null,
+      })
+      .eq('id', clientId)
+
+    if (error) throw error
+
+    console.log(`🔌 Salesforce disconnected for client ${clientId}`)
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error disconnecting Salesforce:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Get Salesforce connection status for a client
+ */
+app.get('/api/salesforce/status', async (req, res) => {
+  try {
+    const { clientId } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const { data: client, error } = await supabase
+      .from('clients')
+      .select('salesforce_instance_url, salesforce_connected_at, last_salesforce_sync, salesforce_sync_status, salesforce_sync_message, salesforce_sync_count')
+      .eq('id', clientId)
+      .single()
+
+    if (error) throw error
+
+    res.json({
+      connected: !!client.salesforce_instance_url,
+      instanceUrl: client.salesforce_instance_url,
+      connectedAt: client.salesforce_connected_at,
+      lastSync: client.last_salesforce_sync,
+      syncStatus: client.salesforce_sync_status,
+      syncMessage: client.salesforce_sync_message,
+      syncCount: client.salesforce_sync_count,
+    })
+  } catch (error) {
+    console.error('Error getting Salesforce status:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Helper function to get a Salesforce connection for a client
+ * Handles token refresh automatically
+ */
+async function getSalesforceConnection(clientId) {
+  const { data: client, error } = await supabase
+    .from('clients')
+    .select('salesforce_instance_url, salesforce_access_token, salesforce_refresh_token')
+    .eq('id', clientId)
+    .single()
+
+  if (error || !client.salesforce_access_token) {
+    throw new Error('Salesforce not connected for this client')
+  }
+
+  const sfClientId = process.env.SALESFORCE_CLIENT_ID
+  const sfClientSecret = process.env.SALESFORCE_CLIENT_SECRET
+
+  const oauth2 = new jsforce.OAuth2({
+    clientId: sfClientId,
+    clientSecret: sfClientSecret,
+  })
+
+  const conn = new jsforce.Connection({
+    oauth2,
+    instanceUrl: client.salesforce_instance_url,
+    accessToken: client.salesforce_access_token,
+    refreshToken: client.salesforce_refresh_token,
+  })
+
+  // Handle token refresh
+  conn.on('refresh', async (accessToken, res) => {
+    console.log('🔄 Salesforce token refreshed')
+    await supabase
+      .from('clients')
+      .update({ salesforce_access_token: accessToken })
+      .eq('id', clientId)
+  })
+
+  return conn
+}
+
+/**
+ * Get available Salesforce fields for Lead and Contact objects
+ * This helps users understand what fields they can sync
+ */
+app.get('/api/salesforce/fields', async (req, res) => {
+  try {
+    const { clientId, object } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const conn = await getSalesforceConnection(clientId)
+
+    // Get fields for both Lead and Contact, or a specific object
+    const objects = object ? [object] : ['Lead', 'Contact']
+    const result = {}
+
+    for (const objName of objects) {
+      const meta = await conn.sobject(objName).describe()
+      result[objName] = meta.fields
+        .filter(f => f.type !== 'address' && f.type !== 'location') // Filter out compound fields
+        .map(f => ({
+          name: f.name,
+          label: f.label,
+          type: f.type,
+          updateable: f.updateable,
+          custom: f.custom,
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label))
+    }
+
+    res.json(result)
+  } catch (error) {
+    console.error('Error fetching Salesforce fields:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Sync contacts from Salesforce
+ * Pulls Leads and Contacts modified since last sync
+ */
+app.post('/api/salesforce/sync', async (req, res) => {
+  try {
+    const { clientId, fullSync } = req.body
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    // Update sync status to 'syncing'
+    await supabase
+      .from('clients')
+      .update({ salesforce_sync_status: 'syncing', salesforce_sync_message: 'Starting sync...' })
+      .eq('id', clientId)
+
+    const conn = await getSalesforceConnection(clientId)
+
+    // Get last sync time
+    const { data: client } = await supabase
+      .from('clients')
+      .select('last_salesforce_sync')
+      .eq('id', clientId)
+      .single()
+
+    const lastSync = fullSync ? null : client?.last_salesforce_sync
+
+    let totalSynced = 0
+    const syncStartTime = new Date().toISOString()
+
+    // Sync Leads
+    const leadsQuery = lastSync
+      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_Code__c FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
+      : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_Code__c FROM Lead WHERE Email != null`
+
+    console.log(`📥 Querying Salesforce Leads...`)
+
+    try {
+      const leads = await conn.query(leadsQuery)
+      console.log(`Found ${leads.totalSize} leads`)
+
+      for (const lead of leads.records) {
+        if (!lead.Email) continue
+
+        const { error: upsertError } = await supabase
+          .from('contacts')
+          .upsert({
+            client_id: clientId,
+            email: lead.Email.toLowerCase().trim(),
+            first_name: lead.FirstName || null,
+            last_name: lead.LastName || null,
+            company: lead.Company || null,
+            salesforce_id: lead.Id,
+            record_type: 'lead',
+            industry: lead.Industry || null,
+            source_code: lead.Source_Code__c || null,
+            updated_at: new Date().toISOString(),
+          }, {
+            onConflict: 'salesforce_id',
+            ignoreDuplicates: false,
+          })
+
+        if (upsertError) {
+          // Try upserting by email instead if salesforce_id conflict fails
+          await supabase
+            .from('contacts')
+            .upsert({
+              client_id: clientId,
+              email: lead.Email.toLowerCase().trim(),
+              first_name: lead.FirstName || null,
+              last_name: lead.LastName || null,
+              company: lead.Company || null,
+              salesforce_id: lead.Id,
+              record_type: 'lead',
+              industry: lead.Industry || null,
+              source_code: lead.Source_Code__c || null,
+              updated_at: new Date().toISOString(),
+            }, {
+              onConflict: 'email,client_id',
+              ignoreDuplicates: false,
+            })
+        }
+
+        totalSynced++
+      }
+    } catch (leadError) {
+      console.error('Error syncing leads:', leadError.message)
+      // Continue with contacts even if leads fail
+    }
+
+    // Sync Contacts
+    const contactsQuery = lastSync
+      ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+      : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code__c FROM Contact WHERE Email != null`
+
+    console.log(`📥 Querying Salesforce Contacts...`)
+
+    try {
+      const contacts = await conn.query(contactsQuery)
+      console.log(`Found ${contacts.totalSize} contacts`)
+
+      for (const contact of contacts.records) {
+        if (!contact.Email) continue
+
+        const { error: upsertError } = await supabase
+          .from('contacts')
+          .upsert({
+            client_id: clientId,
+            email: contact.Email.toLowerCase().trim(),
+            first_name: contact.FirstName || null,
+            last_name: contact.LastName || null,
+            company: contact.Account?.Name || null,
+            salesforce_id: contact.Id,
+            record_type: 'contact',
+            industry: contact.Industry__c || null,
+            source_code: contact.Source_Code__c || null,
+            updated_at: new Date().toISOString(),
+          }, {
+            onConflict: 'salesforce_id',
+            ignoreDuplicates: false,
+          })
+
+        if (upsertError) {
+          // Try upserting by email instead
+          await supabase
+            .from('contacts')
+            .upsert({
+              client_id: clientId,
+              email: contact.Email.toLowerCase().trim(),
+              first_name: contact.FirstName || null,
+              last_name: contact.LastName || null,
+              company: contact.Account?.Name || null,
+              salesforce_id: contact.Id,
+              record_type: 'contact',
+              industry: contact.Industry__c || null,
+              source_code: contact.Source_Code__c || null,
+              updated_at: new Date().toISOString(),
+            }, {
+              onConflict: 'email,client_id',
+              ignoreDuplicates: false,
+            })
+        }
+
+        totalSynced++
+      }
+    } catch (contactError) {
+      console.error('Error syncing contacts:', contactError.message)
+    }
+
+    // Update sync status
+    await supabase
+      .from('clients')
+      .update({
+        salesforce_sync_status: 'success',
+        salesforce_sync_message: `Synced ${totalSynced} records`,
+        salesforce_sync_count: totalSynced,
+        last_salesforce_sync: syncStartTime,
+      })
+      .eq('id', clientId)
+
+    console.log(`✅ Salesforce sync complete: ${totalSynced} records synced`)
+
+    res.json({
+      success: true,
+      synced: totalSynced,
+      message: `Successfully synced ${totalSynced} records from Salesforce`,
+    })
+  } catch (error) {
+    console.error('Salesforce sync error:', error)
+
+    // Update status to error
+    await supabase
+      .from('clients')
+      .update({
+        salesforce_sync_status: 'error',
+        salesforce_sync_message: error.message,
+      })
+      .eq('id', req.body.clientId)
+
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Preview Salesforce data without syncing
+ * Useful for testing the connection and seeing what data is available
+ */
+app.get('/api/salesforce/preview', async (req, res) => {
+  try {
+    const { clientId, object, limit } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const conn = await getSalesforceConnection(clientId)
+    const recordLimit = parseInt(limit) || 10
+    const targetObject = object || 'Lead'
+
+    let query
+    if (targetObject === 'Lead') {
+      query = `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_Code__c, LastModifiedDate FROM Lead WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
+    } else {
+      query = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
+    }
+
+    const result = await conn.query(query)
+
+    res.json({
+      object: targetObject,
+      totalSize: result.totalSize,
+      records: result.records,
+    })
+  } catch (error) {
+    console.error('Error previewing Salesforce data:', error)
     res.status(500).json({ error: error.message })
   }
 })

@@ -5,17 +5,65 @@ import type { Client, VerifiedSender } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, Settings as SettingsIcon, X, Trash2 } from 'lucide-react'
+import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+
+interface SalesforceStatus {
+  connected: boolean
+  instanceUrl?: string
+  connectedAt?: string
+  lastSync?: string
+  syncStatus?: 'idle' | 'syncing' | 'success' | 'error'
+  syncMessage?: string
+  syncCount?: number
+}
+
+interface SalesforceField {
+  name: string
+  label: string
+  type: string
+  custom: boolean
+}
 
 export default function Settings() {
-  const { refreshClients } = useClient()
+  const { refreshClients, selectedClient } = useClient()
   const [clients, setClients] = useState<Client[]>([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
   const [loading, setLoading] = useState(true)
 
+  // Salesforce integration state
+  const [sfStatus, setSfStatus] = useState<SalesforceStatus | null>(null)
+  const [sfLoading, setSfLoading] = useState(false)
+  const [sfFields, setSfFields] = useState<{ Lead: SalesforceField[], Contact: SalesforceField[] } | null>(null)
+  const [showFields, setShowFields] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+
   useEffect(() => {
     fetchClients()
+  }, [])
+
+  // Fetch Salesforce status when selected client changes
+  useEffect(() => {
+    if (selectedClient) {
+      fetchSalesforceStatus()
+    }
+  }, [selectedClient])
+
+  // Check URL params for Salesforce OAuth callback
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const salesforceStatus = params.get('salesforce')
+    if (salesforceStatus === 'connected') {
+      fetchSalesforceStatus()
+      // Clean up URL
+      window.history.replaceState({}, '', '/settings')
+    } else if (salesforceStatus === 'error') {
+      const message = params.get('message')
+      alert(`Salesforce connection failed: ${message}`)
+      window.history.replaceState({}, '', '/settings')
+    }
   }, [])
 
   const fetchClients = async () => {
@@ -50,6 +98,98 @@ export default function Settings() {
     } catch (error) {
       console.error('Error deleting client:', error)
       alert('Failed to delete client')
+    }
+  }
+
+  // Salesforce functions
+  const fetchSalesforceStatus = async () => {
+    if (!selectedClient) return
+    setSfLoading(true)
+    try {
+      const response = await fetch(`${API_URL}/api/salesforce/status?clientId=${selectedClient.id}`)
+      const data = await response.json()
+      setSfStatus(data)
+    } catch (error) {
+      console.error('Error fetching Salesforce status:', error)
+      setSfStatus(null)
+    } finally {
+      setSfLoading(false)
+    }
+  }
+
+  const connectSalesforce = async () => {
+    if (!selectedClient) return
+    try {
+      const response = await fetch(`${API_URL}/api/salesforce/authorize?clientId=${selectedClient.id}`)
+      const data = await response.json()
+      if (data.authUrl) {
+        window.location.href = data.authUrl
+      } else {
+        alert('Failed to get authorization URL: ' + (data.error || 'Unknown error'))
+      }
+    } catch (error) {
+      console.error('Error connecting to Salesforce:', error)
+      alert('Failed to connect to Salesforce')
+    }
+  }
+
+  const disconnectSalesforce = async () => {
+    if (!selectedClient) return
+    if (!confirm('Are you sure you want to disconnect Salesforce? This will not delete any synced contacts.')) return
+
+    try {
+      const response = await fetch(`${API_URL}/api/salesforce/disconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: selectedClient.id }),
+      })
+      if (response.ok) {
+        setSfStatus({ connected: false })
+        setSfFields(null)
+      } else {
+        throw new Error('Failed to disconnect')
+      }
+    } catch (error) {
+      console.error('Error disconnecting Salesforce:', error)
+      alert('Failed to disconnect Salesforce')
+    }
+  }
+
+  const syncSalesforce = async (fullSync = false) => {
+    if (!selectedClient) return
+    setSyncing(true)
+    try {
+      const response = await fetch(`${API_URL}/api/salesforce/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: selectedClient.id, fullSync }),
+      })
+      const data = await response.json()
+      if (response.ok) {
+        alert(data.message)
+        fetchSalesforceStatus()
+      } else {
+        throw new Error(data.error || 'Sync failed')
+      }
+    } catch (error) {
+      console.error('Error syncing Salesforce:', error)
+      alert('Sync failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
+      fetchSalesforceStatus()
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const fetchSalesforceFields = async () => {
+    if (!selectedClient) return
+    try {
+      const response = await fetch(`${API_URL}/api/salesforce/fields?clientId=${selectedClient.id}`)
+      const data = await response.json()
+      setSfFields(data)
+      setShowFields(true)
+    } catch (error) {
+      console.error('Error fetching Salesforce fields:', error)
+      alert('Failed to fetch Salesforce fields')
     }
   }
 
@@ -164,6 +304,183 @@ export default function Settings() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Salesforce Integration Card */}
+      {selectedClient && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Cloud className="h-5 w-5" />
+              Salesforce Integration
+              <span className="text-sm font-normal text-gray-500">
+                ({selectedClient.name})
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {sfLoading ? (
+              <div className="flex items-center gap-2 text-gray-500">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading Salesforce status...
+              </div>
+            ) : sfStatus?.connected ? (
+              <div className="space-y-4">
+                {/* Connection Status */}
+                <div className="flex items-center gap-2 text-green-600">
+                  <CheckCircle className="h-5 w-5" />
+                  <span className="font-medium">Connected to Salesforce</span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 text-sm">
+                  <div>
+                    <span className="text-gray-500">Instance: </span>
+                    <a
+                      href={sfStatus.instanceUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      {sfStatus.instanceUrl?.replace('https://', '')}
+                      <ExternalLink className="h-3 w-3" />
+                    </a>
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Connected: </span>
+                    <span>{sfStatus.connectedAt ? new Date(sfStatus.connectedAt).toLocaleDateString() : 'Unknown'}</span>
+                  </div>
+                  {sfStatus.lastSync && (
+                    <div>
+                      <span className="text-gray-500">Last Sync: </span>
+                      <span>{new Date(sfStatus.lastSync).toLocaleString()}</span>
+                    </div>
+                  )}
+                  {sfStatus.syncCount !== undefined && sfStatus.syncCount !== null && (
+                    <div>
+                      <span className="text-gray-500">Last Sync Count: </span>
+                      <span>{sfStatus.syncCount} records</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sync Status */}
+                {sfStatus.syncStatus && sfStatus.syncStatus !== 'idle' && (
+                  <div className={`flex items-center gap-2 text-sm p-2 rounded ${
+                    sfStatus.syncStatus === 'syncing' ? 'bg-blue-50 text-blue-700' :
+                    sfStatus.syncStatus === 'success' ? 'bg-green-50 text-green-700' :
+                    'bg-red-50 text-red-700'
+                  }`}>
+                    {sfStatus.syncStatus === 'syncing' && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {sfStatus.syncStatus === 'success' && <CheckCircle className="h-4 w-4" />}
+                    {sfStatus.syncStatus === 'error' && <XCircle className="h-4 w-4" />}
+                    <span>{sfStatus.syncMessage}</span>
+                  </div>
+                )}
+
+                {/* Actions */}
+                <div className="flex flex-wrap gap-2 pt-2">
+                  <Button
+                    onClick={() => syncSalesforce(false)}
+                    disabled={syncing}
+                  >
+                    {syncing ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Sync Now
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => syncSalesforce(true)}
+                    disabled={syncing}
+                  >
+                    Full Sync
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={fetchSalesforceFields}
+                  >
+                    View Fields
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    onClick={disconnectSalesforce}
+                  >
+                    <CloudOff className="h-4 w-4 mr-2" />
+                    Disconnect
+                  </Button>
+                </div>
+
+                {/* Field Browser */}
+                {showFields && sfFields && (
+                  <div className="mt-4 border rounded-lg p-4 bg-gray-50">
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="font-medium">Salesforce Fields</h4>
+                      <button
+                        onClick={() => setShowFields(false)}
+                        className="text-gray-400 hover:text-gray-600"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <div className="grid md:grid-cols-2 gap-4">
+                      {['Lead', 'Contact'].map((objectName) => (
+                        <div key={objectName}>
+                          <h5 className="font-medium text-sm text-gray-700 mb-2">{objectName} Fields</h5>
+                          <div className="max-h-64 overflow-y-auto bg-white rounded border">
+                            <table className="w-full text-xs">
+                              <thead className="bg-gray-100 sticky top-0">
+                                <tr>
+                                  <th className="text-left p-2">Label</th>
+                                  <th className="text-left p-2">API Name</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(sfFields as Record<string, SalesforceField[]>)[objectName]?.map((field) => (
+                                  <tr key={field.name} className="border-t hover:bg-gray-50">
+                                    <td className="p-2">{field.label}</td>
+                                    <td className="p-2 font-mono text-gray-600">
+                                      {field.name}
+                                      {field.custom && <span className="ml-1 text-blue-500">*</span>}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                      * indicates custom fields. Use the API Name when configuring field mappings.
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-2 text-gray-500">
+                  <CloudOff className="h-5 w-5" />
+                  <span>Salesforce is not connected</span>
+                </div>
+                <p className="text-sm text-gray-600">
+                  Connect to Salesforce to sync contacts and leads automatically.
+                  You'll be redirected to Salesforce to authorize the connection.
+                </p>
+                <Button onClick={connectSalesforce}>
+                  <Cloud className="h-4 w-4 mr-2" />
+                  Connect Salesforce
+                </Button>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Add Client Modal */}
       {showAddModal && (
