@@ -233,20 +233,35 @@ app.post('/api/send-campaign', async (req, res) => {
       htmlContent = template?.html_content || ''
     }
 
-    // 4. Fetch contacts (filtered by tags if specified)
-    let query = supabase
-      .from('contacts')
-      .select('*')
-      .eq('unsubscribed', false) // Exclude unsubscribed contacts
+    // 4. Fetch ALL contacts (paginated to handle large lists)
+    let allContacts = []
+    let page = 0
+    const pageSize = 1000
 
-    if (campaign.client_id) {
-      query = query.eq('client_id', campaign.client_id)
+    while (true) {
+      let query = supabase
+        .from('contacts')
+        .select('*')
+        .eq('unsubscribed', false)
+        .eq('client_id', campaign.client_id)
+        .range(page * pageSize, (page + 1) * pageSize - 1)
+
+      const { data, error } = await query
+
+      if (error) throw error
+      if (!data || data.length === 0) break
+
+      allContacts = allContacts.concat(data)
+      page++
+
+      // Safety check - stop if we've fetched less than a full page
+      if (data.length < pageSize) break
     }
 
-    const { data: allContacts } = await query
+    console.log(`📧 Fetched ${allContacts.length} total contacts for campaign`)
 
     // Filter by tags if specified
-    let contacts = allContacts || []
+    let contacts = allContacts
     if (campaign.filter_tags && campaign.filter_tags.length > 0) {
       contacts = contacts.filter((contact) =>
         campaign.filter_tags.every((tag) => contact.tags?.includes(tag))

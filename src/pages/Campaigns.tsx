@@ -316,6 +316,7 @@ function CreateCampaignModal({
   const isEditing = !!campaign
   const [templates, setTemplates] = useState<Template[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
+  const [totalContactCount, setTotalContactCount] = useState(0)
   const [allTags, setAllTags] = useState<string[]>([])
   const [verifiedSenders, setVerifiedSenders] = useState<{email: string, name: string}[]>([])
   const [formData, setFormData] = useState({
@@ -375,17 +376,37 @@ function CreateCampaignModal({
   }
 
   const fetchContacts = async () => {
+    // Get total count of subscribed contacts
+    const { count } = await supabase
+      .from('contacts')
+      .select('*', { count: 'exact', head: true })
+      .eq('client_id', clientId)
+      .eq('unsubscribed', false)
+
+    setTotalContactCount(count || 0)
+
+    // Get unique tags from the tags table
+    const { data: tagsData } = await supabase
+      .from('tags')
+      .select('name')
+      .eq('client_id', clientId)
+      .order('name')
+
+    if (tagsData) {
+      setAllTags(tagsData.map(t => t.name))
+    }
+
+    // Only load contacts if we need them for tag filtering (limited set for UI)
     const { data } = await supabase
       .from('contacts')
-      .select('*')
+      .select('id, tags')
       .eq('client_id', clientId)
-      .eq('unsubscribed', false) // Only fetch subscribed contacts
+      .eq('unsubscribed', false)
+      .not('tags', 'is', null)
+      .limit(10000) // Load contacts with tags for filtering preview
+
     if (data) {
-      setContacts(data)
-      const tags = Array.from(
-        new Set(data.flatMap((c) => c.tags || []))
-      ).sort()
-      setAllTags(tags)
+      setContacts(data as Contact[])
     }
   }
 
@@ -424,7 +445,8 @@ function CreateCampaignModal({
   }
 
   const getRecipientCount = () => {
-    if (formData.filter_tags.length === 0) return contacts.length
+    if (formData.filter_tags.length === 0) return totalContactCount
+    // For tag filtering, count contacts that have all selected tags
     return contacts.filter((contact) =>
       formData.filter_tags.every((tag) => contact.tags?.includes(tag))
     ).length
