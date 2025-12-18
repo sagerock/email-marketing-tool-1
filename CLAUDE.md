@@ -55,19 +55,73 @@ cd api && npm start      # Start production server (port 3001)
   - `/api/ip-pools` - IP pool management
 
 ### Salesforce Integration
-- OAuth flow for connecting Salesforce to a client (per-client, not global)
-- Endpoints in `api/server.js`:
-  - `GET /api/salesforce/authorize` - Initiate OAuth flow
-  - `GET /api/salesforce/callback` - Handle OAuth redirect
-  - `GET /api/salesforce/status` - Get connection status
-  - `POST /api/salesforce/disconnect` - Remove connection
-  - `GET /api/salesforce/fields` - List all Lead/Contact fields (helps discover API names)
-  - `POST /api/salesforce/sync` - Sync contacts (incremental or full)
-  - `GET /api/salesforce/preview` - Preview data without syncing
-- Tokens stored in `clients` table: `salesforce_instance_url`, `salesforce_access_token`, `salesforce_refresh_token`
-- Contacts table has Salesforce fields: `salesforce_id`, `record_type`, `source_code`, `industry`
-- Sync uses `LastModifiedDate` for incremental updates
-- UI in Settings page shows connection status, sync button, and field browser
+Uses **OAuth 2.0 Client Credentials Flow** - no user interaction or callback URLs needed.
+
+**Endpoints in `api/server.js`:**
+- `POST /api/salesforce/connect` - Store credentials and test connection
+- `GET /api/salesforce/status` - Get connection status
+- `POST /api/salesforce/disconnect` - Remove connection
+- `GET /api/salesforce/fields` - List all Lead/Contact fields (helps discover API names)
+- `POST /api/salesforce/sync` - Sync contacts (incremental or full)
+- `GET /api/salesforce/preview` - Preview data without syncing
+
+**Credentials stored per-client in `clients` table:**
+- `salesforce_instance_url` - e.g., https://yourcompany.my.salesforce.com
+- `salesforce_client_id` - Consumer Key from Connected App
+- `salesforce_client_secret` - Consumer Secret from Connected App
+
+**Contacts table Salesforce fields:** `salesforce_id`, `record_type`, `source_code`, `industry`
+
+**How it works:** Each API call gets a fresh access token using the Client Credentials flow (no refresh tokens needed).
+
+## Setting Up Salesforce for a New Client
+
+### Step 1: Salesforce Admin Creates Connected App
+In Salesforce Setup:
+1. **Enable Client Credentials Flow globally:**
+   - Setup → OAuth and OpenID Connect Settings
+   - Enable "Allow OAuth 2.0 Client Credentials Flow"
+
+2. **Create Connected App:**
+   - Setup → App Manager → New Connected App
+   - Enable OAuth Settings
+   - Callback URL: `https://localhost` (not used but required)
+   - OAuth Scopes: Select "Manage user data via APIs (api)"
+   - **Check "Enable Client Credentials Flow"**
+   - Save
+
+3. **Configure the "Run As" User:**
+   - After saving, click "Manage" on the app
+   - Click "Edit Policies"
+   - Under "Client Credentials Flow", select a user in "Run As" field
+   - This user's permissions determine what data the app can access
+   - Save
+
+4. **Get Credentials:**
+   - Go back to the app's detail page
+   - Click "Manage Consumer Details"
+   - Copy the **Consumer Key** (Client ID) and **Consumer Secret**
+
+### Step 2: Connect in Email Marketing Tool
+1. Go to Settings page
+2. Select the client from dropdown
+3. Click "Connect Salesforce"
+4. Enter:
+   - Instance URL: `https://[company].my.salesforce.com`
+   - Client ID: Consumer Key from step 1
+   - Client Secret: Consumer Secret from step 1
+5. Click Connect
+
+### Step 3: Test and Sync
+1. Click "View Fields" to see available Salesforce fields
+2. Click "Sync Now" for incremental sync (only records changed since last sync)
+3. Click "Full Sync" to re-sync all records
+
+### Troubleshooting
+- **"invalid_client" error**: Client ID or Secret is wrong
+- **"unauthorized_client" error**: Client Credentials Flow not enabled on the Connected App
+- **"INVALID_SESSION_ID"**: The "Run As" user may not have API permissions
+- **Field not found in sync**: Check the field API name using "View Fields" button
 
 ### Automation Sequences
 - `automation_sequences` defines workflows with trigger conditions
@@ -121,12 +175,6 @@ SUPABASE_SERVICE_KEY=      # Service role key (elevated permissions)
 PORT=3001
 NODE_ENV=
 BASE_URL=                  # For unsubscribe links
-FRONTEND_URL=              # For OAuth redirects
-
-# Salesforce OAuth (from Connected App in Salesforce Setup → App Manager)
-SALESFORCE_CLIENT_ID=      # Consumer Key
-SALESFORCE_CLIENT_SECRET=  # Consumer Secret
-SALESFORCE_CALLBACK_URL=   # Must match Connected App callback URL exactly
 ```
 
-Note: SendGrid API keys are stored per-client in the `clients` database table, not in environment variables. Salesforce OAuth tokens are also stored per-client after connection.
+Note: SendGrid API keys and Salesforce credentials are stored per-client in the `clients` database table, not in environment variables.
