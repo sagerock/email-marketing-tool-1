@@ -167,7 +167,7 @@ app.post('/api/send-test-email', async (req, res) => {
       replyTo: campaign.reply_to || undefined,
       subject: `[TEST] ${campaign.subject}`,
       html: personalizedHtml,
-      ipPoolName: campaign.ip_pool || undefined,
+      ipPoolName: client.ip_pool || undefined,
       headers: {
         'List-Unsubscribe': `<${testUnsubscribeUrl}>`,
         'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
@@ -305,7 +305,7 @@ app.post('/api/send-campaign', async (req, res) => {
         customArgs: {
           campaign_id: campaignId,
         },
-        ipPoolName: campaign.ip_pool || undefined,
+        ipPoolName: client.ip_pool || undefined,
         // Add List-Unsubscribe header for one-click unsubscribe
         headers: {
           'List-Unsubscribe': `<${unsubscribeUrl}>`,

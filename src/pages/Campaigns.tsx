@@ -328,7 +328,6 @@ function CreateCampaignModal({
     reply_to: campaign?.reply_to || '',
     filter_tags: campaign?.filter_tags || ([] as string[]),
     scheduled_at: campaign?.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
-    ip_pool: campaign?.ip_pool || '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -362,7 +361,6 @@ function CreateCampaignModal({
         reply_to: campaign.reply_to || '',
         filter_tags: campaign.filter_tags || [],
         scheduled_at: campaign.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
-        ip_pool: campaign.ip_pool || '',
       })
     }
   }, [campaign])
@@ -463,7 +461,6 @@ function CreateCampaignModal({
         template_id: formData.template_id || null,
         reply_to: formData.reply_to || null,
         scheduled_at: formData.scheduled_at || null,
-        ip_pool: formData.ip_pool || null,
         recipient_count: recipientCount,
         status: formData.scheduled_at ? 'scheduled' : 'draft',
         client_id: clientId,
@@ -643,15 +640,6 @@ function CreateCampaignModal({
             value={formData.reply_to}
             onChange={(e) =>
               setFormData({ ...formData, reply_to: e.target.value })
-            }
-          />
-
-          <Input
-            label="IP Pool (optional)"
-            placeholder="SendGrid IP pool name"
-            value={formData.ip_pool}
-            onChange={(e) =>
-              setFormData({ ...formData, ip_pool: e.target.value })
             }
           />
 
