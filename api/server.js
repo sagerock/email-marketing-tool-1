@@ -1134,27 +1134,36 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
       // Process all pages of results
       let leadBatch = 1
+      const BATCH_SIZE = 100
+
       while (true) {
         console.log(`Processing lead batch ${leadBatch} (${leads.records.length} records)...`)
 
+        // Collect records for batch upsert
+        const batchRecords = []
         for (const lead of leads.records) {
           if (!lead.Email) continue
+          batchRecords.push({
+            client_id: clientId,
+            email: lead.Email.toLowerCase().trim(),
+            first_name: lead.FirstName || null,
+            last_name: lead.LastName || null,
+            company: lead.Company || null,
+            salesforce_id: lead.Id,
+            record_type: 'lead',
+            industry: lead.Industry || null,
+            source_code: lead.Source_code__c || null,
+            source_code_history: lead.Source_Code_History__c || null,
+            updated_at: new Date().toISOString(),
+          })
+        }
 
+        // Upsert in batches of BATCH_SIZE
+        for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
+          const chunk = batchRecords.slice(i, i + BATCH_SIZE)
           const { error: upsertError } = await supabase
             .from('contacts')
-            .upsert({
-              client_id: clientId,
-              email: lead.Email.toLowerCase().trim(),
-              first_name: lead.FirstName || null,
-              last_name: lead.LastName || null,
-              company: lead.Company || null,
-              salesforce_id: lead.Id,
-              record_type: 'lead',
-              industry: lead.Industry || null,
-              source_code: lead.Source_code__c || null,
-              source_code_history: lead.Source_Code_History__c || null,
-              updated_at: new Date().toISOString(),
-            }, {
+            .upsert(chunk, {
               onConflict: 'salesforce_id',
               ignoreDuplicates: false,
             })
@@ -1163,26 +1172,14 @@ app.post('/api/salesforce/sync', async (req, res) => {
             // Try upserting by email instead if salesforce_id conflict fails
             await supabase
               .from('contacts')
-              .upsert({
-                client_id: clientId,
-                email: lead.Email.toLowerCase().trim(),
-                first_name: lead.FirstName || null,
-                last_name: lead.LastName || null,
-                company: lead.Company || null,
-                salesforce_id: lead.Id,
-                record_type: 'lead',
-                industry: lead.Industry || null,
-                source_code: lead.Source_code__c || null,
-                source_code_history: lead.Source_Code_History__c || null,
-                updated_at: new Date().toISOString(),
-              }, {
+              .upsert(chunk, {
                 onConflict: 'email,client_id',
                 ignoreDuplicates: false,
               })
           }
-
-          totalSynced++
         }
+
+        totalSynced += batchRecords.length
 
         // Check if there are more records to fetch
         if (!leads.done && leads.nextRecordsUrl) {
@@ -1210,26 +1207,35 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
       // Process all pages of results
       let contactBatch = 1
+      const BATCH_SIZE = 100
+
       while (true) {
         console.log(`Processing contact batch ${contactBatch} (${contacts.records.length} records)...`)
 
+        // Collect records for batch upsert
+        const batchRecords = []
         for (const contact of contacts.records) {
           if (!contact.Email) continue
+          batchRecords.push({
+            client_id: clientId,
+            email: contact.Email.toLowerCase().trim(),
+            first_name: contact.FirstName || null,
+            last_name: contact.LastName || null,
+            salesforce_id: contact.Id,
+            record_type: 'contact',
+            industry: contact.Industry__c || null,
+            source_code: contact.Source_Code1__c || null,
+            source_code_history: contact.Source_Code_History__c || null,
+            updated_at: new Date().toISOString(),
+          })
+        }
 
+        // Upsert in batches of BATCH_SIZE
+        for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
+          const chunk = batchRecords.slice(i, i + BATCH_SIZE)
           const { error: upsertError } = await supabase
             .from('contacts')
-            .upsert({
-              client_id: clientId,
-              email: contact.Email.toLowerCase().trim(),
-              first_name: contact.FirstName || null,
-              last_name: contact.LastName || null,
-              salesforce_id: contact.Id,
-              record_type: 'contact',
-              industry: contact.Industry__c || null,
-              source_code: contact.Source_Code1__c || null,
-              source_code_history: contact.Source_Code_History__c || null,
-              updated_at: new Date().toISOString(),
-            }, {
+            .upsert(chunk, {
               onConflict: 'salesforce_id',
               ignoreDuplicates: false,
             })
@@ -1238,25 +1244,14 @@ app.post('/api/salesforce/sync', async (req, res) => {
             // Try upserting by email instead
             await supabase
               .from('contacts')
-              .upsert({
-                client_id: clientId,
-                email: contact.Email.toLowerCase().trim(),
-                first_name: contact.FirstName || null,
-                last_name: contact.LastName || null,
-                salesforce_id: contact.Id,
-                record_type: 'contact',
-                industry: contact.Industry__c || null,
-                source_code: contact.Source_Code1__c || null,
-                source_code_history: contact.Source_Code_History__c || null,
-                updated_at: new Date().toISOString(),
-              }, {
+              .upsert(chunk, {
                 onConflict: 'email,client_id',
                 ignoreDuplicates: false,
               })
           }
-
-          totalSynced++
         }
+
+        totalSynced += batchRecords.length
 
         // Check if there are more records to fetch
         if (!contacts.done && contacts.nextRecordsUrl) {
