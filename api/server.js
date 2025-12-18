@@ -1114,47 +1114,33 @@ app.post('/api/salesforce/sync', async (req, res) => {
       .eq('id', clientId)
       .single()
 
-    const lastSync = fullSync ? null : client?.last_salesforce_sync
+    // For incremental sync, use last sync time. For full sync, use 60 days ago.
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString()
+    const syncSince = fullSync ? sixtyDaysAgo : client?.last_salesforce_sync
 
     let totalSynced = 0
     const syncStartTime = new Date().toISOString()
 
     // Sync Leads
-    const leadsQuery = lastSync
-      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
+    const leadsQuery = syncSince
+      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null AND LastModifiedDate > ${syncSince}`
       : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Leads...`)
 
     try {
-      const leads = await conn.query(leadsQuery)
-      console.log(`Found ${leads.totalSize} leads`)
+      let leads = await conn.query(leadsQuery)
+      console.log(`Found ${leads.totalSize} total leads`)
 
-      for (const lead of leads.records) {
-        if (!lead.Email) continue
+      // Process all pages of results
+      let leadBatch = 1
+      while (true) {
+        console.log(`Processing lead batch ${leadBatch} (${leads.records.length} records)...`)
 
-        const { error: upsertError } = await supabase
-          .from('contacts')
-          .upsert({
-            client_id: clientId,
-            email: lead.Email.toLowerCase().trim(),
-            first_name: lead.FirstName || null,
-            last_name: lead.LastName || null,
-            company: lead.Company || null,
-            salesforce_id: lead.Id,
-            record_type: 'lead',
-            industry: lead.Industry || null,
-            source_code: lead.Source_code__c || null,
-            source_code_history: lead.Source_Code_History__c || null,
-            updated_at: new Date().toISOString(),
-          }, {
-            onConflict: 'salesforce_id',
-            ignoreDuplicates: false,
-          })
+        for (const lead of leads.records) {
+          if (!lead.Email) continue
 
-        if (upsertError) {
-          // Try upserting by email instead if salesforce_id conflict fails
-          await supabase
+          const { error: upsertError } = await supabase
             .from('contacts')
             .upsert({
               client_id: clientId,
@@ -1169,12 +1155,42 @@ app.post('/api/salesforce/sync', async (req, res) => {
               source_code_history: lead.Source_Code_History__c || null,
               updated_at: new Date().toISOString(),
             }, {
-              onConflict: 'email,client_id',
+              onConflict: 'salesforce_id',
               ignoreDuplicates: false,
             })
+
+          if (upsertError) {
+            // Try upserting by email instead if salesforce_id conflict fails
+            await supabase
+              .from('contacts')
+              .upsert({
+                client_id: clientId,
+                email: lead.Email.toLowerCase().trim(),
+                first_name: lead.FirstName || null,
+                last_name: lead.LastName || null,
+                company: lead.Company || null,
+                salesforce_id: lead.Id,
+                record_type: 'lead',
+                industry: lead.Industry || null,
+                source_code: lead.Source_code__c || null,
+                source_code_history: lead.Source_Code_History__c || null,
+                updated_at: new Date().toISOString(),
+              }, {
+                onConflict: 'email,client_id',
+                ignoreDuplicates: false,
+              })
+          }
+
+          totalSynced++
         }
 
-        totalSynced++
+        // Check if there are more records to fetch
+        if (!leads.done && leads.nextRecordsUrl) {
+          leads = await conn.queryMore(leads.nextRecordsUrl)
+          leadBatch++
+        } else {
+          break
+        }
       }
     } catch (leadError) {
       console.error('Error syncing leads:', leadError.message)
@@ -1182,40 +1198,25 @@ app.post('/api/salesforce/sync', async (req, res) => {
     }
 
     // Sync Contacts (no Account.Name - not available in this org)
-    const contactsQuery = lastSync
-      ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+    const contactsQuery = syncSince
+      ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
       : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Contacts...`)
 
     try {
-      const contacts = await conn.query(contactsQuery)
-      console.log(`Found ${contacts.totalSize} contacts`)
+      let contacts = await conn.query(contactsQuery)
+      console.log(`Found ${contacts.totalSize} total contacts`)
 
-      for (const contact of contacts.records) {
-        if (!contact.Email) continue
+      // Process all pages of results
+      let contactBatch = 1
+      while (true) {
+        console.log(`Processing contact batch ${contactBatch} (${contacts.records.length} records)...`)
 
-        const { error: upsertError } = await supabase
-          .from('contacts')
-          .upsert({
-            client_id: clientId,
-            email: contact.Email.toLowerCase().trim(),
-            first_name: contact.FirstName || null,
-            last_name: contact.LastName || null,
-            salesforce_id: contact.Id,
-            record_type: 'contact',
-            industry: contact.Industry__c || null,
-            source_code: contact.Source_Code1__c || null,
-            source_code_history: contact.Source_Code_History__c || null,
-            updated_at: new Date().toISOString(),
-          }, {
-            onConflict: 'salesforce_id',
-            ignoreDuplicates: false,
-          })
+        for (const contact of contacts.records) {
+          if (!contact.Email) continue
 
-        if (upsertError) {
-          // Try upserting by email instead
-          await supabase
+          const { error: upsertError } = await supabase
             .from('contacts')
             .upsert({
               client_id: clientId,
@@ -1229,12 +1230,41 @@ app.post('/api/salesforce/sync', async (req, res) => {
               source_code_history: contact.Source_Code_History__c || null,
               updated_at: new Date().toISOString(),
             }, {
-              onConflict: 'email,client_id',
+              onConflict: 'salesforce_id',
               ignoreDuplicates: false,
             })
+
+          if (upsertError) {
+            // Try upserting by email instead
+            await supabase
+              .from('contacts')
+              .upsert({
+                client_id: clientId,
+                email: contact.Email.toLowerCase().trim(),
+                first_name: contact.FirstName || null,
+                last_name: contact.LastName || null,
+                salesforce_id: contact.Id,
+                record_type: 'contact',
+                industry: contact.Industry__c || null,
+                source_code: contact.Source_Code1__c || null,
+                source_code_history: contact.Source_Code_History__c || null,
+                updated_at: new Date().toISOString(),
+              }, {
+                onConflict: 'email,client_id',
+                ignoreDuplicates: false,
+              })
+          }
+
+          totalSynced++
         }
 
-        totalSynced++
+        // Check if there are more records to fetch
+        if (!contacts.done && contacts.nextRecordsUrl) {
+          contacts = await conn.queryMore(contacts.nextRecordsUrl)
+          contactBatch++
+        } else {
+          break
+        }
       }
     } catch (contactError) {
       console.error('Error syncing contacts:', contactError.message)
