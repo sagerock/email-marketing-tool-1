@@ -39,6 +39,13 @@ export default function Settings() {
   const [sfFields, setSfFields] = useState<{ Lead: SalesforceField[], Contact: SalesforceField[] } | null>(null)
   const [showFields, setShowFields] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [showSfConnect, setShowSfConnect] = useState(false)
+  const [sfConnecting, setSfConnecting] = useState(false)
+  const [sfCredentials, setSfCredentials] = useState({
+    instanceUrl: '',
+    clientId: '',
+    clientSecret: '',
+  })
 
   useEffect(() => {
     fetchClients()
@@ -51,20 +58,6 @@ export default function Settings() {
     }
   }, [selectedClient])
 
-  // Check URL params for Salesforce OAuth callback
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
-    const salesforceStatus = params.get('salesforce')
-    if (salesforceStatus === 'connected') {
-      fetchSalesforceStatus()
-      // Clean up URL
-      window.history.replaceState({}, '', '/settings')
-    } else if (salesforceStatus === 'error') {
-      const message = params.get('message')
-      alert(`Salesforce connection failed: ${message}`)
-      window.history.replaceState({}, '', '/settings')
-    }
-  }, [])
 
   const fetchClients = async () => {
     setLoading(true)
@@ -119,17 +112,37 @@ export default function Settings() {
 
   const connectSalesforce = async () => {
     if (!selectedClient) return
+    if (!sfCredentials.instanceUrl || !sfCredentials.clientId || !sfCredentials.clientSecret) {
+      alert('Please fill in all fields')
+      return
+    }
+
+    setSfConnecting(true)
     try {
-      const response = await fetch(`${API_URL}/api/salesforce/authorize?clientId=${selectedClient.id}`)
+      const response = await fetch(`${API_URL}/api/salesforce/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clientId: selectedClient.id,
+          instanceUrl: sfCredentials.instanceUrl,
+          salesforceClientId: sfCredentials.clientId,
+          salesforceClientSecret: sfCredentials.clientSecret,
+        }),
+      })
       const data = await response.json()
-      if (data.authUrl) {
-        window.location.href = data.authUrl
+      if (response.ok) {
+        alert('Salesforce connected successfully!')
+        setShowSfConnect(false)
+        setSfCredentials({ instanceUrl: '', clientId: '', clientSecret: '' })
+        fetchSalesforceStatus()
       } else {
-        alert('Failed to get authorization URL: ' + (data.error || 'Unknown error'))
+        alert('Failed to connect: ' + (data.error || 'Unknown error'))
       }
     } catch (error) {
       console.error('Error connecting to Salesforce:', error)
       alert('Failed to connect to Salesforce')
+    } finally {
+      setSfConnecting(false)
     }
   }
 
@@ -470,12 +483,56 @@ export default function Settings() {
                 </div>
                 <p className="text-sm text-gray-600">
                   Connect to Salesforce to sync contacts and leads automatically.
-                  You'll be redirected to Salesforce to authorize the connection.
+                  You'll need your Salesforce instance URL and Connected App credentials.
                 </p>
-                <Button onClick={connectSalesforce}>
-                  <Cloud className="h-4 w-4 mr-2" />
-                  Connect Salesforce
-                </Button>
+
+                {!showSfConnect ? (
+                  <Button onClick={() => setShowSfConnect(true)}>
+                    <Cloud className="h-4 w-4 mr-2" />
+                    Connect Salesforce
+                  </Button>
+                ) : (
+                  <div className="space-y-3 p-4 border rounded-lg bg-gray-50">
+                    <h4 className="font-medium">Enter Salesforce Credentials</h4>
+                    <Input
+                      label="Salesforce Instance URL"
+                      placeholder="https://yourcompany.my.salesforce.com"
+                      value={sfCredentials.instanceUrl}
+                      onChange={(e) => setSfCredentials({ ...sfCredentials, instanceUrl: e.target.value })}
+                    />
+                    <Input
+                      label="Client ID (Consumer Key)"
+                      placeholder="3MVG9..."
+                      value={sfCredentials.clientId}
+                      onChange={(e) => setSfCredentials({ ...sfCredentials, clientId: e.target.value })}
+                    />
+                    <Input
+                      label="Client Secret (Consumer Secret)"
+                      type="password"
+                      placeholder="Your client secret"
+                      value={sfCredentials.clientSecret}
+                      onChange={(e) => setSfCredentials({ ...sfCredentials, clientSecret: e.target.value })}
+                    />
+                    <p className="text-xs text-gray-500">
+                      Get these from your Salesforce Connected App (Setup → App Manager → Your App → View)
+                    </p>
+                    <div className="flex gap-2">
+                      <Button onClick={connectSalesforce} disabled={sfConnecting}>
+                        {sfConnecting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                            Connecting...
+                          </>
+                        ) : (
+                          'Connect'
+                        )}
+                      </Button>
+                      <Button variant="outline" onClick={() => setShowSfConnect(false)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

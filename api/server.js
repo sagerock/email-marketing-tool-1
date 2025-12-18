@@ -852,104 +852,72 @@ app.post('/api/webhook/sequence', async (req, res) => {
 })
 
 // ============ SALESFORCE INTEGRATION ============
+// Uses OAuth 2.0 Client Credentials Flow (server-to-server, no user interaction)
 
 /**
- * Initiate Salesforce OAuth flow
- * Returns the authorization URL to redirect the user to
+ * Connect Salesforce using Client Credentials
+ * Stores credentials and tests the connection
  */
-app.get('/api/salesforce/authorize', async (req, res) => {
+app.post('/api/salesforce/connect', async (req, res) => {
   try {
-    const { clientId } = req.query
+    const { clientId, instanceUrl, salesforceClientId, salesforceClientSecret } = req.body
 
-    if (!clientId) {
-      return res.status(400).json({ error: 'clientId is required' })
+    if (!clientId || !instanceUrl || !salesforceClientId || !salesforceClientSecret) {
+      return res.status(400).json({ error: 'All fields are required: clientId, instanceUrl, salesforceClientId, salesforceClientSecret' })
     }
 
-    const sfClientId = process.env.SALESFORCE_CLIENT_ID
-    const sfClientSecret = process.env.SALESFORCE_CLIENT_SECRET
-    const callbackUrl = process.env.SALESFORCE_CALLBACK_URL || `${process.env.BASE_URL}/api/salesforce/callback`
-
-    if (!sfClientId || !sfClientSecret) {
-      return res.status(500).json({ error: 'Salesforce credentials not configured on server' })
+    // Normalize instance URL
+    let normalizedUrl = instanceUrl.trim()
+    if (!normalizedUrl.startsWith('https://')) {
+      normalizedUrl = 'https://' + normalizedUrl
+    }
+    if (normalizedUrl.endsWith('/')) {
+      normalizedUrl = normalizedUrl.slice(0, -1)
     }
 
-    const oauth2 = new jsforce.OAuth2({
-      clientId: sfClientId,
-      clientSecret: sfClientSecret,
-      redirectUri: callbackUrl,
+    // Test the connection by getting an access token
+    const tokenUrl = `${normalizedUrl}/services/oauth2/token`
+    const params = new URLSearchParams({
+      grant_type: 'client_credentials',
+      client_id: salesforceClientId,
+      client_secret: salesforceClientSecret,
     })
 
-    // Include clientId in state so we know which client to update after OAuth
-    const state = Buffer.from(JSON.stringify({ clientId })).toString('base64')
-
-    const authUrl = oauth2.getAuthorizationUrl({
-      scope: 'api refresh_token',
-      state,
+    const tokenResponse = await fetch(tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: params,
     })
 
-    res.json({ authUrl })
-  } catch (error) {
-    console.error('Error generating Salesforce auth URL:', error)
-    res.status(500).json({ error: error.message })
-  }
-})
+    const tokenData = await tokenResponse.json()
 
-/**
- * Salesforce OAuth callback
- * Handles the redirect from Salesforce after user authorizes
- */
-app.get('/api/salesforce/callback', async (req, res) => {
-  try {
-    const { code, state } = req.query
-
-    if (!code || !state) {
-      return res.status(400).send('Missing code or state parameter')
+    if (!tokenResponse.ok || !tokenData.access_token) {
+      console.error('Salesforce token error:', tokenData)
+      return res.status(400).json({ error: tokenData.error_description || tokenData.error || 'Failed to authenticate with Salesforce' })
     }
 
-    // Decode state to get clientId
-    const { clientId } = JSON.parse(Buffer.from(state, 'base64').toString())
-
-    const sfClientId = process.env.SALESFORCE_CLIENT_ID
-    const sfClientSecret = process.env.SALESFORCE_CLIENT_SECRET
-    const callbackUrl = process.env.SALESFORCE_CALLBACK_URL || `${process.env.BASE_URL}/api/salesforce/callback`
-
-    const oauth2 = new jsforce.OAuth2({
-      clientId: sfClientId,
-      clientSecret: sfClientSecret,
-      redirectUri: callbackUrl,
-    })
-
-    const conn = new jsforce.Connection({ oauth2 })
-
-    // Exchange code for tokens
-    await conn.authorize(code)
-
-    // Store tokens in database
+    // Connection successful - store credentials
     const { error: updateError } = await supabase
       .from('clients')
       .update({
-        salesforce_instance_url: conn.instanceUrl,
-        salesforce_access_token: conn.accessToken,
-        salesforce_refresh_token: conn.refreshToken,
+        salesforce_instance_url: normalizedUrl,
+        salesforce_client_id: salesforceClientId,
+        salesforce_client_secret: salesforceClientSecret,
         salesforce_connected_at: new Date().toISOString(),
         salesforce_sync_status: 'idle',
       })
       .eq('id', clientId)
 
     if (updateError) {
-      console.error('Error storing Salesforce tokens:', updateError)
-      return res.status(500).send('Failed to store Salesforce connection')
+      console.error('Error storing Salesforce credentials:', updateError)
+      return res.status(500).json({ error: 'Failed to save Salesforce connection' })
     }
 
     console.log(`✅ Salesforce connected for client ${clientId}`)
-
-    // Redirect back to the app settings page
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
-    res.redirect(`${frontendUrl}/settings?salesforce=connected`)
+    res.json({ success: true, message: 'Salesforce connected successfully' })
   } catch (error) {
-    console.error('Salesforce OAuth callback error:', error)
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173'
-    res.redirect(`${frontendUrl}/settings?salesforce=error&message=${encodeURIComponent(error.message)}`)
+    console.error('Salesforce connect error:', error)
+    res.status(500).json({ error: error.message })
   }
 })
 
@@ -968,6 +936,8 @@ app.post('/api/salesforce/disconnect', async (req, res) => {
       .from('clients')
       .update({
         salesforce_instance_url: null,
+        salesforce_client_id: null,
+        salesforce_client_secret: null,
         salesforce_access_token: null,
         salesforce_refresh_token: null,
         salesforce_connected_at: null,
@@ -1023,42 +993,56 @@ app.get('/api/salesforce/status', async (req, res) => {
 })
 
 /**
- * Helper function to get a Salesforce connection for a client
- * Handles token refresh automatically
+ * Helper function to get a Salesforce access token using Client Credentials flow
+ * Returns { accessToken, instanceUrl }
  */
-async function getSalesforceConnection(clientId) {
+async function getSalesforceAccessToken(clientId) {
   const { data: client, error } = await supabase
     .from('clients')
-    .select('salesforce_instance_url, salesforce_access_token, salesforce_refresh_token')
+    .select('salesforce_instance_url, salesforce_client_id, salesforce_client_secret')
     .eq('id', clientId)
     .single()
 
-  if (error || !client.salesforce_access_token) {
+  if (error || !client.salesforce_client_id || !client.salesforce_client_secret) {
     throw new Error('Salesforce not connected for this client')
   }
 
-  const sfClientId = process.env.SALESFORCE_CLIENT_ID
-  const sfClientSecret = process.env.SALESFORCE_CLIENT_SECRET
-
-  const oauth2 = new jsforce.OAuth2({
-    clientId: sfClientId,
-    clientSecret: sfClientSecret,
+  // Get fresh access token using Client Credentials flow
+  const tokenUrl = `${client.salesforce_instance_url}/services/oauth2/token`
+  const params = new URLSearchParams({
+    grant_type: 'client_credentials',
+    client_id: client.salesforce_client_id,
+    client_secret: client.salesforce_client_secret,
   })
+
+  const tokenResponse = await fetch(tokenUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params,
+  })
+
+  const tokenData = await tokenResponse.json()
+
+  if (!tokenResponse.ok || !tokenData.access_token) {
+    throw new Error(tokenData.error_description || tokenData.error || 'Failed to get Salesforce access token')
+  }
+
+  return {
+    accessToken: tokenData.access_token,
+    instanceUrl: client.salesforce_instance_url,
+  }
+}
+
+/**
+ * Helper function to get a Salesforce connection for a client
+ * Uses Client Credentials flow to get fresh token
+ */
+async function getSalesforceConnection(clientId) {
+  const { accessToken, instanceUrl } = await getSalesforceAccessToken(clientId)
 
   const conn = new jsforce.Connection({
-    oauth2,
-    instanceUrl: client.salesforce_instance_url,
-    accessToken: client.salesforce_access_token,
-    refreshToken: client.salesforce_refresh_token,
-  })
-
-  // Handle token refresh
-  conn.on('refresh', async (accessToken, res) => {
-    console.log('🔄 Salesforce token refreshed')
-    await supabase
-      .from('clients')
-      .update({ salesforce_access_token: accessToken })
-      .eq('id', clientId)
+    instanceUrl,
+    accessToken,
   })
 
   return conn
