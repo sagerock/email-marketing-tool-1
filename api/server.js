@@ -1647,4 +1647,170 @@ app.listen(PORT, () => {
   })
 
   console.log('✅ Sequence processor cron job started (runs every minute)')
+
+  // Daily Salesforce sync at 6 AM UTC
+  cron.schedule('0 6 * * *', async () => {
+    console.log('🔄 Starting daily Salesforce sync...')
+    try {
+      // Find all clients with Salesforce connected
+      const { data: clients, error } = await supabase
+        .from('clients')
+        .select('id, name, salesforce_client_id')
+        .not('salesforce_client_id', 'is', null)
+
+      if (error) {
+        console.error('❌ Error fetching clients for Salesforce sync:', error.message)
+        return
+      }
+
+      if (!clients || clients.length === 0) {
+        console.log('📭 No clients with Salesforce connected')
+        return
+      }
+
+      console.log(`📋 Found ${clients.length} client(s) with Salesforce connected`)
+
+      for (const client of clients) {
+        console.log(`🔄 Syncing Salesforce for client: ${client.name} (${client.id})`)
+        try {
+          // Update sync status
+          await supabase
+            .from('clients')
+            .update({ salesforce_sync_status: 'syncing', salesforce_sync_message: 'Daily auto-sync starting...' })
+            .eq('id', client.id)
+
+          const conn = await getSalesforceConnection(client.id)
+
+          // Get last sync time for incremental sync
+          const { data: clientData } = await supabase
+            .from('clients')
+            .select('last_salesforce_sync')
+            .eq('id', client.id)
+            .single()
+
+          const lastSync = clientData?.last_salesforce_sync
+          let totalSynced = 0
+          const syncStartTime = new Date().toISOString()
+          const BATCH_SIZE = 100
+
+          // Sync Leads
+          const leadsQuery = lastSync
+            ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
+            : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null`
+
+          let leads = await conn.query(leadsQuery)
+          console.log(`  📥 Found ${leads.totalSize} leads to sync`)
+
+          while (true) {
+            const batchRecords = []
+            for (const lead of leads.records) {
+              if (!lead.Email) continue
+              batchRecords.push({
+                client_id: client.id,
+                email: lead.Email.toLowerCase().trim(),
+                first_name: lead.FirstName || null,
+                last_name: lead.LastName || null,
+                company: lead.Company || null,
+                salesforce_id: lead.Id,
+                record_type: 'lead',
+                industry: lead.Industry || null,
+                source_code: lead.Source_code__c || null,
+                source_code_history: lead.Source_Code_History__c || null,
+                updated_at: new Date().toISOString(),
+              })
+            }
+
+            for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
+              const chunk = batchRecords.slice(i, i + BATCH_SIZE)
+              const { error: upsertError } = await supabase
+                .from('contacts')
+                .upsert(chunk, { onConflict: 'salesforce_id', ignoreDuplicates: false })
+              if (upsertError) {
+                await supabase.from('contacts').upsert(chunk, { onConflict: 'email,client_id', ignoreDuplicates: false })
+              }
+            }
+            totalSynced += batchRecords.length
+
+            if (!leads.done && leads.nextRecordsUrl) {
+              leads = await conn.queryMore(leads.nextRecordsUrl)
+            } else {
+              break
+            }
+          }
+
+          // Sync Contacts
+          const contactsQuery = lastSync
+            ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+            : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+
+          let contacts = await conn.query(contactsQuery)
+          console.log(`  📥 Found ${contacts.totalSize} contacts to sync`)
+
+          while (true) {
+            const batchRecords = []
+            for (const contact of contacts.records) {
+              if (!contact.Email) continue
+              batchRecords.push({
+                client_id: client.id,
+                email: contact.Email.toLowerCase().trim(),
+                first_name: contact.FirstName || null,
+                last_name: contact.LastName || null,
+                salesforce_id: contact.Id,
+                record_type: 'contact',
+                industry: contact.Industry__c || null,
+                source_code: contact.Source_Code1__c || null,
+                source_code_history: contact.Source_Code_History__c || null,
+                updated_at: new Date().toISOString(),
+              })
+            }
+
+            for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
+              const chunk = batchRecords.slice(i, i + BATCH_SIZE)
+              const { error: upsertError } = await supabase
+                .from('contacts')
+                .upsert(chunk, { onConflict: 'salesforce_id', ignoreDuplicates: false })
+              if (upsertError) {
+                await supabase.from('contacts').upsert(chunk, { onConflict: 'email,client_id', ignoreDuplicates: false })
+              }
+            }
+            totalSynced += batchRecords.length
+
+            if (!contacts.done && contacts.nextRecordsUrl) {
+              contacts = await conn.queryMore(contacts.nextRecordsUrl)
+            } else {
+              break
+            }
+          }
+
+          // Update sync status
+          await supabase
+            .from('clients')
+            .update({
+              salesforce_sync_status: 'success',
+              salesforce_sync_message: `Auto-synced ${totalSynced} records`,
+              salesforce_sync_count: totalSynced,
+              last_salesforce_sync: syncStartTime,
+            })
+            .eq('id', client.id)
+
+          console.log(`  ✅ Synced ${totalSynced} records for ${client.name}`)
+        } catch (clientError) {
+          console.error(`  ❌ Error syncing ${client.name}:`, clientError.message)
+          await supabase
+            .from('clients')
+            .update({
+              salesforce_sync_status: 'error',
+              salesforce_sync_message: clientError.message,
+            })
+            .eq('id', client.id)
+        }
+      }
+
+      console.log('✅ Daily Salesforce sync complete')
+    } catch (error) {
+      console.error('❌ Daily Salesforce sync error:', error.message)
+    }
+  })
+
+  console.log('✅ Daily Salesforce sync cron job started (runs at 6 AM UTC)')
 })
