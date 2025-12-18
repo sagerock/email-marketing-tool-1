@@ -54,6 +54,21 @@ cd api && npm start      # Start production server (port 3001)
   - `/api/webhook/sendgrid` - Process SendGrid events
   - `/api/ip-pools` - IP pool management
 
+### Salesforce Integration
+- OAuth flow for connecting Salesforce to a client (per-client, not global)
+- Endpoints in `api/server.js`:
+  - `GET /api/salesforce/authorize` - Initiate OAuth flow
+  - `GET /api/salesforce/callback` - Handle OAuth redirect
+  - `GET /api/salesforce/status` - Get connection status
+  - `POST /api/salesforce/disconnect` - Remove connection
+  - `GET /api/salesforce/fields` - List all Lead/Contact fields (helps discover API names)
+  - `POST /api/salesforce/sync` - Sync contacts (incremental or full)
+  - `GET /api/salesforce/preview` - Preview data without syncing
+- Tokens stored in `clients` table: `salesforce_instance_url`, `salesforce_access_token`, `salesforce_refresh_token`
+- Contacts table has Salesforce fields: `salesforce_id`, `record_type`, `source_code`, `industry`
+- Sync uses `LastModifiedDate` for incremental updates
+- UI in Settings page shows connection status, sync button, and field browser
+
 ### Automation Sequences
 - `automation_sequences` defines workflows with trigger conditions
 - `sequence_steps` contains individual emails with delays
@@ -66,8 +81,8 @@ cd api && npm start      # Start production server (port 3001)
 - `src/context/ClientContext.tsx` - Multi-client state management
 - `src/lib/supabase.ts` - Supabase client initialization
 - `src/lib/utils.ts` - Utilities: `cn()` (class merging), `formatDate()`, `formatDateTime()`
-- `api/server.js` - Express backend with SendGrid integration
-- `supabase/migrations/` - Database schema (run in order: 001-009)
+- `api/server.js` - Express backend with SendGrid and Salesforce integration
+- `supabase/migrations/` - Database schema (run in order: 001-010)
 
 ## Database Schema
 
@@ -106,6 +121,12 @@ SUPABASE_SERVICE_KEY=      # Service role key (elevated permissions)
 PORT=3001
 NODE_ENV=
 BASE_URL=                  # For unsubscribe links
+FRONTEND_URL=              # For OAuth redirects
+
+# Salesforce OAuth (from Connected App in Salesforce Setup → App Manager)
+SALESFORCE_CLIENT_ID=      # Consumer Key
+SALESFORCE_CLIENT_SECRET=  # Consumer Secret
+SALESFORCE_CALLBACK_URL=   # Must match Connected App callback URL exactly
 ```
 
-Note: SendGrid API keys are stored per-client in the `clients` database table, not in environment variables.
+Note: SendGrid API keys are stored per-client in the `clients` database table, not in environment variables. Salesforce OAuth tokens are also stored per-client after connection.
