@@ -644,14 +644,23 @@ function CreateCampaignModal({
             </p>
           </div>
 
-          <Input
-            label="Reply-To Email"
-            type="email"
-            value={formData.reply_to}
-            onChange={(e) =>
-              setFormData({ ...formData, reply_to: e.target.value })
-            }
-          />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Reply-To Email (optional)
+            </label>
+            <input
+              type="email"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="replies@example.com"
+              value={formData.reply_to}
+              onChange={(e) =>
+                setFormData({ ...formData, reply_to: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              If left blank, replies will go to the sender email above.
+            </p>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
