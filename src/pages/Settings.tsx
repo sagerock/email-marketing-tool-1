@@ -3,6 +3,7 @@ import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
 import type { Client, VerifiedSender } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
+// Settings page - includes client management, Salesforce integration, and UTM tracking
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2 } from 'lucide-react'
