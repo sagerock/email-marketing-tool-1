@@ -152,8 +152,19 @@ app.post('/api/send-test-email', async (req, res) => {
     const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
     const testUnsubscribeUrl = `${baseUrl}/unsubscribe?token=TEST_TOKEN`
 
+    // Helper function to append UTM params to URLs
+    const appendUtmParams = (html, params) => {
+      if (!params) return html
+      return html.replace(/href="(https?:\/\/[^"]+)"/gi, (match, url) => {
+        if (url.includes('unsubscribe')) return match
+        const separator = url.includes('?') ? '&' : '?'
+        return `href="${url}${separator}${params}"`
+      })
+    }
+
     // Send test email to each recipient
     const mailingAddress = client.mailing_address || 'No mailing address configured'
+    const utmParams = campaign.utm_params || ''
     let sentCount = 0
 
     for (const email of emails) {
@@ -164,6 +175,9 @@ app.post('/api/send-test-email', async (req, res) => {
         .replace(/{{last_name}}/gi, 'Doe')
         .replace(/{{unsubscribe_url}}/gi, testUnsubscribeUrl)
         .replace(/{{mailing_address}}/gi, mailingAddress)
+
+      // Append UTM params to all links
+      personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
 
       const msg = {
         to: email,
@@ -294,6 +308,19 @@ app.post('/api/send-campaign', async (req, res) => {
     // 6. Send emails
     const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
     const mailingAddress = client.mailing_address || 'No mailing address configured'
+    const utmParams = campaign.utm_params || ''
+
+    // Helper function to append UTM params to URLs
+    const appendUtmParams = (html, params) => {
+      if (!params) return html
+      // Match href attributes with http/https URLs (not mailto:, tel:, #, etc.)
+      return html.replace(/href="(https?:\/\/[^"]+)"/gi, (match, url) => {
+        // Don't add UTM to unsubscribe URLs (they already have params)
+        if (url.includes('unsubscribe')) return match
+        const separator = url.includes('?') ? '&' : '?'
+        return `href="${url}${separator}${params}"`
+      })
+    }
 
     const emailPromises = contacts.map((contact) => {
       // Generate unsubscribe URL
@@ -306,6 +333,9 @@ app.post('/api/send-campaign', async (req, res) => {
         .replace(/{{last_name}}/gi, contact.last_name || '')
         .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
         .replace(/{{mailing_address}}/gi, mailingAddress)
+
+      // Append UTM params to all links
+      personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
 
       const msg = {
         to: contact.email,

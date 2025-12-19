@@ -579,6 +579,7 @@ function AddClientModal({
     sendgrid_api_key: '',
     ip_pools: '',
     mailing_address: '',
+    default_utm_params: '',
   })
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>([])
   const [newSender, setNewSender] = useState({ email: '', name: '' })
@@ -599,6 +600,7 @@ function AddClientModal({
         sendgrid_api_key: formData.sendgrid_api_key,
         ip_pools: ip_pools.length > 0 ? ip_pools : null,
         mailing_address: formData.mailing_address || null,
+        default_utm_params: formData.default_utm_params || null,
         verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
       })
 
@@ -665,6 +667,24 @@ function AddClientModal({
             />
             <p className="mt-1 text-xs text-gray-500">
               Required by CAN-SPAM law. This will be included in all emails via {'{{mailing_address}}'} merge tag.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Default UTM Parameters (optional)
+            </label>
+            <input
+              type="text"
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              placeholder="utm_source=newsletter&utm_medium=email"
+              value={formData.default_utm_params}
+              onChange={(e) =>
+                setFormData({ ...formData, default_utm_params: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              These UTM parameters will be automatically appended to all links in your emails. Can be customized per campaign.
             </p>
           </div>
 
@@ -764,6 +784,7 @@ function EditClientModal({
     sendgrid_api_key: client.sendgrid_api_key,
     ip_pools: client.ip_pools?.join(', ') || '',
     mailing_address: client.mailing_address || '',
+    default_utm_params: client.default_utm_params || '',
   })
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>(
     client.verified_senders || []
@@ -788,6 +809,7 @@ function EditClientModal({
           sendgrid_api_key: formData.sendgrid_api_key,
           ip_pools: ip_pools.length > 0 ? ip_pools : null,
           mailing_address: formData.mailing_address || null,
+          default_utm_params: formData.default_utm_params || null,
           verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
         })
         .eq('id', client.id)
@@ -855,6 +877,24 @@ function EditClientModal({
             />
             <p className="mt-1 text-xs text-gray-500">
               Required by CAN-SPAM law. This will be included in all emails via {'{{mailing_address}}'} merge tag.
+            </p>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Default UTM Parameters (optional)
+            </label>
+            <input
+              type="text"
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              placeholder="utm_source=newsletter&utm_medium=email"
+              value={formData.default_utm_params}
+              onChange={(e) =>
+                setFormData({ ...formData, default_utm_params: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              These UTM parameters will be automatically appended to all links in your emails. Can be customized per campaign.
             </p>
           </div>
 

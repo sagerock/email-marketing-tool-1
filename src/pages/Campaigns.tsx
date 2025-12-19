@@ -319,6 +319,7 @@ function CreateCampaignModal({
   const [totalContactCount, setTotalContactCount] = useState(0)
   const [allTags, setAllTags] = useState<string[]>([])
   const [verifiedSenders, setVerifiedSenders] = useState<{email: string, name: string}[]>([])
+  const [defaultUtmParams, setDefaultUtmParams] = useState('')
   const [formData, setFormData] = useState({
     name: campaign?.name || '',
     template_id: campaign?.template_id || '',
@@ -328,6 +329,7 @@ function CreateCampaignModal({
     reply_to: campaign?.reply_to || '',
     filter_tags: campaign?.filter_tags || ([] as string[]),
     scheduled_at: campaign?.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
+    utm_params: campaign?.utm_params || '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -340,12 +342,19 @@ function CreateCampaignModal({
   const fetchVerifiedSenders = async () => {
     const { data } = await supabase
       .from('clients')
-      .select('verified_senders')
+      .select('verified_senders, default_utm_params')
       .eq('id', clientId)
       .single()
 
     if (data?.verified_senders) {
       setVerifiedSenders(data.verified_senders)
+    }
+    if (data?.default_utm_params) {
+      setDefaultUtmParams(data.default_utm_params)
+      // Pre-populate utm_params for new campaigns
+      if (!campaign) {
+        setFormData(prev => ({ ...prev, utm_params: data.default_utm_params }))
+      }
     }
   }
 
@@ -361,6 +370,7 @@ function CreateCampaignModal({
         reply_to: campaign.reply_to || '',
         filter_tags: campaign.filter_tags || [],
         scheduled_at: campaign.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
+        utm_params: campaign.utm_params || '',
       })
     }
   }, [campaign])
@@ -642,6 +652,27 @@ function CreateCampaignModal({
               setFormData({ ...formData, reply_to: e.target.value })
             }
           />
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              UTM Parameters (optional)
+            </label>
+            <input
+              type="text"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="utm_source=newsletter&utm_medium=email"
+              value={formData.utm_params}
+              onChange={(e) =>
+                setFormData({ ...formData, utm_params: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              These parameters will be appended to all links in the email.
+              {defaultUtmParams && !campaign && (
+                <span className="text-blue-600"> Pre-filled from client settings.</span>
+              )}
+            </p>
+          </div>
 
           {allTags.length > 0 && (
             <div>
