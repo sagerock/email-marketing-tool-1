@@ -40,6 +40,7 @@ export interface Campaign {
   recipient_count: number
   filter_tags?: string[]
   ip_pool?: string
+  utm_params?: string
   created_at: string
   updated_at: string
   client_id?: string
@@ -65,10 +66,21 @@ export interface Client {
   name: string
   sendgrid_api_key: string
   ip_pools?: string[]
+  ip_pool?: string
   mailing_address?: string
+  default_utm_params?: string
   verified_senders?: VerifiedSender[]
   created_at: string
   updated_at: string
+  // Salesforce integration fields
+  salesforce_instance_url?: string
+  salesforce_client_id?: string
+  salesforce_client_secret?: string
+  salesforce_connected_at?: string
+  last_salesforce_sync?: string
+  salesforce_sync_status?: string
+  salesforce_sync_message?: string
+  salesforce_sync_count?: number
 }
 
 export interface Tag {
