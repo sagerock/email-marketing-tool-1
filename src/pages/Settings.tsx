@@ -273,35 +273,6 @@ export default function Settings() {
         </CardContent>
       </Card>
 
-      {/* Information Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle>SendGrid Setup</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="prose prose-sm text-gray-600">
-            <p>
-              To use this email marketing tool, you'll need a SendGrid account and API
-              key:
-            </p>
-            <ol>
-              <li>Create a SendGrid account at sendgrid.com</li>
-              <li>Generate an API key with Full Access permissions</li>
-              <li>Add your client configuration above with the API key</li>
-              <li>
-                (Optional) Configure dedicated IP addresses and create IP pools in
-                SendGrid
-              </li>
-            </ol>
-            <p className="mt-4">
-              <strong>Webhook Setup:</strong> For analytics to work, configure SendGrid
-              Event Webhook to point to your server endpoint (e.g.,
-              /api/webhook/sendgrid)
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
       {/* Salesforce Integration Card */}
       {selectedClient && (
         <Card>
