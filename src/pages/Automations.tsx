@@ -522,7 +522,7 @@ function CreateSequenceModal({
               />
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  First Email Send Time
+                  Preferred Send Time (optional)
                 </label>
                 <div className="flex items-center gap-3">
                   <select
@@ -536,8 +536,8 @@ function CreateSequenceModal({
                       }
                     }}
                   >
-                    <option value="immediate">Send immediately when enrolled</option>
-                    <option value="scheduled">Send at specific time</option>
+                    <option value="immediate">Any time (based on step delays)</option>
+                    <option value="scheduled">At specific time of day</option>
                   </select>
                   {formData.start_time && (
                     <input
@@ -550,8 +550,8 @@ function CreateSequenceModal({
                 </div>
                 <p className="mt-1 text-xs text-gray-500">
                   {formData.start_time
-                    ? `First email will be scheduled for ${formData.start_time} (contact's next occurrence of this time)`
-                    : 'First email sends right away when a contact is enrolled'}
+                    ? `Emails will be sent at ${formData.start_time} (after any step delays)`
+                    : 'Emails send based on step delay settings only'}
                 </p>
               </div>
 
@@ -610,28 +610,28 @@ function CreateSequenceModal({
                         <span className="text-blue-600 font-medium text-sm">{index + 1}</span>
                       </div>
                       <div className="flex-1 space-y-3">
-                        {index > 0 && (
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm text-gray-600">Wait</span>
-                            <input
-                              type="number"
-                              min="0"
-                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                              value={stepData.delay_days || 0}
-                              onChange={(e) => updateStep(index, 'delay_days', parseInt(e.target.value) || 0)}
-                            />
-                            <span className="text-sm text-gray-600">days</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="23"
-                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                              value={stepData.delay_hours || 0}
-                              onChange={(e) => updateStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
-                            />
-                            <span className="text-sm text-gray-600">hours after previous step</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm text-gray-600">Wait</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                            value={stepData.delay_days || 0}
+                            onChange={(e) => updateStep(index, 'delay_days', parseInt(e.target.value) || 0)}
+                          />
+                          <span className="text-sm text-gray-600">days</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="23"
+                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                            value={stepData.delay_hours || 0}
+                            onChange={(e) => updateStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
+                          />
+                          <span className="text-sm text-gray-600">
+                            {index === 0 ? 'after enrollment' : 'after previous step'}
+                          </span>
+                        </div>
                         <Input
                           label="Subject *"
                           required
@@ -931,29 +931,29 @@ function EditSequenceModal({
                         <span className="text-blue-600 font-medium text-sm">{step.step_order}</span>
                       </div>
                       <div className="flex-1 space-y-3">
-                        {index > 0 && (
-                          <div className="flex items-center gap-2 pb-2 border-b">
-                            <Clock className="h-4 w-4 text-gray-400" />
-                            <span className="text-sm text-gray-600">Wait</span>
-                            <input
-                              type="number"
-                              min="0"
-                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                              value={step.delay_days}
-                              onChange={(e) => updateStep(step.id, 'delay_days', parseInt(e.target.value) || 0)}
-                            />
-                            <span className="text-sm text-gray-600">days</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="23"
-                              className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                              value={step.delay_hours}
-                              onChange={(e) => updateStep(step.id, 'delay_hours', parseInt(e.target.value) || 0)}
-                            />
-                            <span className="text-sm text-gray-600">hours</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2 pb-2 border-b">
+                          <Clock className="h-4 w-4 text-gray-400" />
+                          <span className="text-sm text-gray-600">Wait</span>
+                          <input
+                            type="number"
+                            min="0"
+                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                            value={step.delay_days}
+                            onChange={(e) => updateStep(step.id, 'delay_days', parseInt(e.target.value) || 0)}
+                          />
+                          <span className="text-sm text-gray-600">days</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="23"
+                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                            value={step.delay_hours}
+                            onChange={(e) => updateStep(step.id, 'delay_hours', parseInt(e.target.value) || 0)}
+                          />
+                          <span className="text-sm text-gray-600">
+                            {index === 0 ? 'hours after enrollment' : 'hours after previous'}
+                          </span>
+                        </div>
                         <Input
                           label="Subject"
                           value={step.subject}
@@ -1042,7 +1042,7 @@ function EditSequenceModal({
               />
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  First Email Send Time
+                  Preferred Send Time (optional)
                 </label>
                 <div className="flex items-center gap-3">
                   <select
@@ -1056,8 +1056,8 @@ function EditSequenceModal({
                       }
                     }}
                   >
-                    <option value="immediate">Send immediately when enrolled</option>
-                    <option value="scheduled">Send at specific time</option>
+                    <option value="immediate">Any time (based on step delays)</option>
+                    <option value="scheduled">At specific time of day</option>
                   </select>
                   {formData.start_time && (
                     <input
@@ -1070,8 +1070,8 @@ function EditSequenceModal({
                 </div>
                 <p className="mt-1 text-xs text-gray-500">
                   {formData.start_time
-                    ? `First email scheduled for ${formData.start_time}`
-                    : 'First email sends immediately when enrolled'}
+                    ? `Emails will be sent at ${formData.start_time} (after any step delays)`
+                    : 'Emails send based on step delay settings only'}
                 </p>
               </div>
 
@@ -1224,11 +1224,13 @@ function ViewSequenceModal({
                       </div>
                       <div className="flex-1">
                         <p className="font-medium text-sm">{step.subject}</p>
-                        {index > 0 && (
-                          <p className="text-xs text-gray-500">
-                            After {step.delay_days}d {step.delay_hours}h
-                          </p>
-                        )}
+                        <p className="text-xs text-gray-500">
+                          {step.delay_days === 0 && step.delay_hours === 0
+                            ? index === 0 ? 'Sends immediately' : 'Sends right after previous'
+                            : index === 0
+                              ? `${step.delay_days}d ${step.delay_hours}h after enrollment`
+                              : `${step.delay_days}d ${step.delay_hours}h after previous`}
+                        </p>
                       </div>
                       <div className="text-xs text-gray-500">
                         {step.sent_count} sent
@@ -1412,7 +1414,26 @@ function EnrollContactsModal({
         .eq('step_order', 1)
         .single()
 
+      // Calculate scheduled time for first email
       const now = new Date()
+      let scheduledTime = new Date(now)
+
+      if (firstStep) {
+        // Add delay from first step
+        scheduledTime.setDate(scheduledTime.getDate() + (firstStep.delay_days || 0))
+        scheduledTime.setHours(scheduledTime.getHours() + (firstStep.delay_hours || 0))
+      }
+
+      // If sequence has a preferred start_time, adjust to that time
+      if (sequence.start_time) {
+        const [hours, minutes] = sequence.start_time.split(':').map(Number)
+        scheduledTime.setHours(hours, minutes, 0, 0)
+
+        // If the scheduled time is in the past, move to next day
+        if (scheduledTime <= now) {
+          scheduledTime.setDate(scheduledTime.getDate() + 1)
+        }
+      }
 
       // Create enrollments
       const enrollments = selectedContacts.map(contactId => ({
@@ -1420,7 +1441,7 @@ function EnrollContactsModal({
         contact_id: contactId,
         status: 'active',
         current_step: 0,
-        next_email_scheduled_at: now.toISOString(),
+        next_email_scheduled_at: scheduledTime.toISOString(),
       }))
 
       const { error: enrollError } = await supabase
@@ -1448,7 +1469,7 @@ function EnrollContactsModal({
             enrollment_id: enrollment.id,
             step_id: firstStep.id,
             contact_id: enrollment.contact_id,
-            scheduled_for: now.toISOString(),
+            scheduled_for: scheduledTime.toISOString(),
             status: 'pending',
           }))
 
