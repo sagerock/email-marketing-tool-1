@@ -395,9 +395,19 @@ function CreateSequenceModal({
   }
 
   const updateStep = (index: number, field: string, value: any) => {
-    const updated = [...sequenceSteps]
-    updated[index] = { ...updated[index], [field]: value }
-    setSequenceSteps(updated)
+    setSequenceSteps(prev => {
+      const updated = [...prev]
+      updated[index] = { ...updated[index], [field]: value }
+      return updated
+    })
+  }
+
+  const updateStepFields = (index: number, updates: Record<string, any>) => {
+    setSequenceSteps(prev => {
+      const updated = [...prev]
+      updated[index] = { ...updated[index], ...updates }
+      return updated
+    })
   }
 
   const handleSubmit = async () => {
@@ -648,14 +658,13 @@ function CreateSequenceModal({
                             value={stepData.template_id || ''}
                             onChange={(e) => {
                               const templateId = e.target.value || null
-                              updateStep(index, 'template_id', templateId)
-                              // Auto-fill subject from template
-                              if (templateId) {
-                                const template = templates.find(t => t.id === templateId)
-                                if (template?.subject) {
-                                  updateStep(index, 'subject', template.subject)
-                                }
+                              const template = templateId ? templates.find(t => t.id === templateId) : null
+                              // Update both template_id and subject in one call to avoid race conditions
+                              const updates: Record<string, any> = { template_id: templateId }
+                              if (template?.subject) {
+                                updates.subject = template.subject
                               }
+                              updateStepFields(index, updates)
                             }}
                           >
                             <option value="">Select a template...</option>
@@ -812,8 +821,25 @@ function EditSequenceModal({
 
       if (error) throw error
 
-      setSteps(steps.map(s =>
+      setSteps(prev => prev.map(s =>
         s.id === stepId ? { ...s, [field]: value } : s
+      ))
+    } catch (error) {
+      console.error('Error updating step:', error)
+    }
+  }
+
+  const updateStepMultiple = async (stepId: string, updates: Record<string, any>) => {
+    try {
+      const { error } = await supabase
+        .from('sequence_steps')
+        .update(updates)
+        .eq('id', stepId)
+
+      if (error) throw error
+
+      setSteps(prev => prev.map(s =>
+        s.id === stepId ? { ...s, ...updates } : s
       ))
     } catch (error) {
       console.error('Error updating step:', error)
@@ -979,14 +1005,13 @@ function EditSequenceModal({
                             value={step.template_id || ''}
                             onChange={(e) => {
                               const templateId = e.target.value || null
-                              updateStep(step.id, 'template_id', templateId)
-                              // Auto-fill subject from template
-                              if (templateId) {
-                                const template = templates.find(t => t.id === templateId)
-                                if (template?.subject) {
-                                  updateStep(step.id, 'subject', template.subject)
-                                }
+                              const template = templateId ? templates.find(t => t.id === templateId) : null
+                              // Update both template_id and subject in one call to avoid race conditions
+                              const updates: Record<string, any> = { template_id: templateId }
+                              if (template?.subject) {
+                                updates.subject = template.subject
                               }
+                              updateStepMultiple(step.id, updates)
                             }}
                           >
                             <option value="">Select a template...</option>
