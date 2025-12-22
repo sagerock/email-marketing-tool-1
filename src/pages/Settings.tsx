@@ -29,10 +29,8 @@ interface SalesforceField {
 
 export default function Settings() {
   const { refreshClients, selectedClient } = useClient()
-  const [clients, setClients] = useState<Client[]>([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
-  const [loading, setLoading] = useState(true)
 
   // Salesforce integration state
   const [sfStatus, setSfStatus] = useState<SalesforceStatus | null>(null)
@@ -48,34 +46,12 @@ export default function Settings() {
     clientSecret: '',
   })
 
-  useEffect(() => {
-    fetchClients()
-  }, [])
-
   // Fetch Salesforce status when selected client changes
   useEffect(() => {
     if (selectedClient) {
       fetchSalesforceStatus()
     }
   }, [selectedClient])
-
-
-  const fetchClients = async () => {
-    setLoading(true)
-    try {
-      const { data, error } = await supabase
-        .from('clients')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-      setClients(data || [])
-    } catch (error) {
-      console.error('Error fetching clients:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
 
   const handleDelete = async (id: string) => {
     if (
@@ -88,7 +64,7 @@ export default function Settings() {
     try {
       const { error } = await supabase.from('clients').delete().eq('id', id)
       if (error) throw error
-      fetchClients()
+      refreshClients()
     } catch (error) {
       console.error('Error deleting client:', error)
       alert('Failed to delete client')
@@ -214,7 +190,7 @@ export default function Settings() {
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Manage clients and SendGrid configurations
+            {selectedClient ? `Configuration for ${selectedClient.name}` : 'Select a client to view settings'}
           </p>
         </div>
         <Button onClick={() => setShowAddModal(true)}>
@@ -223,68 +199,75 @@ export default function Settings() {
         </Button>
       </div>
 
-      {/* Clients List */}
+      {/* Client Configuration */}
       <Card>
         <CardHeader>
-          <CardTitle>Client Configurations</CardTitle>
+          <CardTitle>Client Configuration</CardTitle>
         </CardHeader>
         <CardContent>
-          {loading ? (
-            <div className="text-center py-8 text-gray-500">Loading clients...</div>
-          ) : clients.length === 0 ? (
+          {!selectedClient ? (
             <div className="text-center py-12 text-gray-500">
               <SettingsIcon className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-              <p>No clients configured. Add your first client to get started.</p>
+              <p>Select a client from the sidebar to view settings.</p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {clients.map((client) => (
-                <div
-                  key={client.id}
-                  className="border border-gray-200 rounded-lg p-4 hover:border-gray-300"
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <h3 className="font-semibold text-gray-900">{client.name}</h3>
-                      <div className="mt-2 space-y-1 text-sm">
-                        <div>
-                          <span className="text-gray-500">SendGrid API Key: </span>
-                          <span className="font-mono text-gray-900">
-                            {client.sendgrid_api_key.substring(0, 20)}...
-                          </span>
-                        </div>
-                        {client.ip_pools && client.ip_pools.length > 0 && (
-                          <div>
-                            <span className="text-gray-500">IP Pools: </span>
-                            <span className="text-gray-900">
-                              {client.ip_pools.join(', ')}
-                            </span>
-                          </div>
-                        )}
-                        <div className="text-xs text-gray-400">
-                          Added {new Date(client.created_at).toLocaleDateString()}
-                        </div>
-                      </div>
+            <div className="border border-gray-200 rounded-lg p-4">
+              <div className="flex items-start justify-between">
+                <div className="flex-1">
+                  <h3 className="font-semibold text-gray-900">{selectedClient.name}</h3>
+                  <div className="mt-2 space-y-1 text-sm">
+                    <div>
+                      <span className="text-gray-500">SendGrid API Key: </span>
+                      <span className="font-mono text-gray-900">
+                        {selectedClient.sendgrid_api_key.substring(0, 20)}...
+                      </span>
                     </div>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => setEditingClient(client)}
-                      >
-                        Edit
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => handleDelete(client.id)}
-                      >
-                        Delete
-                      </Button>
+                    {selectedClient.ip_pools && selectedClient.ip_pools.length > 0 && (
+                      <div>
+                        <span className="text-gray-500">IP Pools: </span>
+                        <span className="text-gray-900">
+                          {selectedClient.ip_pools.join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    {selectedClient.mailing_address && (
+                      <div>
+                        <span className="text-gray-500">Mailing Address: </span>
+                        <span className="text-gray-900 whitespace-pre-line">
+                          {selectedClient.mailing_address}
+                        </span>
+                      </div>
+                    )}
+                    {selectedClient.verified_senders && selectedClient.verified_senders.length > 0 && (
+                      <div>
+                        <span className="text-gray-500">Verified Senders: </span>
+                        <span className="text-gray-900">
+                          {selectedClient.verified_senders.map(s => s.email).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                    <div className="text-xs text-gray-400">
+                      Added {new Date(selectedClient.created_at).toLocaleDateString()}
                     </div>
                   </div>
                 </div>
-              ))}
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setEditingClient(selectedClient)}
+                  >
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => handleDelete(selectedClient.id)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </div>
             </div>
           )}
         </CardContent>
@@ -546,7 +529,6 @@ export default function Settings() {
           onClose={() => setShowAddModal(false)}
           onSuccess={() => {
             setShowAddModal(false)
-            fetchClients()
             refreshClients()
           }}
         />
@@ -559,7 +541,6 @@ export default function Settings() {
           onClose={() => setEditingClient(null)}
           onSuccess={() => {
             setEditingClient(null)
-            fetchClients()
             refreshClients()
           }}
         />
