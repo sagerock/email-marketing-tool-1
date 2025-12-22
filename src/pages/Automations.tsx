@@ -646,7 +646,17 @@ function CreateSequenceModal({
                           <select
                             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
                             value={stepData.template_id || ''}
-                            onChange={(e) => updateStep(index, 'template_id', e.target.value || null)}
+                            onChange={(e) => {
+                              const templateId = e.target.value || null
+                              updateStep(index, 'template_id', templateId)
+                              // Auto-fill subject from template
+                              if (templateId) {
+                                const template = templates.find(t => t.id === templateId)
+                                if (template?.subject) {
+                                  updateStep(index, 'subject', template.subject)
+                                }
+                              }
+                            }}
                           >
                             <option value="">Select a template...</option>
                             {templates.map((t) => (
@@ -967,7 +977,17 @@ function EditSequenceModal({
                           <select
                             className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
                             value={step.template_id || ''}
-                            onChange={(e) => updateStep(step.id, 'template_id', e.target.value || null)}
+                            onChange={(e) => {
+                              const templateId = e.target.value || null
+                              updateStep(step.id, 'template_id', templateId)
+                              // Auto-fill subject from template
+                              if (templateId) {
+                                const template = templates.find(t => t.id === templateId)
+                                if (template?.subject) {
+                                  updateStep(step.id, 'subject', template.subject)
+                                }
+                              }
+                            }}
                           >
                             <option value="">Select a template...</option>
                             {templates.map((t) => (
