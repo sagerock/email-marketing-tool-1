@@ -21,9 +21,18 @@ export interface Template {
   html_content: string
   preview_text?: string
   thumbnail?: string
+  folder_id?: string
   created_at: string
   updated_at: string
   client_id?: string
+}
+
+export interface Folder {
+  id: string
+  name: string
+  client_id: string
+  created_at: string
+  updated_at: string
 }
 
 export interface Campaign {
