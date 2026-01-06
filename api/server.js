@@ -1587,13 +1587,20 @@ app.get('/api/salesforce/campaigns/:campaignId/members', async (req, res) => {
  * Only syncs Lead-based campaign members (LeadId != null)
  */
 app.post('/api/salesforce/sync-campaigns', async (req, res) => {
+  const { clientId } = req.body
+
+  if (!clientId) {
+    return res.status(400).json({ error: 'clientId is required' })
+  }
+
+  // Return immediately - sync runs in background
+  res.json({
+    success: true,
+    message: 'Campaign sync started. This may take several minutes for large datasets. Check server logs for progress.',
+  })
+
+  // Run sync in background
   try {
-    const { clientId } = req.body
-
-    if (!clientId) {
-      return res.status(400).json({ error: 'clientId is required' })
-    }
-
     console.log(`🔄 Starting Salesforce Campaign sync for client ${clientId}`)
 
     const conn = await getSalesforceConnection(clientId)
@@ -1774,17 +1781,8 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
     }
 
     console.log(`✅ Salesforce Campaign sync complete: ${campaignsSynced} campaigns, ${membersSynced} members, ${newEnrollments} new enrollments`)
-
-    res.json({
-      success: true,
-      campaignsSynced,
-      membersSynced,
-      newEnrollments,
-      message: `Synced ${campaignsSynced} campaigns with ${membersSynced} members. ${newEnrollments} new sequence enrollments.`,
-    })
   } catch (error) {
-    console.error('Error syncing Salesforce campaigns:', error)
-    res.status(500).json({ error: error.message })
+    console.error('❌ Error syncing Salesforce campaigns:', error)
   }
 })
 
