@@ -1015,7 +1015,7 @@ function EditSequenceModal({
     }
   }
 
-  const saveSettings = async () => {
+  const saveSettings = async (enrollExisting: boolean = false) => {
     setSubmitting(true)
     try {
       const { error } = await supabase
@@ -1038,12 +1038,51 @@ function EditSequenceModal({
         .eq('id', sequence.id)
 
       if (error) throw error
+
+      // If user chose to enroll existing members
+      if (enrollExisting && formData.trigger_salesforce_campaign_ids.length > 0) {
+        try {
+          const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+          const response = await fetch(`${apiUrl}/api/sequences/${sequence.id}/enroll-campaign-members`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              campaignIds: formData.trigger_salesforce_campaign_ids,
+              clientId,
+            }),
+          })
+          const data = await response.json()
+          if (response.ok && data.enrolled > 0) {
+            alert(`Settings saved! ${data.enrolled} existing member(s) enrolled.`)
+          } else {
+            alert('Settings saved! ' + (data.message || 'No new members to enroll.'))
+          }
+        } catch (enrollError) {
+          console.error('Error enrolling members:', enrollError)
+          alert('Settings saved, but failed to enroll existing members.')
+        }
+      }
+
       onSuccess()
     } catch (error) {
       console.error('Error saving sequence:', error)
       alert('Failed to save sequence')
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleSaveClick = () => {
+    // If SF Campaign trigger with campaigns selected, ask about existing members
+    if (formData.trigger_type === 'salesforce_campaign' && formData.trigger_salesforce_campaign_ids.length > 0) {
+      const choice = confirm(
+        'Would you like to enroll EXISTING members of the selected campaign(s)?\n\n' +
+        '• Click OK to enroll existing members now\n' +
+        '• Click Cancel to only enroll NEW members going forward'
+      )
+      saveSettings(choice)
+    } else {
+      saveSettings(false)
     }
   }
 
@@ -1392,7 +1431,7 @@ function EditSequenceModal({
             Close
           </Button>
           {activeTab === 'settings' && (
-            <Button onClick={saveSettings} disabled={submitting}>
+            <Button onClick={handleSaveClick} disabled={submitting}>
               {submitting ? 'Saving...' : 'Save Settings'}
             </Button>
           )}
