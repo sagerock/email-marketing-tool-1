@@ -1780,7 +1780,7 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
             .eq('client_id', clientId)
             .eq('status', 'active')
             .eq('trigger_type', 'salesforce_campaign')
-            .eq('trigger_salesforce_campaign_id', campaign.id)
+            .contains('trigger_salesforce_campaign_ids', [campaign.id])
 
           if (sequences && sequences.length > 0) {
             for (const sequence of sequences) {
@@ -2461,7 +2461,7 @@ app.listen(PORT, () => {
                   .eq('client_id', client.id)
                   .eq('status', 'active')
                   .eq('trigger_type', 'salesforce_campaign')
-                  .eq('trigger_salesforce_campaign_id', campaign.id)
+                  .contains('trigger_salesforce_campaign_ids', [campaign.id])
 
                 if (sequences && sequences.length > 0) {
                   for (const sequence of sequences) {

@@ -340,7 +340,7 @@ function CreateSequenceModal({
     start_time: '', // HH:MM format or empty for immediate
     trigger_type: 'manual' as 'manual' | 'tag_added' | 'salesforce_campaign',
     trigger_tag: '',
-    trigger_salesforce_campaign_id: '',
+    trigger_salesforce_campaign_ids: [] as string[],
   })
   const [sequenceSteps, setSequenceSteps] = useState<Partial<SequenceStep>[]>([
     { step_order: 1, subject: '', delay_days: 0, delay_hours: 0 }
@@ -448,9 +448,9 @@ function CreateSequenceModal({
           trigger_config: formData.trigger_type === 'tag_added' && formData.trigger_tag
             ? { tag: formData.trigger_tag }
             : {},
-          trigger_salesforce_campaign_id: formData.trigger_type === 'salesforce_campaign' && formData.trigger_salesforce_campaign_id
-            ? formData.trigger_salesforce_campaign_id
-            : null,
+          trigger_salesforce_campaign_ids: formData.trigger_type === 'salesforce_campaign' && formData.trigger_salesforce_campaign_ids.length > 0
+            ? formData.trigger_salesforce_campaign_ids
+            : [],
           client_id: clientId,
           status: 'draft',
         })
@@ -590,12 +590,12 @@ function CreateSequenceModal({
                     ...formData,
                     trigger_type: e.target.value as 'manual' | 'tag_added' | 'salesforce_campaign',
                     trigger_tag: e.target.value === 'tag_added' ? formData.trigger_tag : '',
-                    trigger_salesforce_campaign_id: e.target.value === 'salesforce_campaign' ? formData.trigger_salesforce_campaign_id : '',
+                    trigger_salesforce_campaign_ids: e.target.value === 'salesforce_campaign' ? formData.trigger_salesforce_campaign_ids : [],
                   })}
                 >
                   <option value="manual">Manual enrollment only</option>
                   <option value="tag_added">Auto-enroll when tag is added</option>
-                  <option value="salesforce_campaign">Auto-enroll from Salesforce Campaign</option>
+                  <option value="salesforce_campaign">Auto-enroll from Salesforce Campaign(s)</option>
                 </select>
 
                 {formData.trigger_type === 'tag_added' && (
@@ -618,25 +618,46 @@ function CreateSequenceModal({
 
                 {formData.trigger_type === 'salesforce_campaign' && (
                   <div>
-                    <select
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                      value={formData.trigger_salesforce_campaign_id}
-                      onChange={(e) => setFormData({ ...formData, trigger_salesforce_campaign_id: e.target.value })}
-                    >
-                      <option value="">Select a Salesforce Campaign...</option>
-                      {salesforceCampaigns.map((campaign) => (
-                        <option key={campaign.id} value={campaign.id}>
-                          {campaign.name} {campaign.type ? `(${campaign.type})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-gray-500">
-                      Leads added to this Salesforce Campaign will be automatically enrolled.
-                      {salesforceCampaigns.length === 0 && (
-                        <span className="block text-amber-600 mt-1">
+                    <div className="border border-gray-300 rounded-md p-3 max-h-48 overflow-y-auto bg-gray-50">
+                      {salesforceCampaigns.length === 0 ? (
+                        <p className="text-sm text-amber-600">
                           No campaigns found. Sync campaigns from Settings → Salesforce first.
-                        </span>
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {salesforceCampaigns.map((campaign) => (
+                            <label key={campaign.id} className="flex items-center gap-2 cursor-pointer hover:bg-white p-1 rounded">
+                              <input
+                                type="checkbox"
+                                checked={formData.trigger_salesforce_campaign_ids.includes(campaign.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setFormData({
+                                      ...formData,
+                                      trigger_salesforce_campaign_ids: [...formData.trigger_salesforce_campaign_ids, campaign.id]
+                                    })
+                                  } else {
+                                    setFormData({
+                                      ...formData,
+                                      trigger_salesforce_campaign_ids: formData.trigger_salesforce_campaign_ids.filter(id => id !== campaign.id)
+                                    })
+                                  }
+                                }}
+                                className="rounded border-gray-300"
+                              />
+                              <span className="text-sm text-gray-700">
+                                {campaign.name} {campaign.type ? <span className="text-gray-400">({campaign.type})</span> : ''}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
                       )}
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {formData.trigger_salesforce_campaign_ids.length > 0
+                        ? `${formData.trigger_salesforce_campaign_ids.length} campaign(s) selected`
+                        : 'Select one or more campaigns'
+                      }. Leads added to any selected campaign will be enrolled.
                     </p>
                   </div>
                 )}
@@ -806,7 +827,7 @@ function EditSequenceModal({
     start_time: sequence.start_time || '',
     trigger_type: sequence.trigger_type || 'manual',
     trigger_tag: (sequence.trigger_config as any)?.tag || '',
-    trigger_salesforce_campaign_id: sequence.trigger_salesforce_campaign_id || '',
+    trigger_salesforce_campaign_ids: sequence.trigger_salesforce_campaign_ids || [],
   })
   const [steps, setSteps] = useState<SequenceStep[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
@@ -971,9 +992,9 @@ function EditSequenceModal({
           trigger_config: formData.trigger_type === 'tag_added' && formData.trigger_tag
             ? { tag: formData.trigger_tag }
             : {},
-          trigger_salesforce_campaign_id: formData.trigger_type === 'salesforce_campaign' && formData.trigger_salesforce_campaign_id
-            ? formData.trigger_salesforce_campaign_id
-            : null,
+          trigger_salesforce_campaign_ids: formData.trigger_type === 'salesforce_campaign' && formData.trigger_salesforce_campaign_ids.length > 0
+            ? formData.trigger_salesforce_campaign_ids
+            : [],
         })
         .eq('id', sequence.id)
 
@@ -1235,12 +1256,12 @@ function EditSequenceModal({
                     ...formData,
                     trigger_type: e.target.value as 'manual' | 'tag_added' | 'salesforce_campaign',
                     trigger_tag: e.target.value === 'tag_added' ? formData.trigger_tag : '',
-                    trigger_salesforce_campaign_id: e.target.value === 'salesforce_campaign' ? formData.trigger_salesforce_campaign_id : '',
+                    trigger_salesforce_campaign_ids: e.target.value === 'salesforce_campaign' ? formData.trigger_salesforce_campaign_ids : [],
                   })}
                 >
                   <option value="manual">Manual enrollment only</option>
                   <option value="tag_added">Auto-enroll when tag is added</option>
-                  <option value="salesforce_campaign">Auto-enroll from Salesforce Campaign</option>
+                  <option value="salesforce_campaign">Auto-enroll from Salesforce Campaign(s)</option>
                 </select>
 
                 {formData.trigger_type === 'tag_added' && (
@@ -1263,25 +1284,46 @@ function EditSequenceModal({
 
                 {formData.trigger_type === 'salesforce_campaign' && (
                   <div>
-                    <select
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                      value={formData.trigger_salesforce_campaign_id}
-                      onChange={(e) => setFormData({ ...formData, trigger_salesforce_campaign_id: e.target.value })}
-                    >
-                      <option value="">Select a Salesforce Campaign...</option>
-                      {salesforceCampaigns.map((campaign) => (
-                        <option key={campaign.id} value={campaign.id}>
-                          {campaign.name} {campaign.type ? `(${campaign.type})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-gray-500">
-                      Leads added to this Salesforce Campaign will be automatically enrolled.
-                      {salesforceCampaigns.length === 0 && (
-                        <span className="block text-amber-600 mt-1">
+                    <div className="border border-gray-300 rounded-md p-3 max-h-48 overflow-y-auto bg-gray-50">
+                      {salesforceCampaigns.length === 0 ? (
+                        <p className="text-sm text-amber-600">
                           No campaigns found. Sync campaigns from Settings → Salesforce first.
-                        </span>
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {salesforceCampaigns.map((campaign) => (
+                            <label key={campaign.id} className="flex items-center gap-2 cursor-pointer hover:bg-white p-1 rounded">
+                              <input
+                                type="checkbox"
+                                checked={formData.trigger_salesforce_campaign_ids.includes(campaign.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setFormData({
+                                      ...formData,
+                                      trigger_salesforce_campaign_ids: [...formData.trigger_salesforce_campaign_ids, campaign.id]
+                                    })
+                                  } else {
+                                    setFormData({
+                                      ...formData,
+                                      trigger_salesforce_campaign_ids: formData.trigger_salesforce_campaign_ids.filter(id => id !== campaign.id)
+                                    })
+                                  }
+                                }}
+                                className="rounded border-gray-300"
+                              />
+                              <span className="text-sm text-gray-700">
+                                {campaign.name} {campaign.type ? <span className="text-gray-400">({campaign.type})</span> : ''}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
                       )}
+                    </div>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {formData.trigger_salesforce_campaign_ids.length > 0
+                        ? `${formData.trigger_salesforce_campaign_ids.length} campaign(s) selected`
+                        : 'Select one or more campaigns'
+                      }. Leads added to any selected campaign will be enrolled.
                     </p>
                   </div>
                 )}
