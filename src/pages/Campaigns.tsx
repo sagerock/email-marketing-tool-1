@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
 import type { Campaign, Template, Contact } from '../types/index.js'
@@ -317,6 +317,8 @@ function CreateCampaignModal({
   const [templates, setTemplates] = useState<Template[]>([])
   const [contacts, setContacts] = useState<Contact[]>([])
   const [totalContactCount, setTotalContactCount] = useState(0)
+  const [filteredTagCount, setFilteredTagCount] = useState<number | null>(null)
+  const countRequestVersion = useRef(0)
   const [allTags, setAllTags] = useState<string[]>([])
   const [verifiedSenders, setVerifiedSenders] = useState<{email: string, name: string}[]>([])
   const [defaultUtmParams, setDefaultUtmParams] = useState('')
@@ -374,6 +376,44 @@ function CreateCampaignModal({
       })
     }
   }, [campaign])
+
+  // Fetch filtered count when tags change
+  useEffect(() => {
+    if (formData.filter_tags.length > 0) {
+      fetchFilteredTagCount(formData.filter_tags)
+    } else {
+      setFilteredTagCount(null)
+    }
+  }, [formData.filter_tags])
+
+  const fetchFilteredTagCount = async (tags: string[]) => {
+    if (tags.length === 0) {
+      setFilteredTagCount(null)
+      return
+    }
+
+    // Increment version and capture it for this request
+    countRequestVersion.current += 1
+    const thisRequestVersion = countRequestVersion.current
+
+    try {
+      const { count, error } = await supabase
+        .from('contacts')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId)
+        .eq('unsubscribed', false)
+        .overlaps('tags', tags)
+
+      if (error) throw error
+
+      // Only update if this is still the latest request
+      if (thisRequestVersion === countRequestVersion.current) {
+        setFilteredTagCount(count || 0)
+      }
+    } catch (error) {
+      console.error('Error fetching filtered count:', error)
+    }
+  }
 
   const fetchTemplates = async () => {
     const { data } = await supabase
@@ -454,10 +494,8 @@ function CreateCampaignModal({
 
   const getRecipientCount = () => {
     if (formData.filter_tags.length === 0) return totalContactCount
-    // For tag filtering, count contacts that have any of the selected tags (OR logic)
-    return contacts.filter((contact) =>
-      formData.filter_tags.some((tag) => contact.tags?.includes(tag))
-    ).length
+    // Use database count for accurate OR logic filtering
+    return filteredTagCount
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -465,7 +503,7 @@ function CreateCampaignModal({
     setSubmitting(true)
 
     try {
-      const recipientCount = getRecipientCount()
+      const recipientCount = getRecipientCount() ?? 0
       const campaignData = {
         ...formData,
         template_id: formData.template_id || null,
@@ -701,7 +739,7 @@ function CreateCampaignModal({
                 ))}
               </div>
               <p className="mt-1 text-sm text-gray-500">
-                {getRecipientCount()} recipient(s) will receive this campaign
+                {getRecipientCount() !== null ? getRecipientCount() : '...'} recipient(s) will receive this campaign
               </p>
             </div>
           )}
