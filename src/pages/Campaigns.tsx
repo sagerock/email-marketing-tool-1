@@ -6,7 +6,7 @@ import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, MoreVertical } from 'lucide-react'
+import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus } from 'lucide-react'
 
 export default function Campaigns() {
   const { selectedClient } = useClient()
