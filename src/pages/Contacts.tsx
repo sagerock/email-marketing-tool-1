@@ -20,6 +20,7 @@ export default function Contacts() {
   const [editingContact, setEditingContact] = useState<Contact | null>(null)
   const [loading, setLoading] = useState(true)
   const [showContacts, setShowContacts] = useState(false)
+  const [filteredTagCount, setFilteredTagCount] = useState<number | null>(null)
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -34,10 +35,15 @@ export default function Contacts() {
     }
   }, [selectedClient])
 
-  // Reset contacts list when tags change
+  // Reset contacts list and fetch count when tags change
   useEffect(() => {
     setContacts([])
     setShowContacts(false)
+    if (selectedTags.length > 0 && selectedClient) {
+      fetchFilteredTagCount()
+    } else {
+      setFilteredTagCount(null)
+    }
   }, [selectedTags, selectedClient])
 
   const fetchTotalCount = async () => {
@@ -72,6 +78,26 @@ export default function Contacts() {
       setAvailableTags(data || [])
     } catch (error) {
       console.error('Error fetching tags:', error)
+    }
+  }
+
+  const fetchFilteredTagCount = async () => {
+    if (!selectedClient || selectedTags.length === 0) {
+      setFilteredTagCount(null)
+      return
+    }
+
+    try {
+      const { count, error } = await supabase
+        .from('contacts')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', selectedClient.id)
+        .overlaps('tags', selectedTags)
+
+      if (error) throw error
+      setFilteredTagCount(count || 0)
+    } catch (error) {
+      console.error('Error fetching filtered count:', error)
     }
   }
 
@@ -147,12 +173,9 @@ export default function Contacts() {
   // For backwards compatibility with modals that expect allTags as string[]
   const allTags = availableTags.map(t => t.name)
 
-  // Calculate filtered count from selected tags (uses largest tag count as estimate for OR logic)
+  // Use actual filtered count from database query, or total count when no tags selected
   const filteredCount = selectedTags.length > 0
-    ? Math.max(...selectedTags.map(tagName => {
-        const tag = availableTags.find(t => t.name === tagName)
-        return tag?.contact_count || 0
-      }))
+    ? filteredTagCount
     : totalCount
 
   // When searching, contacts are already filtered server-side
@@ -321,7 +344,7 @@ export default function Contacts() {
             <div className="text-center py-12">
               <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
               <p className="text-gray-600 text-lg font-medium mb-2">
-                ~{filteredCount.toLocaleString()} contacts with selected tag{selectedTags.length !== 1 ? 's' : ''}
+                {filteredCount !== null ? filteredCount.toLocaleString() : '...'} contacts with selected tag{selectedTags.length !== 1 ? 's' : ''}
               </p>
               <p className="text-gray-500 mb-4">
                 {selectedTags.join(', ')}
