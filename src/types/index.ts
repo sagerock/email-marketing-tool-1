@@ -51,6 +51,7 @@ export interface Campaign {
   ip_pool?: string
   utm_params?: string
   folder_id?: string
+  salesforce_campaign_id?: string
   created_at: string
   updated_at: string
   client_id?: string

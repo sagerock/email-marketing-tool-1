@@ -145,6 +145,26 @@ async function sendCampaignById(campaignId) {
   const mailingAddress = client.mailing_address || 'No mailing address configured'
   const utmParams = campaign.utm_params || ''
 
+  // Fetch Salesforce campaign name if linked
+  let sfCampaignName = ''
+  if (campaign.salesforce_campaign_id) {
+    const { data: sfCampaign } = await supabase
+      .from('salesforce_campaigns')
+      .select('name')
+      .eq('id', campaign.salesforce_campaign_id)
+      .single()
+    sfCampaignName = sfCampaign?.name || ''
+  }
+
+  // Pre-fetch all industry links for this client
+  const { data: industryLinks } = await supabase
+    .from('industry_links')
+    .select('industry, link_url')
+    .eq('client_id', campaign.client_id)
+
+  const industryLinkMap = new Map(industryLinks?.map(il => [il.industry, il.link_url]) || [])
+  const defaultIndustryUrl = 'https://alconox.com/industries/'
+
   // Helper function to append UTM params to URLs
   const appendUtmParams = (html, params) => {
     if (!params) return html
@@ -161,6 +181,9 @@ async function sendCampaignById(campaignId) {
     // Generate unsubscribe URL
     const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}`
 
+    // Get industry link for this contact
+    const industryLink = contact.industry ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl) : defaultIndustryUrl
+
     // Replace merge tags in HTML
     let personalizedHtml = htmlContent
       .replace(/{{email}}/gi, contact.email)
@@ -168,6 +191,8 @@ async function sendCampaignById(campaignId) {
       .replace(/{{last_name}}/gi, contact.last_name || '')
       .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
       .replace(/{{mailing_address}}/gi, mailingAddress)
+      .replace(/{{campaign_name}}/gi, sfCampaignName)
+      .replace(/{{industry_link}}/gi, industryLink)
 
     // Append UTM params to all links
     personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
@@ -2318,6 +2343,160 @@ app.listen(PORT, () => {
             .eq('id', client.id)
 
           console.log(`  ✅ Synced ${totalSynced} records for ${client.name}`)
+
+          // Also sync Salesforce Campaigns
+          console.log(`  🔄 Syncing Salesforce Campaigns for ${client.name}...`)
+          try {
+            const campaignsQuery = `SELECT Id, Name, Type, Status, StartDate, EndDate FROM Campaign ORDER BY StartDate DESC`
+            const campaignsResult = await conn.query(campaignsQuery)
+            let campaignsSynced = 0
+            let membersSynced = 0
+            let newEnrollments = 0
+
+            for (const sfCampaign of campaignsResult.records) {
+              const { data: campaign, error: campaignError } = await supabase
+                .from('salesforce_campaigns')
+                .upsert({
+                  salesforce_id: sfCampaign.Id,
+                  name: sfCampaign.Name,
+                  type: sfCampaign.Type || null,
+                  status: sfCampaign.Status || null,
+                  start_date: sfCampaign.StartDate || null,
+                  end_date: sfCampaign.EndDate || null,
+                  client_id: client.id,
+                }, { onConflict: 'salesforce_id,client_id' })
+                .select()
+                .single()
+
+              if (campaignError) continue
+              campaignsSynced++
+
+              // Get Campaign Members - ONLY Leads
+              const membersQuery = `SELECT Id, LeadId, Status FROM CampaignMember WHERE CampaignId = '${sfCampaign.Id}' AND LeadId != null`
+              const membersResult = await conn.query(membersQuery)
+
+              if (membersResult.records.length === 0) continue
+
+              const leadIds = membersResult.records.map(m => m.LeadId)
+              const { data: contacts } = await supabase
+                .from('contacts')
+                .select('id, salesforce_id')
+                .eq('client_id', client.id)
+                .in('salesforce_id', leadIds)
+
+              const contactMap = new Map(contacts?.map(c => [c.salesforce_id, c.id]) || [])
+
+              const memberSfIds = membersResult.records.map(m => m.Id)
+              const { data: existingMembers } = await supabase
+                .from('salesforce_campaign_members')
+                .select('salesforce_id')
+                .eq('client_id', client.id)
+                .in('salesforce_id', memberSfIds)
+
+              const existingMemberSet = new Set(existingMembers?.map(m => m.salesforce_id) || [])
+
+              const membersToUpsert = []
+              const newMemberContactIds = []
+
+              for (const member of membersResult.records) {
+                const contactId = contactMap.get(member.LeadId)
+                if (!contactId) continue
+
+                membersToUpsert.push({
+                  salesforce_id: member.Id,
+                  salesforce_campaign_id: campaign.id,
+                  contact_id: contactId,
+                  status: member.Status || null,
+                  client_id: client.id,
+                  synced_at: new Date().toISOString(),
+                })
+
+                if (!existingMemberSet.has(member.Id)) {
+                  newMemberContactIds.push(contactId)
+                }
+              }
+
+              if (membersToUpsert.length > 0) {
+                await supabase
+                  .from('salesforce_campaign_members')
+                  .upsert(membersToUpsert, { onConflict: 'salesforce_id,client_id' })
+                membersSynced += membersToUpsert.length
+              }
+
+              // Auto-enroll new members in matching sequences
+              if (newMemberContactIds.length > 0) {
+                const { data: sequences } = await supabase
+                  .from('email_sequences')
+                  .select('*')
+                  .eq('client_id', client.id)
+                  .eq('status', 'active')
+                  .eq('trigger_type', 'salesforce_campaign')
+                  .eq('trigger_salesforce_campaign_id', campaign.id)
+
+                if (sequences && sequences.length > 0) {
+                  for (const sequence of sequences) {
+                    const { data: firstStep } = await supabase
+                      .from('sequence_steps')
+                      .select('*')
+                      .eq('sequence_id', sequence.id)
+                      .eq('step_order', 1)
+                      .single()
+
+                    if (!firstStep) continue
+
+                    const { data: existingEnrollments } = await supabase
+                      .from('sequence_enrollments')
+                      .select('contact_id')
+                      .eq('sequence_id', sequence.id)
+                      .in('contact_id', newMemberContactIds)
+
+                    const enrolledSet = new Set(existingEnrollments?.map(e => e.contact_id) || [])
+                    const contactsToEnroll = newMemberContactIds.filter(id => !enrolledSet.has(id))
+
+                    if (contactsToEnroll.length === 0) continue
+
+                    const now = new Date().toISOString()
+                    const enrollmentsToCreate = contactsToEnroll.map(contactId => ({
+                      sequence_id: sequence.id,
+                      contact_id: contactId,
+                      status: 'active',
+                      current_step: 0,
+                      trigger_campaign_id: campaign.id,
+                      next_email_scheduled_at: now,
+                    }))
+
+                    const { data: createdEnrollments } = await supabase
+                      .from('sequence_enrollments')
+                      .insert(enrollmentsToCreate)
+                      .select('id, contact_id')
+
+                    if (createdEnrollments) {
+                      const emailsToSchedule = createdEnrollments.map(enrollment => ({
+                        enrollment_id: enrollment.id,
+                        step_id: firstStep.id,
+                        contact_id: enrollment.contact_id,
+                        scheduled_for: now,
+                        status: 'pending',
+                      }))
+
+                      await supabase.from('scheduled_emails').insert(emailsToSchedule)
+
+                      await supabase
+                        .from('email_sequences')
+                        .update({ total_enrolled: sequence.total_enrolled + createdEnrollments.length })
+                        .eq('id', sequence.id)
+
+                      newEnrollments += createdEnrollments.length
+                    }
+                  }
+                }
+              }
+            }
+            console.log(`  ✅ Campaigns: ${campaignsSynced} synced, ${membersSynced} members, ${newEnrollments} new enrollments`)
+          } catch (campaignError) {
+            console.error(`  ⚠️ Campaign sync error for ${client.name}:`, campaignError.message)
+          }
+
         } catch (clientError) {
           console.error(`  ❌ Error syncing ${client.name}:`, clientError.message)
           await supabase

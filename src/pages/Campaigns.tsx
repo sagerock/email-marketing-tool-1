@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Campaign, Template, Folder } from '../types/index.js'
+import type { Campaign, Template, Folder, SalesforceCampaign } from '../types/index.js'
 import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -607,6 +607,7 @@ function CreateCampaignModal({
   const [allTags, setAllTags] = useState<string[]>([])
   const [verifiedSenders, setVerifiedSenders] = useState<{email: string, name: string}[]>([])
   const [defaultUtmParams, setDefaultUtmParams] = useState('')
+  const [salesforceCampaigns, setSalesforceCampaigns] = useState<SalesforceCampaign[]>([])
   const [formData, setFormData] = useState({
     name: campaign?.name || '',
     template_id: campaign?.template_id || '',
@@ -618,6 +619,7 @@ function CreateCampaignModal({
     scheduled_at: campaign?.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
     utm_params: campaign?.utm_params || '',
     folder_id: campaign?.folder_id || '',
+    salesforce_campaign_id: campaign?.salesforce_campaign_id || '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -625,6 +627,7 @@ function CreateCampaignModal({
     fetchTemplates()
     fetchContacts()
     fetchVerifiedSenders()
+    fetchSalesforceCampaigns()
   }, [])
 
   const fetchVerifiedSenders = async () => {
@@ -646,6 +649,15 @@ function CreateCampaignModal({
     }
   }
 
+  const fetchSalesforceCampaigns = async () => {
+    const { data } = await supabase
+      .from('salesforce_campaigns')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('start_date', { ascending: false })
+    setSalesforceCampaigns(data || [])
+  }
+
   // Update form data when campaign prop changes
   useEffect(() => {
     if (campaign) {
@@ -660,6 +672,7 @@ function CreateCampaignModal({
         scheduled_at: campaign.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
         utm_params: campaign.utm_params || '',
         folder_id: campaign.folder_id || '',
+        salesforce_campaign_id: campaign.salesforce_campaign_id || '',
       })
     }
   }, [campaign])
@@ -787,6 +800,7 @@ function CreateCampaignModal({
         template_id: formData.template_id || null,
         reply_to: formData.reply_to || null,
         folder_id: formData.folder_id || null,
+        salesforce_campaign_id: formData.salesforce_campaign_id || null,
         scheduled_at: scheduledAtUtc,
         recipient_count: recipientCount,
         status: formData.scheduled_at ? 'scheduled' : 'draft',
@@ -933,6 +947,14 @@ function CreateCampaignModal({
                 <code className="text-blue-700 font-mono">{'{{unsubscribe_url}}'}</code>
                 <span className="text-gray-600 ml-2">→ Unsubscribe link</span>
               </div>
+              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                <code className="text-blue-700 font-mono">{'{{campaign_name}}'}</code>
+                <span className="text-gray-600 ml-2">→ SF Campaign name</span>
+              </div>
+              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                <code className="text-blue-700 font-mono">{'{{industry_link}}'}</code>
+                <span className="text-gray-600 ml-2">→ Industry URL</span>
+              </div>
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100 col-span-2">
                 <code className="text-blue-700 font-mono">{'{{mailing_address}}'}</code>
                 <span className="text-gray-600 ml-2">→ Your mailing address (CAN-SPAM required)</span>
@@ -942,6 +964,30 @@ function CreateCampaignModal({
               💡 Example footer: "{'{{mailing_address}}'} | <a href="{'{{unsubscribe_url}}'}">Unsubscribe</a>"
             </p>
           </div>
+
+          {/* Salesforce Campaign Link */}
+          {salesforceCampaigns.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Link to Salesforce Campaign (optional)
+              </label>
+              <select
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                value={formData.salesforce_campaign_id}
+                onChange={(e) => setFormData({ ...formData, salesforce_campaign_id: e.target.value })}
+              >
+                <option value="">No Salesforce Campaign</option>
+                {salesforceCampaigns.map((sfCampaign) => (
+                  <option key={sfCampaign.id} value={sfCampaign.id}>
+                    {sfCampaign.name} {sfCampaign.type ? `(${sfCampaign.type})` : ''}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Links this campaign to a Salesforce Campaign. The <code className="bg-gray-100 px-1 rounded">{'{{campaign_name}}'}</code> merge tag will be replaced with the Salesforce Campaign name.
+              </p>
+            </div>
+          )}
 
           <Input
             label="Email Subject *"
