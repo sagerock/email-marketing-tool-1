@@ -632,7 +632,8 @@ app.post('/api/sequences/process', async (req, res) => {
         enrollment:sequence_enrollments(
           *,
           sequence:email_sequences(*),
-          contact:contacts(*)
+          contact:contacts(*),
+          trigger_campaign:salesforce_campaigns(id, name, type)
         ),
         step:sequence_steps(*)
       `)
@@ -709,6 +710,29 @@ app.post('/api/sequences/process', async (req, res) => {
           .replace(/{{last_name}}/gi, contact.last_name || '')
           .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
           .replace(/{{mailing_address}}/gi, mailingAddress)
+
+        // Handle campaign_name merge tag (from Salesforce Campaign trigger)
+        if (enrollment.trigger_campaign) {
+          personalizedHtml = personalizedHtml.replace(/{{campaign_name}}/gi, enrollment.trigger_campaign.name || '')
+        } else {
+          personalizedHtml = personalizedHtml.replace(/{{campaign_name}}/gi, '')
+        }
+
+        // Handle industry_link merge tag (lookup from industry_links table)
+        if (contact.industry) {
+          const { data: industryLink } = await supabase
+            .from('industry_links')
+            .select('link_url')
+            .eq('client_id', sequence.client_id)
+            .eq('industry', contact.industry)
+            .single()
+
+          const industryUrl = industryLink?.link_url || 'https://alconox.com/industries/'
+          personalizedHtml = personalizedHtml.replace(/{{industry_link}}/gi, industryUrl)
+        } else {
+          // Default fallback URL
+          personalizedHtml = personalizedHtml.replace(/{{industry_link}}/gi, 'https://alconox.com/industries/')
+        }
 
         // Send email
         const msg = {
@@ -1404,6 +1428,366 @@ app.get('/api/salesforce/preview', async (req, res) => {
   }
 })
 
+// ============ INDUSTRY LINKS ENDPOINTS ============
+
+/**
+ * Get all industry links for a client
+ */
+app.get('/api/industry-links', async (req, res) => {
+  try {
+    const { clientId } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const { data, error } = await supabase
+      .from('industry_links')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('industry', { ascending: true })
+
+    if (error) throw error
+
+    res.json(data || [])
+  } catch (error) {
+    console.error('Error fetching industry links:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Create or update an industry link
+ */
+app.post('/api/industry-links', async (req, res) => {
+  try {
+    const { clientId, industry, linkUrl, id } = req.body
+
+    if (!clientId || !industry || !linkUrl) {
+      return res.status(400).json({ error: 'clientId, industry, and linkUrl are required' })
+    }
+
+    let result
+    if (id) {
+      // Update existing
+      const { data, error } = await supabase
+        .from('industry_links')
+        .update({
+          industry,
+          link_url: linkUrl,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id)
+        .select()
+        .single()
+
+      if (error) throw error
+      result = data
+    } else {
+      // Create new (upsert by industry)
+      const { data, error } = await supabase
+        .from('industry_links')
+        .upsert({
+          client_id: clientId,
+          industry,
+          link_url: linkUrl,
+        }, {
+          onConflict: 'industry,client_id',
+        })
+        .select()
+        .single()
+
+      if (error) throw error
+      result = data
+    }
+
+    res.json(result)
+  } catch (error) {
+    console.error('Error saving industry link:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Delete an industry link
+ */
+app.delete('/api/industry-links/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+
+    const { error } = await supabase
+      .from('industry_links')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error deleting industry link:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ============ SALESFORCE CAMPAIGNS ENDPOINTS ============
+
+/**
+ * Get all synced Salesforce campaigns for a client
+ */
+app.get('/api/salesforce/campaigns', async (req, res) => {
+  try {
+    const { clientId } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const { data, error } = await supabase
+      .from('salesforce_campaigns')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('start_date', { ascending: false })
+
+    if (error) throw error
+
+    res.json(data || [])
+  } catch (error) {
+    console.error('Error fetching Salesforce campaigns:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Get campaign members for a specific Salesforce campaign
+ */
+app.get('/api/salesforce/campaigns/:campaignId/members', async (req, res) => {
+  try {
+    const { campaignId } = req.params
+
+    const { data, error } = await supabase
+      .from('salesforce_campaign_members')
+      .select(`
+        *,
+        contact:contacts(id, email, first_name, last_name, industry, record_type)
+      `)
+      .eq('salesforce_campaign_id', campaignId)
+      .order('synced_at', { ascending: false })
+
+    if (error) throw error
+
+    res.json(data || [])
+  } catch (error) {
+    console.error('Error fetching campaign members:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Sync Salesforce Campaigns and Campaign Members
+ * Only syncs Lead-based campaign members (LeadId != null)
+ */
+app.post('/api/salesforce/sync-campaigns', async (req, res) => {
+  try {
+    const { clientId } = req.body
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    console.log(`🔄 Starting Salesforce Campaign sync for client ${clientId}`)
+
+    const conn = await getSalesforceConnection(clientId)
+
+    // 1. Query all Campaigns from Salesforce
+    const campaignsQuery = `
+      SELECT Id, Name, Type, Status, StartDate, EndDate
+      FROM Campaign
+      ORDER BY StartDate DESC
+    `
+
+    const campaignsResult = await conn.query(campaignsQuery)
+    console.log(`📋 Found ${campaignsResult.totalSize} Salesforce campaigns`)
+
+    let campaignsSynced = 0
+    let membersSynced = 0
+    let newEnrollments = 0
+
+    // 2. Upsert campaigns into our database
+    for (const sfCampaign of campaignsResult.records) {
+      const { data: campaign, error: campaignError } = await supabase
+        .from('salesforce_campaigns')
+        .upsert({
+          salesforce_id: sfCampaign.Id,
+          name: sfCampaign.Name,
+          type: sfCampaign.Type || null,
+          status: sfCampaign.Status || null,
+          start_date: sfCampaign.StartDate || null,
+          end_date: sfCampaign.EndDate || null,
+          client_id: clientId,
+        }, {
+          onConflict: 'salesforce_id,client_id',
+        })
+        .select()
+        .single()
+
+      if (campaignError) {
+        console.error(`Error upserting campaign ${sfCampaign.Name}:`, campaignError)
+        continue
+      }
+
+      campaignsSynced++
+
+      // 3. Get Campaign Members - ONLY Leads (LeadId != null)
+      const membersQuery = `
+        SELECT Id, LeadId, Status
+        FROM CampaignMember
+        WHERE CampaignId = '${sfCampaign.Id}'
+        AND LeadId != null
+      `
+
+      try {
+        const membersResult = await conn.query(membersQuery)
+        console.log(`  📥 Campaign "${sfCampaign.Name}": ${membersResult.totalSize} Lead members`)
+
+        // 4. For each Lead member, match to our contacts by salesforce_id
+        for (const member of membersResult.records) {
+          // Find contact by Salesforce Lead ID
+          const { data: contact } = await supabase
+            .from('contacts')
+            .select('id')
+            .eq('client_id', clientId)
+            .eq('salesforce_id', member.LeadId)
+            .single()
+
+          if (!contact) {
+            // Lead not yet synced to our contacts table - skip
+            continue
+          }
+
+          // Upsert campaign member
+          const { data: existingMember } = await supabase
+            .from('salesforce_campaign_members')
+            .select('id')
+            .eq('salesforce_id', member.Id)
+            .eq('client_id', clientId)
+            .single()
+
+          const isNewMember = !existingMember
+
+          const { error: memberError } = await supabase
+            .from('salesforce_campaign_members')
+            .upsert({
+              salesforce_id: member.Id,
+              salesforce_campaign_id: campaign.id,
+              contact_id: contact.id,
+              status: member.Status || null,
+              client_id: clientId,
+              synced_at: new Date().toISOString(),
+            }, {
+              onConflict: 'salesforce_id,client_id',
+            })
+
+          if (memberError) {
+            console.error(`Error upserting member:`, memberError)
+            continue
+          }
+
+          membersSynced++
+
+          // 5. If NEW member, check for campaign-triggered sequences and auto-enroll
+          if (isNewMember) {
+            // Find sequences that trigger on this specific campaign
+            const { data: sequences } = await supabase
+              .from('email_sequences')
+              .select('*')
+              .eq('client_id', clientId)
+              .eq('status', 'active')
+              .eq('trigger_type', 'salesforce_campaign')
+              .eq('trigger_salesforce_campaign_id', campaign.id)
+
+            if (sequences && sequences.length > 0) {
+              for (const sequence of sequences) {
+                // Check if already enrolled
+                const { data: existingEnrollment } = await supabase
+                  .from('sequence_enrollments')
+                  .select('id')
+                  .eq('sequence_id', sequence.id)
+                  .eq('contact_id', contact.id)
+                  .single()
+
+                if (existingEnrollment) continue // Already enrolled
+
+                // Get first step
+                const { data: firstStep } = await supabase
+                  .from('sequence_steps')
+                  .select('*')
+                  .eq('sequence_id', sequence.id)
+                  .eq('step_order', 1)
+                  .single()
+
+                if (!firstStep) continue
+
+                // Create enrollment with trigger campaign reference
+                const now = new Date().toISOString()
+                const { data: enrollment, error: enrollError } = await supabase
+                  .from('sequence_enrollments')
+                  .insert({
+                    sequence_id: sequence.id,
+                    contact_id: contact.id,
+                    status: 'active',
+                    current_step: 0,
+                    trigger_campaign_id: campaign.id,
+                    next_email_scheduled_at: now,
+                  })
+                  .select()
+                  .single()
+
+                if (enrollError) {
+                  console.error('Error creating enrollment:', enrollError)
+                  continue
+                }
+
+                // Schedule first email
+                await supabase.from('scheduled_emails').insert({
+                  enrollment_id: enrollment.id,
+                  step_id: firstStep.id,
+                  contact_id: contact.id,
+                  scheduled_for: now,
+                  status: 'pending',
+                })
+
+                // Update sequence enrolled count
+                await supabase
+                  .from('email_sequences')
+                  .update({ total_enrolled: sequence.total_enrolled + 1 })
+                  .eq('id', sequence.id)
+
+                newEnrollments++
+                console.log(`  ✅ Auto-enrolled contact ${contact.id} in sequence "${sequence.name}"`)
+              }
+            }
+          }
+        }
+      } catch (memberError) {
+        console.error(`Error fetching members for campaign ${sfCampaign.Name}:`, memberError.message)
+      }
+    }
+
+    console.log(`✅ Salesforce Campaign sync complete: ${campaignsSynced} campaigns, ${membersSynced} members, ${newEnrollments} new enrollments`)
+
+    res.json({
+      success: true,
+      campaignsSynced,
+      membersSynced,
+      newEnrollments,
+      message: `Synced ${campaignsSynced} campaigns with ${membersSynced} members. ${newEnrollments} new sequence enrollments.`,
+    })
+  } catch (error) {
+    console.error('Error syncing Salesforce campaigns:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`)
 
@@ -1545,7 +1929,8 @@ app.listen(PORT, () => {
           enrollment:sequence_enrollments(
             *,
             sequence:email_sequences(*),
-            contact:contacts(*)
+            contact:contacts(*),
+            trigger_campaign:salesforce_campaigns(id, name, type)
           ),
           step:sequence_steps(*)
         `)
@@ -1625,6 +2010,29 @@ app.listen(PORT, () => {
             .replace(/{{last_name}}/gi, contact.last_name || '')
             .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
             .replace(/{{mailing_address}}/gi, mailingAddress)
+
+          // Handle campaign_name merge tag (from Salesforce Campaign trigger)
+          if (enrollment.trigger_campaign) {
+            personalizedHtml = personalizedHtml.replace(/{{campaign_name}}/gi, enrollment.trigger_campaign.name || '')
+          } else {
+            personalizedHtml = personalizedHtml.replace(/{{campaign_name}}/gi, '')
+          }
+
+          // Handle industry_link merge tag (lookup from industry_links table)
+          if (contact.industry) {
+            const { data: industryLink } = await supabase
+              .from('industry_links')
+              .select('link_url')
+              .eq('client_id', sequence.client_id)
+              .eq('industry', contact.industry)
+              .single()
+
+            const industryUrl = industryLink?.link_url || 'https://alconox.com/industries/'
+            personalizedHtml = personalizedHtml.replace(/{{industry_link}}/gi, industryUrl)
+          } else {
+            // Default fallback URL
+            personalizedHtml = personalizedHtml.replace(/{{industry_link}}/gi, 'https://alconox.com/industries/')
+          }
 
           // Send email
           const msg = {

@@ -41,8 +41,8 @@ CREATE TABLE industry_links (
 ALTER TABLE sequence_enrollments
   ADD COLUMN trigger_campaign_id UUID REFERENCES salesforce_campaigns(id) ON DELETE SET NULL;
 
--- Add trigger_salesforce_campaign_id to automation_sequences for campaign-based triggers
-ALTER TABLE automation_sequences
+-- Add trigger_salesforce_campaign_id to email_sequences for campaign-based triggers
+ALTER TABLE email_sequences
   ADD COLUMN trigger_salesforce_campaign_id UUID REFERENCES salesforce_campaigns(id) ON DELETE SET NULL;
 
 -- Indexes for performance

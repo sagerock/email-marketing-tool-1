@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 // Settings page - includes client management, Salesforce integration, and UTM tracking
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2 } from 'lucide-react'
+import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2, Users } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -38,6 +38,7 @@ export default function Settings() {
   const [sfFields, setSfFields] = useState<{ Lead: SalesforceField[], Contact: SalesforceField[] } | null>(null)
   const [showFields, setShowFields] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [syncingCampaigns, setSyncingCampaigns] = useState(false)
   const [showSfConnect, setShowSfConnect] = useState(false)
   const [sfConnecting, setSfConnecting] = useState(false)
   const [sfCredentials, setSfCredentials] = useState({
@@ -274,6 +275,29 @@ export default function Settings() {
     }
   }
 
+  const syncSalesforceCampaigns = async () => {
+    if (!selectedClient) return
+    setSyncingCampaigns(true)
+    try {
+      const response = await fetch(`${API_URL}/api/salesforce/sync-campaigns`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: selectedClient.id }),
+      })
+      const data = await response.json()
+      if (response.ok) {
+        alert(data.message)
+      } else {
+        throw new Error(data.error || 'Campaign sync failed')
+      }
+    } catch (error) {
+      console.error('Error syncing Salesforce campaigns:', error)
+      alert('Campaign sync failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
+    } finally {
+      setSyncingCampaigns(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -449,7 +473,7 @@ export default function Settings() {
                     ) : (
                       <>
                         <RefreshCw className="h-4 w-4 mr-2" />
-                        Sync Now
+                        Sync Contacts
                       </>
                     )}
                   </Button>
@@ -459,6 +483,22 @@ export default function Settings() {
                     disabled={syncing}
                   >
                     Full Sync
+                  </Button>
+                  <Button
+                    onClick={syncSalesforceCampaigns}
+                    disabled={syncingCampaigns}
+                  >
+                    {syncingCampaigns ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Syncing...
+                      </>
+                    ) : (
+                      <>
+                        <Users className="h-4 w-4 mr-2" />
+                        Sync Campaigns
+                      </>
+                    )}
                   </Button>
                   <Button
                     variant="outline"

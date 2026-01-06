@@ -122,8 +122,9 @@ export interface EmailSequence {
   name: string
   description?: string
   status: SequenceStatus
-  trigger_type: 'manual' | 'tag_added' | 'contact_created'
+  trigger_type: 'manual' | 'tag_added' | 'contact_created' | 'salesforce_campaign'
   trigger_config: Record<string, any>
+  trigger_salesforce_campaign_id?: string
   from_email: string
   from_name: string
   reply_to?: string

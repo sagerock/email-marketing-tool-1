@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { EmailSequence, SequenceStep, Template, Contact, SequenceEnrollment } from '../types/index.js'
+import type { EmailSequence, SequenceStep, Template, Contact, SequenceEnrollment, SalesforceCampaign } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -338,14 +338,16 @@ function CreateSequenceModal({
     from_name: verifiedSenders[0]?.name || '',
     reply_to: '',
     start_time: '', // HH:MM format or empty for immediate
-    trigger_type: 'manual' as 'manual' | 'tag_added',
+    trigger_type: 'manual' as 'manual' | 'tag_added' | 'salesforce_campaign',
     trigger_tag: '',
+    trigger_salesforce_campaign_id: '',
   })
   const [sequenceSteps, setSequenceSteps] = useState<Partial<SequenceStep>[]>([
     { step_order: 1, subject: '', delay_days: 0, delay_hours: 0 }
   ])
   const [templates, setTemplates] = useState<Template[]>([])
   const [availableTags, setAvailableTags] = useState<string[]>([])
+  const [salesforceCampaigns, setSalesforceCampaigns] = useState<SalesforceCampaign[]>([])
   const [submitting, setSubmitting] = useState(false)
 
   useEffect(() => {
@@ -372,6 +374,14 @@ function CreateSequenceModal({
       contact.tags?.forEach((tag: string) => tags.add(tag))
     })
     setAvailableTags(Array.from(tags).sort())
+
+    // Fetch Salesforce campaigns
+    const { data: sfCampaigns } = await supabase
+      .from('salesforce_campaigns')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('start_date', { ascending: false })
+    setSalesforceCampaigns(sfCampaigns || [])
   }
 
   const addStep = () => {
@@ -438,6 +448,9 @@ function CreateSequenceModal({
           trigger_config: formData.trigger_type === 'tag_added' && formData.trigger_tag
             ? { tag: formData.trigger_tag }
             : {},
+          trigger_salesforce_campaign_id: formData.trigger_type === 'salesforce_campaign' && formData.trigger_salesforce_campaign_id
+            ? formData.trigger_salesforce_campaign_id
+            : null,
           client_id: clientId,
           status: 'draft',
         })
@@ -575,12 +588,14 @@ function CreateSequenceModal({
                   value={formData.trigger_type}
                   onChange={(e) => setFormData({
                     ...formData,
-                    trigger_type: e.target.value as 'manual' | 'tag_added',
-                    trigger_tag: e.target.value === 'manual' ? '' : formData.trigger_tag
+                    trigger_type: e.target.value as 'manual' | 'tag_added' | 'salesforce_campaign',
+                    trigger_tag: e.target.value === 'tag_added' ? formData.trigger_tag : '',
+                    trigger_salesforce_campaign_id: e.target.value === 'salesforce_campaign' ? formData.trigger_salesforce_campaign_id : '',
                   })}
                 >
                   <option value="manual">Manual enrollment only</option>
                   <option value="tag_added">Auto-enroll when tag is added</option>
+                  <option value="salesforce_campaign">Auto-enroll from Salesforce Campaign</option>
                 </select>
 
                 {formData.trigger_type === 'tag_added' && (
@@ -597,6 +612,31 @@ function CreateSequenceModal({
                     </select>
                     <p className="mt-1 text-xs text-gray-500">
                       Contacts will be automatically enrolled when they receive this tag
+                    </p>
+                  </div>
+                )}
+
+                {formData.trigger_type === 'salesforce_campaign' && (
+                  <div>
+                    <select
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.trigger_salesforce_campaign_id}
+                      onChange={(e) => setFormData({ ...formData, trigger_salesforce_campaign_id: e.target.value })}
+                    >
+                      <option value="">Select a Salesforce Campaign...</option>
+                      {salesforceCampaigns.map((campaign) => (
+                        <option key={campaign.id} value={campaign.id}>
+                          {campaign.name} {campaign.type ? `(${campaign.type})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Leads added to this Salesforce Campaign will be automatically enrolled.
+                      {salesforceCampaigns.length === 0 && (
+                        <span className="block text-amber-600 mt-1">
+                          No campaigns found. Sync campaigns from Settings → Salesforce first.
+                        </span>
+                      )}
                     </p>
                   </div>
                 )}
@@ -740,10 +780,12 @@ function EditSequenceModal({
     start_time: sequence.start_time || '',
     trigger_type: sequence.trigger_type || 'manual',
     trigger_tag: (sequence.trigger_config as any)?.tag || '',
+    trigger_salesforce_campaign_id: sequence.trigger_salesforce_campaign_id || '',
   })
   const [steps, setSteps] = useState<SequenceStep[]>([])
   const [templates, setTemplates] = useState<Template[]>([])
   const [availableTags, setAvailableTags] = useState<string[]>([])
+  const [salesforceCampaigns, setSalesforceCampaigns] = useState<SalesforceCampaign[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [activeTab, setActiveTab] = useState<'settings' | 'steps'>('steps')
@@ -755,7 +797,7 @@ function EditSequenceModal({
   const fetchData = async () => {
     setLoading(true)
     try {
-      const [stepsRes, templatesRes, contactsRes] = await Promise.all([
+      const [stepsRes, templatesRes, contactsRes, sfCampaignsRes] = await Promise.all([
         supabase
           .from('sequence_steps')
           .select('*')
@@ -769,12 +811,18 @@ function EditSequenceModal({
         supabase
           .from('contacts')
           .select('tags')
+          .eq('client_id', clientId),
+        supabase
+          .from('salesforce_campaigns')
+          .select('*')
           .eq('client_id', clientId)
+          .order('start_date', { ascending: false })
       ])
 
       if (stepsRes.error) throw stepsRes.error
       setSteps(stepsRes.data || [])
       setTemplates(templatesRes.data || [])
+      setSalesforceCampaigns(sfCampaignsRes.data || [])
 
       // Extract unique tags
       const tags = new Set<string>()
@@ -897,6 +945,9 @@ function EditSequenceModal({
           trigger_config: formData.trigger_type === 'tag_added' && formData.trigger_tag
             ? { tag: formData.trigger_tag }
             : {},
+          trigger_salesforce_campaign_id: formData.trigger_type === 'salesforce_campaign' && formData.trigger_salesforce_campaign_id
+            ? formData.trigger_salesforce_campaign_id
+            : null,
         })
         .eq('id', sequence.id)
 
@@ -1130,12 +1181,14 @@ function EditSequenceModal({
                   value={formData.trigger_type}
                   onChange={(e) => setFormData({
                     ...formData,
-                    trigger_type: e.target.value as 'manual' | 'tag_added',
-                    trigger_tag: e.target.value === 'manual' ? '' : formData.trigger_tag
+                    trigger_type: e.target.value as 'manual' | 'tag_added' | 'salesforce_campaign',
+                    trigger_tag: e.target.value === 'tag_added' ? formData.trigger_tag : '',
+                    trigger_salesforce_campaign_id: e.target.value === 'salesforce_campaign' ? formData.trigger_salesforce_campaign_id : '',
                   })}
                 >
                   <option value="manual">Manual enrollment only</option>
                   <option value="tag_added">Auto-enroll when tag is added</option>
+                  <option value="salesforce_campaign">Auto-enroll from Salesforce Campaign</option>
                 </select>
 
                 {formData.trigger_type === 'tag_added' && (
@@ -1152,6 +1205,31 @@ function EditSequenceModal({
                     </select>
                     <p className="mt-1 text-xs text-gray-500">
                       Contacts will be automatically enrolled when they receive this tag
+                    </p>
+                  </div>
+                )}
+
+                {formData.trigger_type === 'salesforce_campaign' && (
+                  <div>
+                    <select
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.trigger_salesforce_campaign_id}
+                      onChange={(e) => setFormData({ ...formData, trigger_salesforce_campaign_id: e.target.value })}
+                    >
+                      <option value="">Select a Salesforce Campaign...</option>
+                      {salesforceCampaigns.map((campaign) => (
+                        <option key={campaign.id} value={campaign.id}>
+                          {campaign.name} {campaign.type ? `(${campaign.type})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Leads added to this Salesforce Campaign will be automatically enrolled.
+                      {salesforceCampaigns.length === 0 && (
+                        <span className="block text-amber-600 mt-1">
+                          No campaigns found. Sync campaigns from Settings → Salesforce first.
+                        </span>
+                      )}
                     </p>
                   </div>
                 )}
