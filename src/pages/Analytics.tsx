@@ -3,14 +3,24 @@ import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
 import type { Campaign, AnalyticsEvent } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle } from 'lucide-react'
+import Button from '../components/ui/Button'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X } from 'lucide-react'
+
+// Extended campaign type with template data
+interface CampaignWithTemplate extends Campaign {
+  template?: {
+    html_content: string
+    name: string
+  } | null
+}
 
 export default function Analytics() {
   const { selectedClient } = useClient()
-  const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [campaigns, setCampaigns] = useState<CampaignWithTemplate[]>([])
   const [selectedCampaign, setSelectedCampaign] = useState<string>('')
   const [events, setEvents] = useState<AnalyticsEvent[]>([])
   const [loading, setLoading] = useState(true)
+  const [showPreviewModal, setShowPreviewModal] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -33,7 +43,7 @@ export default function Analytics() {
     try {
       const { data, error } = await supabase
         .from('campaigns')
-        .select('*')
+        .select('*, template:templates(html_content, name)')
         .eq('client_id', selectedClient.id)
         .in('status', ['sent', 'sending'])
         .order('created_at', { ascending: false })
@@ -146,6 +156,58 @@ export default function Analytics() {
                   </option>
                 ))}
               </select>
+            </CardContent>
+          </Card>
+
+          {/* Email Preview */}
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Email Preview</CardTitle>
+              {campaigns.find((c) => c.id === selectedCampaign)?.template?.html_content && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowPreviewModal(true)}
+                >
+                  <Eye className="h-4 w-4 mr-2" />
+                  View Full
+                </Button>
+              )}
+            </CardHeader>
+            <CardContent>
+              {(() => {
+                const campaign = campaigns.find((c) => c.id === selectedCampaign)
+                const htmlContent = campaign?.template?.html_content
+                if (!htmlContent) {
+                  return (
+                    <div className="text-center py-8 text-gray-500">
+                      <Mail className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                      <p>No template preview available</p>
+                    </div>
+                  )
+                }
+                return (
+                  <div
+                    className="relative border border-gray-200 rounded-lg overflow-hidden cursor-pointer hover:border-gray-300 transition-colors"
+                    onClick={() => setShowPreviewModal(true)}
+                  >
+                    <div className="h-[200px] overflow-hidden">
+                      <iframe
+                        srcDoc={htmlContent}
+                        title="Email Preview"
+                        className="w-full border-0 pointer-events-none"
+                        style={{
+                          height: '600px',
+                          transform: 'scale(0.333)',
+                          transformOrigin: 'top left',
+                          width: '300%',
+                        }}
+                      />
+                    </div>
+                    <div className="absolute inset-0 bg-transparent hover:bg-black/5 transition-colors" />
+                  </div>
+                )
+              })()}
             </CardContent>
           </Card>
 
@@ -312,6 +374,47 @@ export default function Analytics() {
               )}
             </CardContent>
           </Card>
+
+          {/* Preview Modal */}
+          {showPreviewModal && (() => {
+            const campaign = campaigns.find((c) => c.id === selectedCampaign)
+            const htmlContent = campaign?.template?.html_content
+            if (!htmlContent) return null
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+                onClick={() => setShowPreviewModal(false)}
+              >
+                <div
+                  className="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900">
+                        {campaign?.subject || 'Email Preview'}
+                      </h3>
+                      <p className="text-sm text-gray-500">{campaign?.name}</p>
+                    </div>
+                    <button
+                      onClick={() => setShowPreviewModal(false)}
+                      className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                    >
+                      <X className="h-5 w-5 text-gray-500" />
+                    </button>
+                  </div>
+                  <div className="flex-1 overflow-auto p-4">
+                    <iframe
+                      srcDoc={htmlContent}
+                      title="Email Preview"
+                      className="w-full border border-gray-200 rounded-lg"
+                      style={{ height: '600px' }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
         </>
       )}
     </div>
