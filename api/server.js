@@ -1535,7 +1535,7 @@ app.listen(PORT, () => {
       }
 
       // ============ PART 2: Process scheduled emails ============
-      const now = new Date().toISOString()
+      // Reuse 'now' from PART 0
 
       // Get pending scheduled emails that are due
       const { data: scheduledEmails, error: fetchError } = await supabase
