@@ -96,7 +96,30 @@ async function sendCampaignById(campaignId) {
     htmlContent = template?.html_content || ''
   }
 
-  // 4. Fetch ALL contacts (paginated to handle large lists)
+  // 4. Get contact IDs from Salesforce Campaign if specified
+  let sfCampaignContactIds = null
+  if (campaign.salesforce_campaign_id) {
+    const { data: members, error: membersError } = await supabase
+      .from('salesforce_campaign_members')
+      .select('contact_id')
+      .eq('salesforce_campaign_id', campaign.salesforce_campaign_id)
+      .eq('client_id', campaign.client_id)
+
+    if (membersError) throw membersError
+    sfCampaignContactIds = new Set(members?.map(m => m.contact_id) || [])
+    console.log(`📧 Salesforce Campaign filter: ${sfCampaignContactIds.size} contacts in campaign`)
+
+    // If no contacts in the campaign, return early
+    if (sfCampaignContactIds.size === 0) {
+      await supabase
+        .from('campaigns')
+        .update({ status: 'sent', sent_at: new Date().toISOString(), recipient_count: 0 })
+        .eq('id', campaignId)
+      return { sent: 0, failed: 0 }
+    }
+  }
+
+  // 5. Fetch ALL contacts (paginated to handle large lists)
   let allContacts = []
   let page = 0
   const pageSize = 1000
@@ -123,15 +146,22 @@ async function sendCampaignById(campaignId) {
 
   console.log(`📧 Fetched ${allContacts.length} total contacts for campaign`)
 
-  // Filter by tags if specified (OR logic - contact has any of the selected tags)
+  // Filter by Salesforce Campaign membership if specified
   let contacts = allContacts
+  if (sfCampaignContactIds) {
+    contacts = contacts.filter((contact) => sfCampaignContactIds.has(contact.id))
+    console.log(`📧 After SF Campaign filter: ${contacts.length} contacts`)
+  }
+
+  // Filter by tags if specified (OR logic - contact has any of the selected tags)
   if (campaign.filter_tags && campaign.filter_tags.length > 0) {
     contacts = contacts.filter((contact) =>
       campaign.filter_tags.some((tag) => contact.tags?.includes(tag))
     )
+    console.log(`📧 After tag filter: ${contacts.length} contacts`)
   }
 
-  // 5. Update campaign status
+  // 6. Update campaign status
   await supabase
     .from('campaigns')
     .update({
@@ -140,7 +170,7 @@ async function sendCampaignById(campaignId) {
     })
     .eq('id', campaignId)
 
-  // 6. Send emails
+  // 7. Send emails
   const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
   const mailingAddress = client.mailing_address || 'No mailing address configured'
   const utmParams = campaign.utm_params || ''

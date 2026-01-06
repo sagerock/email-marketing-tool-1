@@ -677,32 +677,61 @@ function CreateCampaignModal({
     }
   }, [campaign])
 
-  // Fetch filtered count when tags change
+  // Fetch filtered count when tags or SF campaign changes
   useEffect(() => {
-    if (formData.filter_tags.length > 0) {
-      fetchFilteredTagCount(formData.filter_tags)
+    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id) {
+      fetchFilteredCount(formData.filter_tags, formData.salesforce_campaign_id)
     } else {
       setFilteredTagCount(null)
     }
-  }, [formData.filter_tags])
+  }, [formData.filter_tags, formData.salesforce_campaign_id])
 
-  const fetchFilteredTagCount = async (tags: string[]) => {
-    if (tags.length === 0) {
-      setFilteredTagCount(null)
-      return
-    }
-
+  const fetchFilteredCount = async (tags: string[], sfCampaignId: string) => {
     // Increment version and capture it for this request
     countRequestVersion.current += 1
     const thisRequestVersion = countRequestVersion.current
 
     try {
-      const { count, error } = await supabase
+      let contactIds: string[] | null = null
+
+      // If SF Campaign is selected, get contacts from that campaign first
+      if (sfCampaignId) {
+        const { data: members, error: membersError } = await supabase
+          .from('salesforce_campaign_members')
+          .select('contact_id')
+          .eq('salesforce_campaign_id', sfCampaignId)
+          .eq('client_id', clientId)
+
+        if (membersError) throw membersError
+        contactIds = members?.map(m => m.contact_id) || []
+
+        // If no contacts in the campaign, count is 0
+        if (contactIds.length === 0) {
+          if (thisRequestVersion === countRequestVersion.current) {
+            setFilteredTagCount(0)
+          }
+          return
+        }
+      }
+
+      // Build the count query
+      let query = supabase
         .from('contacts')
         .select('*', { count: 'exact', head: true })
         .eq('client_id', clientId)
         .eq('unsubscribed', false)
-        .overlaps('tags', tags)
+
+      // Filter by SF Campaign contact IDs if applicable
+      if (contactIds) {
+        query = query.in('id', contactIds)
+      }
+
+      // Filter by tags if applicable
+      if (tags.length > 0) {
+        query = query.overlaps('tags', tags)
+      }
+
+      const { count, error } = await query
 
       if (error) throw error
 
@@ -780,9 +809,12 @@ function CreateCampaignModal({
   }
 
   const getRecipientCount = () => {
-    if (formData.filter_tags.length === 0) return totalContactCount
-    // Use database count for accurate OR logic filtering
-    return filteredTagCount
+    // If any filter is active, use the filtered count
+    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id) {
+      return filteredTagCount
+    }
+    // No filters, return total count
+    return totalContactCount
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -944,12 +976,8 @@ function CreateCampaignModal({
                 <span className="text-gray-600 ml-2">→ Email</span>
               </div>
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
-                <code className="text-blue-700 font-mono">{'{{campaign_name}}'}</code>
-                <span className="text-gray-600 ml-2">→ SF Campaign/tradeshow name</span>
-              </div>
-              <div className="bg-white rounded px-2 py-1.5 border border-blue-100 col-span-2">
                 <code className="text-blue-700 font-mono">{'{{mailing_address}}'}</code>
-                <span className="text-gray-600 ml-2">→ Your mailing address (CAN-SPAM required)</span>
+                <span className="text-gray-600 ml-2">→ Mailing address (CAN-SPAM)</span>
               </div>
             </div>
             <div className="mt-3 pt-3 border-t border-blue-200">
@@ -964,30 +992,6 @@ function CreateCampaignModal({
               </div>
             </div>
           </div>
-
-          {/* Salesforce Campaign Link */}
-          {salesforceCampaigns.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Link to Salesforce Campaign (optional)
-              </label>
-              <select
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                value={formData.salesforce_campaign_id}
-                onChange={(e) => setFormData({ ...formData, salesforce_campaign_id: e.target.value })}
-              >
-                <option value="">No Salesforce Campaign</option>
-                {salesforceCampaigns.map((sfCampaign) => (
-                  <option key={sfCampaign.id} value={sfCampaign.id}>
-                    {sfCampaign.name} {sfCampaign.type ? `(${sfCampaign.type})` : ''}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-1 text-xs text-gray-500">
-                Links this campaign to a Salesforce Campaign. The <code className="bg-gray-100 px-1 rounded">{'{{campaign_name}}'}</code> merge tag will be replaced with the Salesforce Campaign name.
-              </p>
-            </div>
-          )}
 
           <Input
             label="Email Subject *"
@@ -1066,28 +1070,69 @@ function CreateCampaignModal({
             </p>
           </div>
 
-          {allTags.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Target Recipients by Tags (optional)
-              </label>
-              <div className="flex flex-wrap gap-2 p-3 border border-gray-300 rounded-md">
-                {allTags.map((tag) => (
-                  <Badge
-                    key={tag}
-                    variant={formData.filter_tags.includes(tag) ? 'info' : 'default'}
-                    className="cursor-pointer hover:opacity-80"
-                    onClick={() => toggleTag(tag)}
-                  >
-                    {tag}
-                  </Badge>
-                ))}
+          {/* Recipient Targeting */}
+          <div className="border border-gray-200 rounded-lg p-4 space-y-4">
+            <h3 className="text-sm font-semibold text-gray-900">
+              Target Recipients
+            </h3>
+
+            {/* Salesforce Campaign Filter */}
+            {salesforceCampaigns.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Salesforce Campaign (optional)
+                </label>
+                <select
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  value={formData.salesforce_campaign_id}
+                  onChange={(e) => setFormData({ ...formData, salesforce_campaign_id: e.target.value })}
+                >
+                  <option value="">All contacts (no campaign filter)</option>
+                  {salesforceCampaigns.map((sfCampaign) => (
+                    <option key={sfCampaign.id} value={sfCampaign.id}>
+                      {sfCampaign.name} {sfCampaign.type ? `(${sfCampaign.type})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  Send only to contacts who are members of this Salesforce Campaign (e.g., tradeshow attendees)
+                </p>
               </div>
-              <p className="mt-1 text-sm text-gray-500">
+            )}
+
+            {/* Tags Filter */}
+            {allTags.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Filter by Tags (optional)
+                </label>
+                <div className="flex flex-wrap gap-2 p-3 border border-gray-300 rounded-md bg-gray-50">
+                  {allTags.map((tag) => (
+                    <Badge
+                      key={tag}
+                      variant={formData.filter_tags.includes(tag) ? 'info' : 'default'}
+                      className="cursor-pointer hover:opacity-80"
+                      onClick={() => toggleTag(tag)}
+                    >
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+                {formData.salesforce_campaign_id && formData.filter_tags.length > 0 && (
+                  <p className="mt-1 text-xs text-amber-600">
+                    ⚠️ Both filters active: will send to contacts in the SF Campaign who also have selected tags
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Recipient Count */}
+            <div className="pt-2 border-t border-gray-200">
+              <p className="text-sm font-medium text-gray-900">
                 {getRecipientCount() !== null ? getRecipientCount() : '...'} recipient(s) will receive this campaign
               </p>
             </div>
-          )}
+          </div>
 
           <Input
             label="Schedule Send Time (optional)"
