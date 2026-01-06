@@ -288,11 +288,11 @@ app.post('/api/send-campaign', async (req, res) => {
 
     console.log(`📧 Fetched ${allContacts.length} total contacts for campaign`)
 
-    // Filter by tags if specified
+    // Filter by tags if specified (OR logic - contact has any of the selected tags)
     let contacts = allContacts
     if (campaign.filter_tags && campaign.filter_tags.length > 0) {
       contacts = contacts.filter((contact) =>
-        campaign.filter_tags.every((tag) => contact.tags?.includes(tag))
+        campaign.filter_tags.some((tag) => contact.tags?.includes(tag))
       )
     }
 

@@ -454,9 +454,9 @@ function CreateCampaignModal({
 
   const getRecipientCount = () => {
     if (formData.filter_tags.length === 0) return totalContactCount
-    // For tag filtering, count contacts that have all selected tags
+    // For tag filtering, count contacts that have any of the selected tags (OR logic)
     return contacts.filter((contact) =>
-      formData.filter_tags.every((tag) => contact.tags?.includes(tag))
+      formData.filter_tags.some((tag) => contact.tags?.includes(tag))
     ).length
   }
 

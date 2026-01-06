@@ -87,7 +87,7 @@ export default function Contacts() {
         .from('contacts')
         .select('*')
         .eq('client_id', selectedClient.id)
-        .contains('tags', selectedTags)
+        .overlaps('tags', selectedTags)
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -147,9 +147,9 @@ export default function Contacts() {
   // For backwards compatibility with modals that expect allTags as string[]
   const allTags = availableTags.map(t => t.name)
 
-  // Calculate filtered count from selected tags (uses smallest tag count as estimate)
+  // Calculate filtered count from selected tags (uses largest tag count as estimate for OR logic)
   const filteredCount = selectedTags.length > 0
-    ? Math.min(...selectedTags.map(tagName => {
+    ? Math.max(...selectedTags.map(tagName => {
         const tag = availableTags.find(t => t.name === tagName)
         return tag?.contact_count || 0
       }))
