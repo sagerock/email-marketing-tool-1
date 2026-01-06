@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Client, VerifiedSender } from '../types/index.js'
+import type { Client, VerifiedSender, IndustryLink } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 // Settings page - includes client management, Salesforce integration, and UTM tracking
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2 } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
 
@@ -46,12 +46,103 @@ export default function Settings() {
     clientSecret: '',
   })
 
-  // Fetch Salesforce status when selected client changes
+  // Industry Links state
+  const [industryLinks, setIndustryLinks] = useState<IndustryLink[]>([])
+  const [showAddIndustryLink, setShowAddIndustryLink] = useState(false)
+  const [editingIndustryLink, setEditingIndustryLink] = useState<IndustryLink | null>(null)
+  const [newIndustryLink, setNewIndustryLink] = useState({ industry: '', link_url: '' })
+  const [savingIndustryLink, setSavingIndustryLink] = useState(false)
+
+  // Fetch Salesforce status and industry links when selected client changes
   useEffect(() => {
     if (selectedClient) {
       fetchSalesforceStatus()
+      fetchIndustryLinks()
     }
   }, [selectedClient])
+
+  // Industry Links functions
+  const fetchIndustryLinks = async () => {
+    if (!selectedClient) return
+    try {
+      const { data, error } = await supabase
+        .from('industry_links')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('industry', { ascending: true })
+
+      if (error) throw error
+      setIndustryLinks(data || [])
+    } catch (error) {
+      console.error('Error fetching industry links:', error)
+    }
+  }
+
+  const saveIndustryLink = async () => {
+    if (!selectedClient) return
+    if (!newIndustryLink.industry.trim() || !newIndustryLink.link_url.trim()) {
+      alert('Please fill in both Industry and URL')
+      return
+    }
+
+    setSavingIndustryLink(true)
+    try {
+      if (editingIndustryLink) {
+        const { error } = await supabase
+          .from('industry_links')
+          .update({
+            industry: newIndustryLink.industry.trim(),
+            link_url: newIndustryLink.link_url.trim(),
+          })
+          .eq('id', editingIndustryLink.id)
+
+        if (error) throw error
+      } else {
+        const { error } = await supabase
+          .from('industry_links')
+          .insert({
+            industry: newIndustryLink.industry.trim(),
+            link_url: newIndustryLink.link_url.trim(),
+            client_id: selectedClient.id,
+          })
+
+        if (error) {
+          if (error.message.includes('duplicate') || error.message.includes('unique')) {
+            alert('An entry for this industry already exists')
+            return
+          }
+          throw error
+        }
+      }
+
+      setNewIndustryLink({ industry: '', link_url: '' })
+      setShowAddIndustryLink(false)
+      setEditingIndustryLink(null)
+      fetchIndustryLinks()
+    } catch (error) {
+      console.error('Error saving industry link:', error)
+      alert('Failed to save industry link')
+    } finally {
+      setSavingIndustryLink(false)
+    }
+  }
+
+  const deleteIndustryLink = async (id: string) => {
+    if (!confirm('Are you sure you want to delete this industry link?')) return
+
+    try {
+      const { error } = await supabase
+        .from('industry_links')
+        .delete()
+        .eq('id', id)
+
+      if (error) throw error
+      fetchIndustryLinks()
+    } catch (error) {
+      console.error('Error deleting industry link:', error)
+      alert('Failed to delete industry link')
+    }
+  }
 
   const handleDelete = async (id: string) => {
     if (
@@ -490,6 +581,133 @@ export default function Settings() {
                 )}
               </div>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Industry Links Card */}
+      {selectedClient && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Link2 className="h-5 w-5" />
+              Industry Links
+              <span className="text-sm font-normal text-gray-500">
+                ({selectedClient.name})
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-gray-600 mb-4">
+              Map industry names to URLs for dynamic email content. When sending emails, the
+              <code className="mx-1 px-1 bg-gray-100 rounded text-xs">{'{{industry_link}}'}</code>
+              merge tag will be replaced with the URL for the contact's industry.
+            </p>
+
+            {/* Industry Links Table */}
+            {industryLinks.length > 0 ? (
+              <div className="border rounded-lg overflow-hidden mb-4">
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">Industry</th>
+                      <th className="text-left px-4 py-3 text-sm font-medium text-gray-700">URL</th>
+                      <th className="text-right px-4 py-3 text-sm font-medium text-gray-700">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {industryLinks.map((link) => (
+                      <tr key={link.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 text-sm text-gray-900">{link.industry}</td>
+                        <td className="px-4 py-3 text-sm">
+                          <a
+                            href={link.link_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline inline-flex items-center gap-1"
+                          >
+                            {link.link_url.length > 50 ? link.link_url.substring(0, 50) + '...' : link.link_url}
+                            <ExternalLink className="h-3 w-3" />
+                          </a>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right">
+                          <button
+                            onClick={() => {
+                              setEditingIndustryLink(link)
+                              setNewIndustryLink({ industry: link.industry, link_url: link.link_url })
+                              setShowAddIndustryLink(true)
+                            }}
+                            className="text-gray-600 hover:text-gray-900 mr-2"
+                          >
+                            <Edit2 className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => deleteIndustryLink(link.id)}
+                            className="text-red-600 hover:text-red-800"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500 border rounded-lg mb-4">
+                <Link2 className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                <p>No industry links configured yet.</p>
+                <p className="text-sm">Add links to enable dynamic industry URLs in emails.</p>
+              </div>
+            )}
+
+            {/* Add/Edit Form */}
+            {showAddIndustryLink ? (
+              <div className="p-4 border rounded-lg bg-gray-50">
+                <h4 className="font-medium mb-3">
+                  {editingIndustryLink ? 'Edit Industry Link' : 'Add Industry Link'}
+                </h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <Input
+                    label="Industry Name"
+                    placeholder="e.g., Pharmaceutical"
+                    value={newIndustryLink.industry}
+                    onChange={(e) => setNewIndustryLink({ ...newIndustryLink, industry: e.target.value })}
+                  />
+                  <Input
+                    label="URL"
+                    placeholder="https://example.com/industries/pharma"
+                    value={newIndustryLink.link_url}
+                    onChange={(e) => setNewIndustryLink({ ...newIndustryLink, link_url: e.target.value })}
+                  />
+                </div>
+                <div className="flex gap-2 mt-4">
+                  <Button onClick={saveIndustryLink} disabled={savingIndustryLink}>
+                    {savingIndustryLink ? 'Saving...' : editingIndustryLink ? 'Update' : 'Add'}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      setShowAddIndustryLink(false)
+                      setEditingIndustryLink(null)
+                      setNewIndustryLink({ industry: '', link_url: '' })
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <Button onClick={() => setShowAddIndustryLink(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Industry Link
+              </Button>
+            )}
+
+            <p className="text-xs text-gray-500 mt-4">
+              Tip: If a contact's industry doesn't match any entry, the default fallback URL is
+              <code className="mx-1 px-1 bg-gray-100 rounded">https://alconox.com/industries/</code>
+            </p>
           </CardContent>
         </Card>
       )}

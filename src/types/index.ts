@@ -210,3 +210,40 @@ export interface SequenceStats {
   bounces: number
   unsubscribes: number
 }
+
+// Salesforce Campaign Integration Types
+export interface SalesforceCampaign {
+  id: string
+  salesforce_id: string
+  name: string
+  type?: string
+  status?: string
+  start_date?: string
+  end_date?: string
+  client_id: string
+  created_at: string
+  updated_at: string
+}
+
+export interface SalesforceCampaignMember {
+  id: string
+  salesforce_id: string
+  salesforce_campaign_id: string
+  contact_id: string
+  status?: string
+  synced_at: string
+  client_id: string
+  created_at: string
+  // Joined fields
+  contact?: Contact
+  campaign?: SalesforceCampaign
+}
+
+export interface IndustryLink {
+  id: string
+  industry: string
+  link_url: string
+  client_id: string
+  created_at: string
+  updated_at: string
+}
