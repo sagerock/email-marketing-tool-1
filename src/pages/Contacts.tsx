@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
 import type { Contact, Tag } from '../types/index.js'
@@ -21,6 +21,7 @@ export default function Contacts() {
   const [loading, setLoading] = useState(true)
   const [showContacts, setShowContacts] = useState(false)
   const [filteredTagCount, setFilteredTagCount] = useState<number | null>(null)
+  const countRequestVersion = useRef(0)
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -40,7 +41,7 @@ export default function Contacts() {
     setContacts([])
     setShowContacts(false)
     if (selectedTags.length > 0 && selectedClient) {
-      fetchFilteredTagCount()
+      fetchFilteredTagCount(selectedTags)
     } else {
       setFilteredTagCount(null)
     }
@@ -81,21 +82,29 @@ export default function Contacts() {
     }
   }
 
-  const fetchFilteredTagCount = async () => {
-    if (!selectedClient || selectedTags.length === 0) {
+  const fetchFilteredTagCount = async (tags: string[]) => {
+    if (!selectedClient || tags.length === 0) {
       setFilteredTagCount(null)
       return
     }
+
+    // Increment version and capture it for this request
+    countRequestVersion.current += 1
+    const thisRequestVersion = countRequestVersion.current
 
     try {
       const { count, error } = await supabase
         .from('contacts')
         .select('*', { count: 'exact', head: true })
         .eq('client_id', selectedClient.id)
-        .overlaps('tags', selectedTags)
+        .overlaps('tags', tags)
 
       if (error) throw error
-      setFilteredTagCount(count || 0)
+
+      // Only update if this is still the latest request
+      if (thisRequestVersion === countRequestVersion.current) {
+        setFilteredTagCount(count || 0)
+      }
     } catch (error) {
       console.error('Error fetching filtered count:', error)
     }
