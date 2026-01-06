@@ -57,6 +57,162 @@ const supabase = createClient(
 )
 
 /**
+ * Helper function to send a campaign by ID
+ * Used by both the API endpoint and the scheduled campaign cron job
+ */
+async function sendCampaignById(campaignId) {
+  // 1. Fetch campaign
+  const { data: campaign, error: campaignError } = await supabase
+    .from('campaigns')
+    .select('*')
+    .eq('id', campaignId)
+    .single()
+
+  if (campaignError) throw campaignError
+
+  // 2. Fetch client to get API key
+  const { data: client, error: clientError } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('id', campaign.client_id)
+    .single()
+
+  if (clientError) throw clientError
+
+  console.log('📧 Sending campaign for client:', client.name, '| IP Pool:', client.ip_pool || '(none)')
+
+  // Set SendGrid API key
+  sgMail.setApiKey(client.sendgrid_api_key)
+
+  // 3. Fetch template if specified
+  let htmlContent = ''
+  if (campaign.template_id) {
+    const { data: template } = await supabase
+      .from('templates')
+      .select('html_content')
+      .eq('id', campaign.template_id)
+      .single()
+
+    htmlContent = template?.html_content || ''
+  }
+
+  // 4. Fetch ALL contacts (paginated to handle large lists)
+  let allContacts = []
+  let page = 0
+  const pageSize = 1000
+
+  while (true) {
+    let query = supabase
+      .from('contacts')
+      .select('*')
+      .eq('unsubscribed', false)
+      .eq('client_id', campaign.client_id)
+      .range(page * pageSize, (page + 1) * pageSize - 1)
+
+    const { data, error } = await query
+
+    if (error) throw error
+    if (!data || data.length === 0) break
+
+    allContacts = allContacts.concat(data)
+    page++
+
+    // Safety check - stop if we've fetched less than a full page
+    if (data.length < pageSize) break
+  }
+
+  console.log(`📧 Fetched ${allContacts.length} total contacts for campaign`)
+
+  // Filter by tags if specified (OR logic - contact has any of the selected tags)
+  let contacts = allContacts
+  if (campaign.filter_tags && campaign.filter_tags.length > 0) {
+    contacts = contacts.filter((contact) =>
+      campaign.filter_tags.some((tag) => contact.tags?.includes(tag))
+    )
+  }
+
+  // 5. Update campaign status
+  await supabase
+    .from('campaigns')
+    .update({
+      status: 'sending',
+      recipient_count: contacts.length,
+    })
+    .eq('id', campaignId)
+
+  // 6. Send emails
+  const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
+  const mailingAddress = client.mailing_address || 'No mailing address configured'
+  const utmParams = campaign.utm_params || ''
+
+  // Helper function to append UTM params to URLs
+  const appendUtmParams = (html, params) => {
+    if (!params) return html
+    // Match href attributes with http/https URLs (not mailto:, tel:, #, etc.)
+    return html.replace(/href="(https?:\/\/[^"]+)"/gi, (match, url) => {
+      // Don't add UTM to unsubscribe URLs (they already have params)
+      if (url.includes('unsubscribe')) return match
+      const separator = url.includes('?') ? '&' : '?'
+      return `href="${url}${separator}${params}"`
+    })
+  }
+
+  const emailPromises = contacts.map((contact) => {
+    // Generate unsubscribe URL
+    const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}`
+
+    // Replace merge tags in HTML
+    let personalizedHtml = htmlContent
+      .replace(/{{email}}/gi, contact.email)
+      .replace(/{{first_name}}/gi, contact.first_name || '')
+      .replace(/{{last_name}}/gi, contact.last_name || '')
+      .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
+      .replace(/{{mailing_address}}/gi, mailingAddress)
+
+    // Append UTM params to all links
+    personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
+
+    const msg = {
+      to: contact.email,
+      from: {
+        email: campaign.from_email,
+        name: campaign.from_name,
+      },
+      replyTo: campaign.reply_to || undefined,
+      subject: campaign.subject,
+      html: personalizedHtml,
+      customArgs: {
+        campaign_id: campaignId,
+      },
+      ipPoolName: client.ip_pool || undefined,
+      // Add List-Unsubscribe header for one-click unsubscribe
+      headers: {
+        'List-Unsubscribe': `<${unsubscribeUrl}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
+    }
+
+    return sgMail.send(msg).catch((error) => {
+      console.error(`Failed to send to ${contact.email}:`, error)
+      return null
+    })
+  })
+
+  await Promise.all(emailPromises)
+
+  // 7. Update campaign to sent
+  await supabase
+    .from('campaigns')
+    .update({
+      status: 'sent',
+      sent_at: new Date().toISOString(),
+    })
+    .eq('id', campaignId)
+
+  return { success: true, sent: contacts.length }
+}
+
+/**
  * Send test email(s)
  */
 app.post('/api/send-test-email', async (req, res) => {
@@ -222,161 +378,13 @@ app.post('/api/send-test-email', async (req, res) => {
 })
 
 /**
- * Send a campaign
+ * Send a campaign (manual trigger)
  */
 app.post('/api/send-campaign', async (req, res) => {
   try {
     const { campaignId } = req.body
-
-    // 1. Fetch campaign
-    const { data: campaign, error: campaignError } = await supabase
-      .from('campaigns')
-      .select('*')
-      .eq('id', campaignId)
-      .single()
-
-    if (campaignError) throw campaignError
-
-    // 2. Fetch client to get API key
-    const { data: client, error: clientError } = await supabase
-      .from('clients')
-      .select('*')
-      .eq('id', campaign.client_id)
-      .single()
-
-    if (clientError) throw clientError
-
-    console.log('📧 Sending campaign for client:', client.name, '| IP Pool:', client.ip_pool || '(none)')
-
-    // Set SendGrid API key
-    sgMail.setApiKey(client.sendgrid_api_key)
-
-    // 3. Fetch template if specified
-    let htmlContent = ''
-    if (campaign.template_id) {
-      const { data: template } = await supabase
-        .from('templates')
-        .select('html_content')
-        .eq('id', campaign.template_id)
-        .single()
-
-      htmlContent = template?.html_content || ''
-    }
-
-    // 4. Fetch ALL contacts (paginated to handle large lists)
-    let allContacts = []
-    let page = 0
-    const pageSize = 1000
-
-    while (true) {
-      let query = supabase
-        .from('contacts')
-        .select('*')
-        .eq('unsubscribed', false)
-        .eq('client_id', campaign.client_id)
-        .range(page * pageSize, (page + 1) * pageSize - 1)
-
-      const { data, error } = await query
-
-      if (error) throw error
-      if (!data || data.length === 0) break
-
-      allContacts = allContacts.concat(data)
-      page++
-
-      // Safety check - stop if we've fetched less than a full page
-      if (data.length < pageSize) break
-    }
-
-    console.log(`📧 Fetched ${allContacts.length} total contacts for campaign`)
-
-    // Filter by tags if specified (OR logic - contact has any of the selected tags)
-    let contacts = allContacts
-    if (campaign.filter_tags && campaign.filter_tags.length > 0) {
-      contacts = contacts.filter((contact) =>
-        campaign.filter_tags.some((tag) => contact.tags?.includes(tag))
-      )
-    }
-
-    // 5. Update campaign status
-    await supabase
-      .from('campaigns')
-      .update({
-        status: 'sending',
-        recipient_count: contacts.length,
-      })
-      .eq('id', campaignId)
-
-    // 6. Send emails
-    const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
-    const mailingAddress = client.mailing_address || 'No mailing address configured'
-    const utmParams = campaign.utm_params || ''
-
-    // Helper function to append UTM params to URLs
-    const appendUtmParams = (html, params) => {
-      if (!params) return html
-      // Match href attributes with http/https URLs (not mailto:, tel:, #, etc.)
-      return html.replace(/href="(https?:\/\/[^"]+)"/gi, (match, url) => {
-        // Don't add UTM to unsubscribe URLs (they already have params)
-        if (url.includes('unsubscribe')) return match
-        const separator = url.includes('?') ? '&' : '?'
-        return `href="${url}${separator}${params}"`
-      })
-    }
-
-    const emailPromises = contacts.map((contact) => {
-      // Generate unsubscribe URL
-      const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}`
-
-      // Replace merge tags in HTML
-      let personalizedHtml = htmlContent
-        .replace(/{{email}}/gi, contact.email)
-        .replace(/{{first_name}}/gi, contact.first_name || '')
-        .replace(/{{last_name}}/gi, contact.last_name || '')
-        .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
-        .replace(/{{mailing_address}}/gi, mailingAddress)
-
-      // Append UTM params to all links
-      personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
-
-      const msg = {
-        to: contact.email,
-        from: {
-          email: campaign.from_email,
-          name: campaign.from_name,
-        },
-        replyTo: campaign.reply_to || undefined,
-        subject: campaign.subject,
-        html: personalizedHtml,
-        customArgs: {
-          campaign_id: campaignId,
-        },
-        ipPoolName: client.ip_pool || undefined,
-        // Add List-Unsubscribe header for one-click unsubscribe
-        headers: {
-          'List-Unsubscribe': `<${unsubscribeUrl}>`,
-          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-        },
-      }
-
-      return sgMail.send(msg).catch((error) => {
-        console.error(`Failed to send to ${contact.email}:`, error)
-        return null
-      })
-    })
-
-    await Promise.all(emailPromises)
-
-    // 7. Update campaign to sent
-    await supabase
-      .from('campaigns')
-      .update({
-        status: 'sent',
-        sent_at: new Date().toISOString(),
-      })
-      .eq('id', campaignId)
-
-    res.json({ success: true, sent: contacts.length })
+    const result = await sendCampaignById(campaignId)
+    res.json(result)
   } catch (error) {
     console.error('Error sending campaign:', error)
 
@@ -1399,9 +1407,38 @@ app.get('/api/salesforce/preview', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`)
 
-  // Start cron job to process sequence emails every minute
+  // Start cron job to process scheduled campaigns and sequence emails every minute
   cron.schedule('* * * * *', async () => {
     try {
+      // ============ PART 0: Process scheduled campaigns ============
+      const now = new Date().toISOString()
+      const { data: scheduledCampaigns, error: scheduledError } = await supabase
+        .from('campaigns')
+        .select('id, name')
+        .eq('status', 'scheduled')
+        .lte('scheduled_at', now)
+
+      if (scheduledError) {
+        console.error('❌ Error fetching scheduled campaigns:', scheduledError.message)
+      } else if (scheduledCampaigns && scheduledCampaigns.length > 0) {
+        console.log(`📅 Found ${scheduledCampaigns.length} scheduled campaign(s) to send`)
+
+        for (const campaign of scheduledCampaigns) {
+          try {
+            console.log(`📧 Sending scheduled campaign: ${campaign.name} (${campaign.id})`)
+            const result = await sendCampaignById(campaign.id)
+            console.log(`✅ Scheduled campaign sent: ${campaign.name} - ${result.sent} emails`)
+          } catch (campaignError) {
+            console.error(`❌ Failed to send scheduled campaign ${campaign.name}:`, campaignError.message)
+            // Mark campaign as failed
+            await supabase
+              .from('campaigns')
+              .update({ status: 'failed' })
+              .eq('id', campaign.id)
+          }
+        }
+      }
+
       // ============ PART 1: Auto-enroll contacts based on tag triggers ============
       const { data: activeSequences } = await supabase
         .from('email_sequences')
@@ -1707,7 +1744,7 @@ app.listen(PORT, () => {
     }
   })
 
-  console.log('✅ Sequence processor cron job started (runs every minute)')
+  console.log('✅ Cron job started (runs every minute) - processes scheduled campaigns and automation sequences')
 
   // Daily Salesforce sync at 6 AM UTC
   cron.schedule('0 6 * * *', async () => {
