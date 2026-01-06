@@ -104,7 +104,7 @@ app.post('/api/send-test-email', async (req, res) => {
       throw new Error(`Client not found: ${clientError.message}`)
     }
 
-    console.log('✅ Client found:', client.name)
+    console.log('✅ Client found:', client.name, '| IP Pool:', client.ip_pool || '(none)')
 
     if (!client.sendgrid_api_key) {
       throw new Error('Client does not have a SendGrid API key configured')
@@ -245,6 +245,8 @@ app.post('/api/send-campaign', async (req, res) => {
       .single()
 
     if (clientError) throw clientError
+
+    console.log('📧 Sending campaign for client:', client.name, '| IP Pool:', client.ip_pool || '(none)')
 
     // Set SendGrid API key
     sgMail.setApiKey(client.sendgrid_api_key)
