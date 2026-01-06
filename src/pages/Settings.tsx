@@ -222,11 +222,11 @@ export default function Settings() {
                         {selectedClient.sendgrid_api_key.substring(0, 20)}...
                       </span>
                     </div>
-                    {selectedClient.ip_pools && selectedClient.ip_pools.length > 0 && (
+                    {selectedClient.ip_pool && (
                       <div>
-                        <span className="text-gray-500">IP Pools: </span>
+                        <span className="text-gray-500">IP Pool: </span>
                         <span className="text-gray-900">
-                          {selectedClient.ip_pools.join(', ')}
+                          {selectedClient.ip_pool}
                         </span>
                       </div>
                     )}
@@ -530,7 +530,7 @@ function AddClientModal({
   const [formData, setFormData] = useState({
     name: '',
     sendgrid_api_key: '',
-    ip_pools: '',
+    ip_pool: '',
     mailing_address: '',
     default_utm_params: '',
   })
@@ -543,15 +543,10 @@ function AddClientModal({
     setSubmitting(true)
 
     try {
-      const ip_pools = formData.ip_pools
-        .split(',')
-        .map((p) => p.trim())
-        .filter(Boolean)
-
       const { error } = await supabase.from('clients').insert({
         name: formData.name,
         sendgrid_api_key: formData.sendgrid_api_key,
-        ip_pools: ip_pools.length > 0 ? ip_pools : null,
+        ip_pool: formData.ip_pool.trim() || null,
         mailing_address: formData.mailing_address || null,
         default_utm_params: formData.default_utm_params || null,
         verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
@@ -596,11 +591,11 @@ function AddClientModal({
             }
           />
           <Input
-            label="IP Pools (comma-separated, optional)"
-            placeholder="pool1, pool2"
-            value={formData.ip_pools}
+            label="IP Pool (optional)"
+            placeholder="my-ip-pool"
+            value={formData.ip_pool}
             onChange={(e) =>
-              setFormData({ ...formData, ip_pools: e.target.value })
+              setFormData({ ...formData, ip_pool: e.target.value })
             }
           />
 
@@ -735,7 +730,7 @@ function EditClientModal({
   const [formData, setFormData] = useState({
     name: client.name,
     sendgrid_api_key: client.sendgrid_api_key,
-    ip_pools: client.ip_pools?.join(', ') || '',
+    ip_pool: client.ip_pool || '',
     mailing_address: client.mailing_address || '',
     default_utm_params: client.default_utm_params || '',
   })
@@ -750,17 +745,12 @@ function EditClientModal({
     setSubmitting(true)
 
     try {
-      const ip_pools = formData.ip_pools
-        .split(',')
-        .map((p) => p.trim())
-        .filter(Boolean)
-
       const { error} = await supabase
         .from('clients')
         .update({
           name: formData.name,
           sendgrid_api_key: formData.sendgrid_api_key,
-          ip_pools: ip_pools.length > 0 ? ip_pools : null,
+          ip_pool: formData.ip_pool.trim() || null,
           mailing_address: formData.mailing_address || null,
           default_utm_params: formData.default_utm_params || null,
           verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
@@ -806,11 +796,11 @@ function EditClientModal({
             }
           />
           <Input
-            label="IP Pools (comma-separated, optional)"
-            placeholder="pool1, pool2"
-            value={formData.ip_pools}
+            label="IP Pool (optional)"
+            placeholder="my-ip-pool"
+            value={formData.ip_pool}
             onChange={(e) =>
-              setFormData({ ...formData, ip_pools: e.target.value })
+              setFormData({ ...formData, ip_pool: e.target.value })
             }
           />
 
