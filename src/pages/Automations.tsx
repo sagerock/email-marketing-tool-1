@@ -713,6 +713,24 @@ function CreateSequenceModal({
                             ))}
                           </select>
                         </div>
+                        {/* Merge Tags Help - only show for first step */}
+                        {index === 0 && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-xs">
+                            <p className="font-semibold text-blue-900 mb-1">📝 Available Merge Tags:</p>
+                            <div className="grid grid-cols-2 gap-1 text-blue-800">
+                              <span><code className="bg-white px-1 rounded">{'{{first_name}}'}</code> → First name</span>
+                              <span><code className="bg-white px-1 rounded">{'{{last_name}}'}</code> → Last name</span>
+                              <span><code className="bg-white px-1 rounded">{'{{email}}'}</code> → Email</span>
+                              <span><code className="bg-white px-1 rounded">{'{{unsubscribe_url}}'}</code> → Unsubscribe</span>
+                              <span><code className="bg-white px-1 rounded">{'{{campaign_name}}'}</code> → Tradeshow name</span>
+                              <span><code className="bg-white px-1 rounded">{'{{industry_link}}'}</code> → Industry URL</span>
+                            </div>
+                            <p className="text-blue-700 mt-1">
+                              <code>{'{{campaign_name}}'}</code> uses the Salesforce Campaign that triggered enrollment.
+                              <code className="ml-1">{'{{industry_link}}'}</code> uses the contact's industry.
+                            </p>
+                          </div>
+                        )}
                       </div>
                       {sequenceSteps.length > 1 && (
                         <button
@@ -1071,6 +1089,24 @@ function EditSequenceModal({
                             ))}
                           </select>
                         </div>
+                        {/* Merge Tags Help - only show for first step */}
+                        {index === 0 && (
+                          <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-xs">
+                            <p className="font-semibold text-blue-900 mb-1">📝 Available Merge Tags:</p>
+                            <div className="grid grid-cols-2 gap-1 text-blue-800">
+                              <span><code className="bg-white px-1 rounded">{'{{first_name}}'}</code> → First name</span>
+                              <span><code className="bg-white px-1 rounded">{'{{last_name}}'}</code> → Last name</span>
+                              <span><code className="bg-white px-1 rounded">{'{{email}}'}</code> → Email</span>
+                              <span><code className="bg-white px-1 rounded">{'{{unsubscribe_url}}'}</code> → Unsubscribe</span>
+                              <span><code className="bg-white px-1 rounded">{'{{campaign_name}}'}</code> → Tradeshow name</span>
+                              <span><code className="bg-white px-1 rounded">{'{{industry_link}}'}</code> → Industry URL</span>
+                            </div>
+                            <p className="text-blue-700 mt-1">
+                              <code>{'{{campaign_name}}'}</code> uses the Salesforce Campaign that triggered enrollment.
+                              <code className="ml-1">{'{{industry_link}}'}</code> uses the contact's industry.
+                            </p>
+                          </div>
+                        )}
                         <div className="text-xs text-gray-500">
                           {step.sent_count} sent · {step.open_count} opens · {step.click_count} clicks
                         </div>
