@@ -123,11 +123,83 @@ In Salesforce Setup:
 - **"INVALID_SESSION_ID"**: The "Run As" user may not have API permissions
 - **Field not found in sync**: Check the field API name using "View Fields" button
 
+### Salesforce Campaign Integration
+
+Syncs Salesforce Campaigns and Campaign Members to enable tradeshow follow-up automations.
+
+**Database Tables:**
+- `salesforce_campaigns` - Synced SF Campaign records (id, name, type, status, dates)
+- `salesforce_campaign_members` - Links contacts to campaigns
+- `industry_links` - Maps industry names to URLs for dynamic content
+
+**Endpoints:**
+- `POST /api/salesforce/sync-campaigns` - Sync campaigns & members (runs in background)
+- `POST /api/sequences/:id/enroll-campaign-members` - Enroll existing campaign members
+
+**Auto-Sync:** Campaigns sync daily at 6 AM UTC along with contacts.
+
+**Manual Sync:** Settings page → "Sync Campaigns" button
+
+### Industry Links
+
+Maps contact industry values to URLs for personalized email content.
+
+**Setup:** Settings page → Industry Links section
+- Add industry name (must match Salesforce exactly, e.g., "Biotech/Biopharma")
+- Add corresponding URL (e.g., "https://example.com/biotech")
+- Default fallback: `https://alconox.com/industries/`
+
+**Usage:** Use `{{industry_link}}` merge tag in email templates (see Merge Tags section).
+
 ### Automation Sequences
-- `automation_sequences` defines workflows with trigger conditions
+- `email_sequences` defines workflows with trigger conditions
 - `sequence_steps` contains individual emails with delays
 - `sequence_enrollments` tracks contact progress through sequences
 - `scheduled_emails` queued emails processed by node-cron jobs
+
+**Trigger Types:**
+- `manual` - Manually enroll contacts
+- `tag_added` - Auto-enroll when contact receives a specific tag
+- `salesforce_campaign` - Auto-enroll when lead is added to selected SF Campaign(s)
+
+**Multi-Campaign Triggers:** Sequences can be triggered by multiple SF Campaigns. Use checkbox UI to select campaigns. Leads added to ANY selected campaign will be enrolled.
+
+**Enrolling Existing Members:**
+When you save automation settings with SF Campaign trigger:
+1. Prompt appears: "Enroll existing members?"
+2. **OK** → Enrolls all current campaign members + future members auto-enroll
+3. **Cancel** → Only future members (from syncs) will be enrolled
+
+You can also use the "Enroll Existing Members" button in the Settings tab to manually trigger enrollment later.
+
+### Merge Tags
+
+Available in email templates for personalization:
+
+**Text Tags:**
+- `{{first_name}}` - Contact's first name
+- `{{last_name}}` - Contact's last name
+- `{{email}}` - Contact's email address
+- `{{mailing_address}}` - Client's mailing address (CAN-SPAM required)
+- `{{campaign_name}}` - Salesforce Campaign name (automations only, from trigger campaign)
+
+**URL Tags (must wrap in `<a href="">`)**:
+- `{{unsubscribe_url}}` - Unsubscribe link (CAN-SPAM required)
+- `{{industry_link}}` - Industry-specific URL based on contact's industry field
+
+**Example URL tag usage:**
+```html
+<a href="{{unsubscribe_url}}">Unsubscribe</a>
+<a href="{{industry_link}}">View solutions for your industry</a>
+```
+
+### Campaign Recipient Filtering
+
+Regular campaigns can filter recipients by:
+- **Tags** - Send to contacts with selected tag(s) (OR logic)
+- **Salesforce Campaign** - Send to contacts who are members of a SF Campaign
+
+Both filters can be combined (AND logic) - e.g., "contacts in Tradeshow X who also have tag Y"
 
 ## Key Files
 
@@ -136,18 +208,25 @@ In Salesforce Setup:
 - `src/lib/supabase.ts` - Supabase client initialization
 - `src/lib/utils.ts` - Utilities: `cn()` (class merging), `formatDate()`, `formatDateTime()`
 - `api/server.js` - Express backend with SendGrid and Salesforce integration
-- `supabase/migrations/` - Database schema (run in order: 001-010)
+- `supabase/migrations/` - Database schema (run in order: 001-018)
 
 ## Database Schema
 
-Core tables: `clients`, `contacts`, `templates`, `campaigns`, `analytics_events`, `tags`, `automation_sequences`, `sequence_steps`, `sequence_enrollments`, `scheduled_emails`, `admin_users`
+**Core tables:** `clients`, `contacts`, `templates`, `campaigns`, `analytics_events`, `tags`, `email_sequences`, `sequence_steps`, `sequence_enrollments`, `scheduled_emails`, `admin_users`
 
-Key patterns:
+**Salesforce tables:** `salesforce_campaigns`, `salesforce_campaign_members`, `industry_links`
+
+**Key patterns:**
 - UUIDs for all primary keys
 - `client_id` FK on data tables for multi-tenancy
 - JSONB for flexible fields (`custom_fields`, `trigger_config`)
-- Array columns for tags (`tags text[]`)
+- Array columns for tags (`tags text[]`) and campaign triggers (`trigger_salesforce_campaign_ids uuid[]`)
 - Unique constraint on `(email, client_id)` in contacts
+
+**Key columns:**
+- `campaigns.salesforce_campaign_id` - Links campaign to SF Campaign for recipient filtering
+- `email_sequences.trigger_salesforce_campaign_ids` - Array of SF Campaign IDs that trigger enrollment
+- `contacts.industry` - Used for `{{industry_link}}` merge tag lookup
 
 ## UI Component Library
 
