@@ -1656,127 +1656,147 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
         const membersResult = await conn.query(membersQuery)
         console.log(`  📥 Campaign "${sfCampaign.Name}": ${membersResult.totalSize} Lead members`)
 
-        // 4. For each Lead member, match to our contacts by salesforce_id
+        if (membersResult.records.length === 0) continue
+
+        // Get all Lead IDs from this campaign
+        const leadIds = membersResult.records.map(m => m.LeadId)
+
+        // Batch lookup: find all matching contacts at once
+        const { data: contacts } = await supabase
+          .from('contacts')
+          .select('id, salesforce_id')
+          .eq('client_id', clientId)
+          .in('salesforce_id', leadIds)
+
+        const contactMap = new Map(contacts?.map(c => [c.salesforce_id, c.id]) || [])
+
+        // Get existing members in one query
+        const memberSfIds = membersResult.records.map(m => m.Id)
+        const { data: existingMembers } = await supabase
+          .from('salesforce_campaign_members')
+          .select('salesforce_id')
+          .eq('client_id', clientId)
+          .in('salesforce_id', memberSfIds)
+
+        const existingMemberSet = new Set(existingMembers?.map(m => m.salesforce_id) || [])
+
+        // Prepare batch upsert data
+        const membersToUpsert = []
+        const newMemberContactIds = []
+
         for (const member of membersResult.records) {
-          // Find contact by Salesforce Lead ID
-          const { data: contact } = await supabase
-            .from('contacts')
-            .select('id')
-            .eq('client_id', clientId)
-            .eq('salesforce_id', member.LeadId)
-            .single()
+          const contactId = contactMap.get(member.LeadId)
+          if (!contactId) continue // Lead not synced yet
 
-          if (!contact) {
-            // Lead not yet synced to our contacts table - skip
-            continue
+          const isNew = !existingMemberSet.has(member.Id)
+
+          membersToUpsert.push({
+            salesforce_id: member.Id,
+            salesforce_campaign_id: campaign.id,
+            contact_id: contactId,
+            status: member.Status || null,
+            client_id: clientId,
+            synced_at: new Date().toISOString(),
+          })
+
+          if (isNew) {
+            newMemberContactIds.push(contactId)
           }
+        }
 
-          // Upsert campaign member
-          const { data: existingMember } = await supabase
+        // Batch upsert all members
+        if (membersToUpsert.length > 0) {
+          const { error: batchError } = await supabase
             .from('salesforce_campaign_members')
-            .select('id')
-            .eq('salesforce_id', member.Id)
-            .eq('client_id', clientId)
-            .single()
+            .upsert(membersToUpsert, { onConflict: 'salesforce_id,client_id' })
 
-          const isNewMember = !existingMember
-
-          const { error: memberError } = await supabase
-            .from('salesforce_campaign_members')
-            .upsert({
-              salesforce_id: member.Id,
-              salesforce_campaign_id: campaign.id,
-              contact_id: contact.id,
-              status: member.Status || null,
-              client_id: clientId,
-              synced_at: new Date().toISOString(),
-            }, {
-              onConflict: 'salesforce_id,client_id',
-            })
-
-          if (memberError) {
-            console.error(`Error upserting member:`, memberError)
-            continue
+          if (batchError) {
+            console.error(`Error batch upserting members:`, batchError)
+          } else {
+            membersSynced += membersToUpsert.length
           }
+        }
 
-          membersSynced++
+        // Handle auto-enrollment for new members (if any sequences are configured)
+        if (newMemberContactIds.length > 0) {
+          const { data: sequences } = await supabase
+            .from('email_sequences')
+            .select('*')
+            .eq('client_id', clientId)
+            .eq('status', 'active')
+            .eq('trigger_type', 'salesforce_campaign')
+            .eq('trigger_salesforce_campaign_id', campaign.id)
 
-          // 5. If NEW member, check for campaign-triggered sequences and auto-enroll
-          if (isNewMember) {
-            // Find sequences that trigger on this specific campaign
-            const { data: sequences } = await supabase
-              .from('email_sequences')
-              .select('*')
-              .eq('client_id', clientId)
-              .eq('status', 'active')
-              .eq('trigger_type', 'salesforce_campaign')
-              .eq('trigger_salesforce_campaign_id', campaign.id)
+          if (sequences && sequences.length > 0) {
+            for (const sequence of sequences) {
+              // Get first step
+              const { data: firstStep } = await supabase
+                .from('sequence_steps')
+                .select('*')
+                .eq('sequence_id', sequence.id)
+                .eq('step_order', 1)
+                .single()
 
-            if (sequences && sequences.length > 0) {
-              for (const sequence of sequences) {
-                // Check if already enrolled
-                const { data: existingEnrollment } = await supabase
-                  .from('sequence_enrollments')
-                  .select('id')
-                  .eq('sequence_id', sequence.id)
-                  .eq('contact_id', contact.id)
-                  .single()
+              if (!firstStep) continue
 
-                if (existingEnrollment) continue // Already enrolled
+              // Get already enrolled contacts
+              const { data: existingEnrollments } = await supabase
+                .from('sequence_enrollments')
+                .select('contact_id')
+                .eq('sequence_id', sequence.id)
+                .in('contact_id', newMemberContactIds)
 
-                // Get first step
-                const { data: firstStep } = await supabase
-                  .from('sequence_steps')
-                  .select('*')
-                  .eq('sequence_id', sequence.id)
-                  .eq('step_order', 1)
-                  .single()
+              const enrolledSet = new Set(existingEnrollments?.map(e => e.contact_id) || [])
+              const contactsToEnroll = newMemberContactIds.filter(id => !enrolledSet.has(id))
 
-                if (!firstStep) continue
+              if (contactsToEnroll.length === 0) continue
 
-                // Create enrollment with trigger campaign reference
-                const now = new Date().toISOString()
-                const { data: enrollment, error: enrollError } = await supabase
-                  .from('sequence_enrollments')
-                  .insert({
-                    sequence_id: sequence.id,
-                    contact_id: contact.id,
-                    status: 'active',
-                    current_step: 0,
-                    trigger_campaign_id: campaign.id,
-                    next_email_scheduled_at: now,
-                  })
-                  .select()
-                  .single()
+              const now = new Date().toISOString()
 
-                if (enrollError) {
-                  console.error('Error creating enrollment:', enrollError)
-                  continue
-                }
+              // Batch create enrollments
+              const enrollmentsToCreate = contactsToEnroll.map(contactId => ({
+                sequence_id: sequence.id,
+                contact_id: contactId,
+                status: 'active',
+                current_step: 0,
+                trigger_campaign_id: campaign.id,
+                next_email_scheduled_at: now,
+              }))
 
-                // Schedule first email
-                await supabase.from('scheduled_emails').insert({
-                  enrollment_id: enrollment.id,
-                  step_id: firstStep.id,
-                  contact_id: contact.id,
-                  scheduled_for: now,
-                  status: 'pending',
-                })
+              const { data: createdEnrollments, error: enrollError } = await supabase
+                .from('sequence_enrollments')
+                .insert(enrollmentsToCreate)
+                .select('id, contact_id')
 
-                // Update sequence enrolled count
-                await supabase
-                  .from('email_sequences')
-                  .update({ total_enrolled: sequence.total_enrolled + 1 })
-                  .eq('id', sequence.id)
-
-                newEnrollments++
-                console.log(`  ✅ Auto-enrolled contact ${contact.id} in sequence "${sequence.name}"`)
+              if (enrollError) {
+                console.error('Error batch creating enrollments:', enrollError)
+                continue
               }
+
+              // Batch schedule first emails
+              const emailsToSchedule = createdEnrollments.map(enrollment => ({
+                enrollment_id: enrollment.id,
+                step_id: firstStep.id,
+                contact_id: enrollment.contact_id,
+                scheduled_for: now,
+                status: 'pending',
+              }))
+
+              await supabase.from('scheduled_emails').insert(emailsToSchedule)
+
+              // Update sequence enrolled count
+              await supabase
+                .from('email_sequences')
+                .update({ total_enrolled: sequence.total_enrolled + createdEnrollments.length })
+                .eq('id', sequence.id)
+
+              newEnrollments += createdEnrollments.length
+              console.log(`  ✅ Auto-enrolled ${createdEnrollments.length} contacts in sequence "${sequence.name}"`)
             }
           }
         }
       } catch (memberError) {
-        console.error(`Error fetching members for campaign ${sfCampaign.Name}:`, memberError.message)
+        console.error(`Error processing members for campaign ${sfCampaign.Name}:`, memberError.message)
       }
     }
 
