@@ -380,7 +380,7 @@ function CreateSequenceModal({
       .from('salesforce_campaigns')
       .select('*')
       .eq('client_id', clientId)
-      .order('start_date', { ascending: false })
+      .order('name', { ascending: true })
     setSalesforceCampaigns(sfCampaigns || [])
   }
 
@@ -842,7 +842,7 @@ function EditSequenceModal({
           .from('salesforce_campaigns')
           .select('*')
           .eq('client_id', clientId)
-          .order('start_date', { ascending: false })
+          .order('name', { ascending: true })
       ])
 
       if (stepsRes.error) throw stepsRes.error

@@ -654,7 +654,7 @@ function CreateCampaignModal({
       .from('salesforce_campaigns')
       .select('*')
       .eq('client_id', clientId)
-      .order('start_date', { ascending: false })
+      .order('name', { ascending: true })
     setSalesforceCampaigns(data || [])
   }
 
