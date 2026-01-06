@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Campaign, Template, Contact } from '../types/index.js'
+import type { Campaign, Template } from '../types/index.js'
 import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -315,7 +315,6 @@ function CreateCampaignModal({
 }) {
   const isEditing = !!campaign
   const [templates, setTemplates] = useState<Template[]>([])
-  const [contacts, setContacts] = useState<Contact[]>([])
   const [totalContactCount, setTotalContactCount] = useState(0)
   const [filteredTagCount, setFilteredTagCount] = useState<number | null>(null)
   const countRequestVersion = useRef(0)
@@ -442,19 +441,6 @@ function CreateCampaignModal({
 
     if (tagsData) {
       setAllTags(tagsData.map(t => t.name))
-    }
-
-    // Only load contacts if we need them for tag filtering (limited set for UI)
-    const { data } = await supabase
-      .from('contacts')
-      .select('id, tags')
-      .eq('client_id', clientId)
-      .eq('unsubscribed', false)
-      .not('tags', 'is', null)
-      .limit(10000) // Load contacts with tags for filtering preview
-
-    if (data) {
-      setContacts(data as Contact[])
     }
   }
 
