@@ -716,18 +716,26 @@ function CreateSequenceModal({
                         {/* Merge Tags Help - only show for first step */}
                         {index === 0 && (
                           <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-xs">
-                            <p className="font-semibold text-blue-900 mb-1">📝 Available Merge Tags:</p>
-                            <div className="grid grid-cols-2 gap-1 text-blue-800">
+                            <p className="font-semibold text-blue-900 mb-2">📝 Available Merge Tags:</p>
+                            <div className="grid grid-cols-2 gap-1 text-blue-800 mb-2">
                               <span><code className="bg-white px-1 rounded">{'{{first_name}}'}</code> → First name</span>
                               <span><code className="bg-white px-1 rounded">{'{{last_name}}'}</code> → Last name</span>
                               <span><code className="bg-white px-1 rounded">{'{{email}}'}</code> → Email</span>
-                              <span><code className="bg-white px-1 rounded">{'{{unsubscribe_url}}'}</code> → Unsubscribe</span>
                               <span><code className="bg-white px-1 rounded">{'{{campaign_name}}'}</code> → Tradeshow name</span>
-                              <span><code className="bg-white px-1 rounded">{'{{industry_link}}'}</code> → Industry URL</span>
                             </div>
-                            <p className="text-blue-700 mt-1">
+                            <div className="mt-2 pt-2 border-t border-blue-200">
+                              <p className="font-semibold text-blue-900 mb-1">🔗 URL Tags (must wrap in &lt;a href=""&gt;):</p>
+                              <div className="space-y-1">
+                                <div className="bg-white rounded px-2 py-1 border border-blue-100">
+                                  <code className="text-blue-700 font-mono text-xs">{'<a href="{{unsubscribe_url}}">Unsubscribe</a>'}</code>
+                                </div>
+                                <div className="bg-white rounded px-2 py-1 border border-blue-100">
+                                  <code className="text-blue-700 font-mono text-xs">{'<a href="{{industry_link}}">View industry solutions</a>'}</code>
+                                </div>
+                              </div>
+                            </div>
+                            <p className="text-blue-700 mt-2">
                               <code>{'{{campaign_name}}'}</code> uses the Salesforce Campaign that triggered enrollment.
-                              <code className="ml-1">{'{{industry_link}}'}</code> uses the contact's industry.
                             </p>
                           </div>
                         )}
@@ -1092,18 +1100,26 @@ function EditSequenceModal({
                         {/* Merge Tags Help - only show for first step */}
                         {index === 0 && (
                           <div className="bg-blue-50 border border-blue-200 rounded-md p-3 text-xs">
-                            <p className="font-semibold text-blue-900 mb-1">📝 Available Merge Tags:</p>
-                            <div className="grid grid-cols-2 gap-1 text-blue-800">
+                            <p className="font-semibold text-blue-900 mb-2">📝 Available Merge Tags:</p>
+                            <div className="grid grid-cols-2 gap-1 text-blue-800 mb-2">
                               <span><code className="bg-white px-1 rounded">{'{{first_name}}'}</code> → First name</span>
                               <span><code className="bg-white px-1 rounded">{'{{last_name}}'}</code> → Last name</span>
                               <span><code className="bg-white px-1 rounded">{'{{email}}'}</code> → Email</span>
-                              <span><code className="bg-white px-1 rounded">{'{{unsubscribe_url}}'}</code> → Unsubscribe</span>
                               <span><code className="bg-white px-1 rounded">{'{{campaign_name}}'}</code> → Tradeshow name</span>
-                              <span><code className="bg-white px-1 rounded">{'{{industry_link}}'}</code> → Industry URL</span>
                             </div>
-                            <p className="text-blue-700 mt-1">
+                            <div className="mt-2 pt-2 border-t border-blue-200">
+                              <p className="font-semibold text-blue-900 mb-1">🔗 URL Tags (must wrap in &lt;a href=""&gt;):</p>
+                              <div className="space-y-1">
+                                <div className="bg-white rounded px-2 py-1 border border-blue-100">
+                                  <code className="text-blue-700 font-mono text-xs">{'<a href="{{unsubscribe_url}}">Unsubscribe</a>'}</code>
+                                </div>
+                                <div className="bg-white rounded px-2 py-1 border border-blue-100">
+                                  <code className="text-blue-700 font-mono text-xs">{'<a href="{{industry_link}}">View industry solutions</a>'}</code>
+                                </div>
+                              </div>
+                            </div>
+                            <p className="text-blue-700 mt-2">
                               <code>{'{{campaign_name}}'}</code> uses the Salesforce Campaign that triggered enrollment.
-                              <code className="ml-1">{'{{industry_link}}'}</code> uses the contact's industry.
                             </p>
                           </div>
                         )}

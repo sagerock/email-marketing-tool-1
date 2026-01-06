@@ -944,25 +944,25 @@ function CreateCampaignModal({
                 <span className="text-gray-600 ml-2">→ Email</span>
               </div>
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
-                <code className="text-blue-700 font-mono">{'{{unsubscribe_url}}'}</code>
-                <span className="text-gray-600 ml-2">→ Unsubscribe link</span>
-              </div>
-              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
                 <code className="text-blue-700 font-mono">{'{{campaign_name}}'}</code>
-                <span className="text-gray-600 ml-2">→ SF Campaign name</span>
-              </div>
-              <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
-                <code className="text-blue-700 font-mono">{'{{industry_link}}'}</code>
-                <span className="text-gray-600 ml-2">→ Industry URL</span>
+                <span className="text-gray-600 ml-2">→ SF Campaign/tradeshow name</span>
               </div>
               <div className="bg-white rounded px-2 py-1.5 border border-blue-100 col-span-2">
                 <code className="text-blue-700 font-mono">{'{{mailing_address}}'}</code>
                 <span className="text-gray-600 ml-2">→ Your mailing address (CAN-SPAM required)</span>
               </div>
             </div>
-            <p className="text-xs text-blue-700 mt-3 font-medium">
-              💡 Example footer: "{'{{mailing_address}}'} | <a href="{'{{unsubscribe_url}}'}">Unsubscribe</a>"
-            </p>
+            <div className="mt-3 pt-3 border-t border-blue-200">
+              <p className="text-xs font-semibold text-blue-900 mb-2">🔗 URL Tags (must wrap in &lt;a href=""&gt;):</p>
+              <div className="grid grid-cols-1 gap-2 text-xs">
+                <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                  <code className="text-blue-700 font-mono">{'<a href="{{unsubscribe_url}}">Unsubscribe</a>'}</code>
+                </div>
+                <div className="bg-white rounded px-2 py-1.5 border border-blue-100">
+                  <code className="text-blue-700 font-mono">{'<a href="{{industry_link}}">View industry solutions</a>'}</code>
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* Salesforce Campaign Link */}
