@@ -302,6 +302,16 @@ export default function Campaigns() {
   }
 }
 
+// Helper to convert Date to local datetime string for datetime-local input
+function toLocalDateTimeString(date: Date): string {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  const hours = String(date.getHours()).padStart(2, '0')
+  const minutes = String(date.getMinutes()).padStart(2, '0')
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
 function CreateCampaignModal({
   onClose,
   onSuccess,
@@ -329,7 +339,7 @@ function CreateCampaignModal({
     from_name: campaign?.from_name || '',
     reply_to: campaign?.reply_to || '',
     filter_tags: campaign?.filter_tags || ([] as string[]),
-    scheduled_at: campaign?.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
+    scheduled_at: campaign?.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
     utm_params: campaign?.utm_params || '',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -370,7 +380,7 @@ function CreateCampaignModal({
         from_name: campaign.from_name || '',
         reply_to: campaign.reply_to || '',
         filter_tags: campaign.filter_tags || [],
-        scheduled_at: campaign.scheduled_at ? new Date(campaign.scheduled_at).toISOString().slice(0, 16) : '',
+        scheduled_at: campaign.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
         utm_params: campaign.utm_params || '',
       })
     }
@@ -490,11 +500,15 @@ function CreateCampaignModal({
 
     try {
       const recipientCount = getRecipientCount() ?? 0
+      // Convert local datetime to UTC ISO string for proper timezone handling
+      const scheduledAtUtc = formData.scheduled_at
+        ? new Date(formData.scheduled_at).toISOString()
+        : null
       const campaignData = {
         ...formData,
         template_id: formData.template_id || null,
         reply_to: formData.reply_to || null,
-        scheduled_at: formData.scheduled_at || null,
+        scheduled_at: scheduledAtUtc,
         recipient_count: recipientCount,
         status: formData.scheduled_at ? 'scheduled' : 'draft',
         client_id: clientId,
