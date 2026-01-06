@@ -835,6 +835,7 @@ function EditSequenceModal({
   const [salesforceCampaigns, setSalesforceCampaigns] = useState<SalesforceCampaign[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
+  const [enrolling, setEnrolling] = useState(false)
   const [activeTab, setActiveTab] = useState<'settings' | 'steps'>('steps')
 
   useEffect(() => {
@@ -881,6 +882,44 @@ function EditSequenceModal({
       console.error('Error fetching sequence data:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const enrollExistingMembers = async () => {
+    if (formData.trigger_salesforce_campaign_ids.length === 0) {
+      alert('Please select at least one Salesforce Campaign first')
+      return
+    }
+
+    if (!confirm(`This will enroll all existing members of the selected campaign(s) into this automation. They will start receiving the email sequence. Continue?`)) {
+      return
+    }
+
+    setEnrolling(true)
+    try {
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const response = await fetch(`${apiUrl}/api/sequences/${sequence.id}/enroll-campaign-members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          campaignIds: formData.trigger_salesforce_campaign_ids,
+          clientId,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to enroll members')
+      }
+
+      alert(data.message)
+      onSuccess() // Refresh to show updated enrollment count
+    } catch (error) {
+      console.error('Error enrolling members:', error)
+      alert(error instanceof Error ? error.message : 'Failed to enroll members')
+    } finally {
+      setEnrolling(false)
     }
   }
 
@@ -1324,6 +1363,22 @@ function EditSequenceModal({
                         ? `${formData.trigger_salesforce_campaign_ids.length} campaign(s) selected`
                         : 'Select one or more campaigns'
                       }. Leads added to any selected campaign will be enrolled.
+                    </p>
+                    {formData.trigger_salesforce_campaign_ids.length > 0 && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="mt-3"
+                        onClick={enrollExistingMembers}
+                        disabled={enrolling}
+                      >
+                        {enrolling ? 'Enrolling...' : 'Enroll Existing Members'}
+                      </Button>
+                    )}
+                    <p className="mt-2 text-xs text-blue-600">
+                      Use "Enroll Existing Members" to add people already in the campaign(s).
+                      New members added later will be enrolled automatically during sync.
                     </p>
                   </div>
                 )}

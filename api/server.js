@@ -1861,6 +1861,147 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
   }
 })
 
+// Enroll existing campaign members into a sequence
+app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) => {
+  const { sequenceId } = req.params
+  const { campaignIds, clientId } = req.body
+
+  if (!sequenceId || !campaignIds || !Array.isArray(campaignIds) || campaignIds.length === 0) {
+    return res.status(400).json({ error: 'sequenceId and campaignIds array are required' })
+  }
+
+  try {
+    // Get the sequence
+    const { data: sequence, error: seqError } = await supabase
+      .from('email_sequences')
+      .select('*')
+      .eq('id', sequenceId)
+      .single()
+
+    if (seqError || !sequence) {
+      return res.status(404).json({ error: 'Sequence not found' })
+    }
+
+    // Get first step
+    const { data: firstStep } = await supabase
+      .from('sequence_steps')
+      .select('*')
+      .eq('sequence_id', sequenceId)
+      .eq('step_order', 1)
+      .single()
+
+    if (!firstStep) {
+      return res.status(400).json({ error: 'Sequence has no steps' })
+    }
+
+    // Get all contacts who are members of the specified campaigns
+    const { data: members, error: membersError } = await supabase
+      .from('salesforce_campaign_members')
+      .select('contact_id')
+      .in('salesforce_campaign_id', campaignIds)
+      .eq('client_id', clientId)
+
+    if (membersError) throw membersError
+
+    if (!members || members.length === 0) {
+      return res.json({ enrolled: 0, message: 'No contacts found in selected campaigns' })
+    }
+
+    // Get unique contact IDs
+    const contactIds = [...new Set(members.map(m => m.contact_id))]
+
+    // Check which contacts are already enrolled
+    const { data: existingEnrollments } = await supabase
+      .from('sequence_enrollments')
+      .select('contact_id')
+      .eq('sequence_id', sequenceId)
+      .in('contact_id', contactIds)
+
+    const enrolledSet = new Set(existingEnrollments?.map(e => e.contact_id) || [])
+    const contactsToEnroll = contactIds.filter(id => !enrolledSet.has(id))
+
+    if (contactsToEnroll.length === 0) {
+      return res.json({ enrolled: 0, message: 'All contacts are already enrolled' })
+    }
+
+    // Check for unsubscribed contacts
+    const { data: contacts } = await supabase
+      .from('contacts')
+      .select('id')
+      .in('id', contactsToEnroll)
+      .eq('unsubscribed', false)
+
+    const subscribedContactIds = contacts?.map(c => c.id) || []
+
+    if (subscribedContactIds.length === 0) {
+      return res.json({ enrolled: 0, message: 'All contacts are unsubscribed' })
+    }
+
+    const now = new Date().toISOString()
+
+    // Create enrollments
+    const enrollmentsToCreate = subscribedContactIds.map(contactId => ({
+      sequence_id: sequenceId,
+      contact_id: contactId,
+      status: 'active',
+      current_step: 1,
+      enrolled_at: now,
+      next_email_scheduled_at: now, // Send first email immediately
+    }))
+
+    // Batch insert enrollments
+    const { error: enrollError } = await supabase
+      .from('sequence_enrollments')
+      .insert(enrollmentsToCreate)
+
+    if (enrollError) throw enrollError
+
+    // Schedule first emails
+    const scheduledEmailsToCreate = subscribedContactIds.map(contactId => ({
+      enrollment_id: null, // Will be linked later
+      step_id: firstStep.id,
+      contact_id: contactId,
+      scheduled_for: now,
+      status: 'pending',
+      attempts: 0,
+    }))
+
+    // Get the created enrollment IDs
+    const { data: newEnrollments } = await supabase
+      .from('sequence_enrollments')
+      .select('id, contact_id')
+      .eq('sequence_id', sequenceId)
+      .in('contact_id', subscribedContactIds)
+
+    // Create scheduled emails with enrollment IDs
+    if (newEnrollments) {
+      const enrollmentMap = new Map(newEnrollments.map(e => [e.contact_id, e.id]))
+      const emailsWithEnrollmentIds = scheduledEmailsToCreate.map(email => ({
+        ...email,
+        enrollment_id: enrollmentMap.get(email.contact_id),
+      }))
+
+      await supabase.from('scheduled_emails').insert(emailsWithEnrollmentIds)
+    }
+
+    // Update sequence total_enrolled count
+    await supabase
+      .from('email_sequences')
+      .update({ total_enrolled: (sequence.total_enrolled || 0) + subscribedContactIds.length })
+      .eq('id', sequenceId)
+
+    console.log(`✅ Enrolled ${subscribedContactIds.length} contacts into sequence ${sequence.name}`)
+
+    res.json({
+      enrolled: subscribedContactIds.length,
+      message: `Successfully enrolled ${subscribedContactIds.length} contact(s)`,
+    })
+  } catch (error) {
+    console.error('Error enrolling campaign members:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`)
 
