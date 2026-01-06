@@ -290,7 +290,7 @@ export default function Contacts() {
             {showContacts && contacts.length > 0
               ? `${filteredContacts.length.toLocaleString()} Contact${filteredContacts.length !== 1 ? 's' : ''}`
               : selectedTags.length > 0
-                ? `~${filteredCount.toLocaleString()} Contact${filteredCount !== 1 ? 's' : ''}`
+                ? `${filteredCount !== null ? filteredCount.toLocaleString() : '...'} Contact${filteredCount !== 1 ? 's' : ''}`
                 : `${totalCount.toLocaleString()} Contact${totalCount !== 1 ? 's' : ''}`
             }
           </CardTitle>
