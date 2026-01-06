@@ -1,25 +1,79 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Campaign, Template } from '../types/index.js'
+import type { Campaign, Template, Folder } from '../types/index.js'
 import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Send, X, Mail, Edit2 } from 'lucide-react'
+import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, MoreVertical } from 'lucide-react'
 
 export default function Campaigns() {
   const { selectedClient } = useClient()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
+  const [allCampaigns, setAllCampaigns] = useState<Campaign[]>([])
+  const [folders, setFolders] = useState<Folder[]>([])
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null)
+  const [showUnfiled, setShowUnfiled] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null)
   const [sendingCampaignId, setSendingCampaignId] = useState<string | null>(null)
   const [showTestEmailModal, setShowTestEmailModal] = useState<Campaign | null>(null)
+  const [showCreateFolderModal, setShowCreateFolderModal] = useState(false)
+  const [editingFolder, setEditingFolder] = useState<Folder | null>(null)
+  const [movingCampaign, setMovingCampaign] = useState<Campaign | null>(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchCampaigns()
+    if (selectedClient) {
+      fetchFolders()
+      fetchAllCampaigns()
+      fetchCampaigns()
+    } else {
+      setFolders([])
+      setAllCampaigns([])
+      setCampaigns([])
+      setLoading(false)
+    }
   }, [selectedClient])
+
+  useEffect(() => {
+    fetchCampaigns()
+  }, [selectedFolderId, showUnfiled])
+
+  const fetchFolders = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { data, error } = await supabase
+        .from('campaign_folders')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('name', { ascending: true })
+
+      if (error) throw error
+      setFolders(data || [])
+    } catch (error) {
+      console.error('Error fetching folders:', error)
+    }
+  }
+
+  const fetchAllCampaigns = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { data, error } = await supabase
+        .from('campaigns')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setAllCampaigns(data || [])
+    } catch (error) {
+      console.error('Error fetching all campaigns:', error)
+    }
+  }
 
   const fetchCampaigns = async () => {
     if (!selectedClient) {
@@ -30,11 +84,19 @@ export default function Campaigns() {
 
     setLoading(true)
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('campaigns')
         .select('*')
         .eq('client_id', selectedClient.id)
         .order('created_at', { ascending: false })
+
+      if (selectedFolderId) {
+        query = query.eq('folder_id', selectedFolderId)
+      } else if (showUnfiled) {
+        query = query.is('folder_id', null)
+      }
+
+      const { data, error } = await query
 
       if (error) throw error
       setCampaigns(data || [])
@@ -42,6 +104,47 @@ export default function Campaigns() {
       console.error('Error fetching campaigns:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Calculate counts
+  const totalCampaignCount = allCampaigns.length
+  const unfiledCount = allCampaigns.filter(c => !c.folder_id).length
+  const folderCounts = folders.reduce((acc, folder) => {
+    acc[folder.id] = allCampaigns.filter(c => c.folder_id === folder.id).length
+    return acc
+  }, {} as Record<string, number>)
+
+  const handleDeleteFolder = async (folderId: string) => {
+    const folder = folders.find(f => f.id === folderId)
+    if (!folder) return
+
+    const campaignsInFolder = allCampaigns.filter(c => c.folder_id === folderId).length
+    const message = campaignsInFolder > 0
+      ? `Are you sure you want to delete "${folder.name}"?\n\n${campaignsInFolder} campaign(s) will be moved to "Unfiled".`
+      : `Are you sure you want to delete "${folder.name}"?`
+
+    if (!confirm(message)) return
+
+    try {
+      const { error } = await supabase
+        .from('campaign_folders')
+        .delete()
+        .eq('id', folderId)
+
+      if (error) throw error
+
+      if (selectedFolderId === folderId) {
+        setSelectedFolderId(null)
+        setShowUnfiled(false)
+      }
+
+      fetchFolders()
+      fetchAllCampaigns()
+      fetchCampaigns()
+    } catch (error) {
+      console.error('Error deleting folder:', error)
+      alert('Failed to delete folder')
     }
   }
 
@@ -143,124 +246,254 @@ export default function Campaigns() {
         </Button>
       </div>
 
-      {/* Campaigns List */}
-      {loading ? (
-        <div className="text-center py-12 text-gray-500">Loading campaigns...</div>
-      ) : campaigns.length === 0 ? (
-        <Card>
-          <CardContent className="py-12">
-            <div className="text-center text-gray-500">
-              <Send className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-              <p>No campaigns yet. Create your first campaign to get started.</p>
-            </div>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {campaigns.map((campaign) => (
-            <Card key={campaign.id}>
-              <CardContent className="pt-6">
-                <div className="flex items-start justify-between">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <h3 className="text-lg font-semibold text-gray-900">
-                        {campaign.name}
-                      </h3>
-                      <Badge variant={getStatusColor(campaign.status)}>
-                        {campaign.status}
-                      </Badge>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <p className="text-gray-500">Subject</p>
-                        <p className="text-gray-900">{campaign.subject}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">From</p>
-                        <p className="text-gray-900">
-                          {campaign.from_name} &lt;{campaign.from_email}&gt;
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">Recipients</p>
-                        <p className="text-gray-900">{campaign.recipient_count}</p>
-                      </div>
-                      <div>
-                        <p className="text-gray-500">
-                          {campaign.scheduled_at ? 'Scheduled For' : 'Created'}
-                        </p>
-                        <p className="text-gray-900">
-                          {new Date(
-                            campaign.scheduled_at || campaign.created_at
-                          ).toLocaleString()}
-                        </p>
-                      </div>
-                      {campaign.filter_tags && campaign.filter_tags.length > 0 && (
-                        <div className="col-span-2">
-                          <p className="text-gray-500 mb-1">Target Tags</p>
-                          <div className="flex flex-wrap gap-1">
-                            {campaign.filter_tags.map((tag) => (
-                              <Badge key={tag} variant="info">
-                                {tag}
-                              </Badge>
-                            ))}
+      {/* Main Content with Sidebar */}
+      <div className="flex gap-6">
+        {/* Sidebar */}
+        <div className="w-64 flex-shrink-0">
+          <Card>
+            <CardContent className="p-4">
+              {/* All Campaigns */}
+              <button
+                onClick={() => {
+                  setSelectedFolderId(null)
+                  setShowUnfiled(false)
+                }}
+                className={`w-full text-left px-3 py-2 rounded-md text-sm font-medium transition-colors ${
+                  !selectedFolderId && !showUnfiled
+                    ? 'bg-blue-100 text-blue-700'
+                    : 'text-gray-700 hover:bg-gray-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span>All Campaigns</span>
+                  <span className="text-xs text-gray-500">{totalCampaignCount}</span>
+                </div>
+              </button>
+
+              {/* Folders */}
+              {folders.length > 0 && (
+                <div className="mt-4">
+                  <h3 className="px-3 text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                    Folders
+                  </h3>
+                  <div className="space-y-1">
+                    {folders.map((folder) => (
+                      <div
+                        key={folder.id}
+                        className={`group flex items-center justify-between px-3 py-2 rounded-md text-sm cursor-pointer transition-colors ${
+                          selectedFolderId === folder.id
+                            ? 'bg-blue-100 text-blue-700'
+                            : 'text-gray-700 hover:bg-gray-100'
+                        }`}
+                        onClick={() => {
+                          setSelectedFolderId(folder.id)
+                          setShowUnfiled(false)
+                        }}
+                      >
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <FolderOpen className="h-4 w-4 flex-shrink-0" />
+                          <span className="truncate">{folder.name}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-xs text-gray-500 group-hover:hidden">
+                            {folderCounts[folder.id] || 0}
+                          </span>
+                          <div className="hidden group-hover:flex items-center gap-1">
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditingFolder(folder)
+                              }}
+                              className="p-1 hover:bg-gray-200 rounded"
+                            >
+                              <Pencil className="h-3 w-3 text-gray-500" />
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                handleDeleteFolder(folder.id)
+                              }}
+                              className="p-1 hover:bg-gray-200 rounded"
+                            >
+                              <Trash2 className="h-3 w-3 text-gray-500" />
+                            </button>
                           </div>
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="flex gap-2">
-                    {campaign.status === 'draft' && (
-                      <>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setEditingCampaign(campaign)}
-                        >
-                          <Edit2 className="h-4 w-4 mr-1" />
-                          Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => setShowTestEmailModal(campaign)}
-                        >
-                          <Mail className="h-4 w-4 mr-1" />
-                          Send Test
-                        </Button>
-                        <Button
-                          size="sm"
-                          onClick={() => handleSendCampaign(campaign.id, campaign)}
-                          disabled={sendingCampaignId === campaign.id}
-                        >
-                          <Send className="h-4 w-4 mr-1" />
-                          {sendingCampaignId === campaign.id ? 'Sending...' : 'Send Now'}
-                        </Button>
-                      </>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleDelete(campaign.id)}
-                    >
-                      Delete
-                    </Button>
+                </div>
+              )}
+
+              {/* Unfiled */}
+              {unfiledCount > 0 && (
+                <button
+                  onClick={() => {
+                    setSelectedFolderId(null)
+                    setShowUnfiled(true)
+                  }}
+                  className={`w-full text-left px-3 py-2 rounded-md text-sm mt-4 transition-colors ${
+                    showUnfiled
+                      ? 'bg-blue-100 text-blue-700'
+                      : 'text-gray-700 hover:bg-gray-100'
+                  }`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span>Unfiled</span>
+                    <span className="text-xs text-gray-500">{unfiledCount}</span>
                   </div>
+                </button>
+              )}
+
+              {/* New Folder Button */}
+              <button
+                onClick={() => setShowCreateFolderModal(true)}
+                className="w-full flex items-center gap-2 px-3 py-2 mt-4 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors"
+              >
+                <FolderPlus className="h-4 w-4" />
+                New Folder
+              </button>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Campaign List */}
+        <div className="flex-1">
+          {loading ? (
+            <div className="text-center py-12 text-gray-500">Loading campaigns...</div>
+          ) : campaigns.length === 0 ? (
+            <Card>
+              <CardContent className="py-12">
+                <div className="text-center text-gray-500">
+                  <Send className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                  <p>
+                    {selectedFolderId
+                      ? 'No campaigns in this folder.'
+                      : showUnfiled
+                      ? 'No unfiled campaigns.'
+                      : 'No campaigns yet. Create your first campaign to get started.'}
+                  </p>
                 </div>
               </CardContent>
             </Card>
-          ))}
+          ) : (
+            <div className="space-y-4">
+              {campaigns.map((campaign) => (
+                <Card key={campaign.id}>
+                  <CardContent className="pt-6">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-3 mb-2">
+                          <h3 className="text-lg font-semibold text-gray-900">
+                            {campaign.name}
+                          </h3>
+                          <Badge variant={getStatusColor(campaign.status)}>
+                            {campaign.status}
+                          </Badge>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4 text-sm">
+                          <div>
+                            <p className="text-gray-500">Subject</p>
+                            <p className="text-gray-900">{campaign.subject}</p>
+                          </div>
+                          <div>
+                            <p className="text-gray-500">From</p>
+                            <p className="text-gray-900">
+                              {campaign.from_name} &lt;{campaign.from_email}&gt;
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-gray-500">Recipients</p>
+                            <p className="text-gray-900">{campaign.recipient_count}</p>
+                          </div>
+                          <div>
+                            <p className="text-gray-500">
+                              {campaign.scheduled_at ? 'Scheduled For' : 'Created'}
+                            </p>
+                            <p className="text-gray-900">
+                              {new Date(
+                                campaign.scheduled_at || campaign.created_at
+                              ).toLocaleString()}
+                            </p>
+                          </div>
+                          {campaign.filter_tags && campaign.filter_tags.length > 0 && (
+                            <div className="col-span-2">
+                              <p className="text-gray-500 mb-1">Target Tags</p>
+                              <div className="flex flex-wrap gap-1">
+                                {campaign.filter_tags.map((tag) => (
+                                  <Badge key={tag} variant="info">
+                                    {tag}
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setMovingCampaign(campaign)}
+                        >
+                          <FolderOpen className="h-4 w-4 mr-1" />
+                          Move
+                        </Button>
+                        {campaign.status === 'draft' && (
+                          <>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setEditingCampaign(campaign)}
+                            >
+                              <Edit2 className="h-4 w-4 mr-1" />
+                              Edit
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setShowTestEmailModal(campaign)}
+                            >
+                              <Mail className="h-4 w-4 mr-1" />
+                              Send Test
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={() => handleSendCampaign(campaign.id, campaign)}
+                              disabled={sendingCampaignId === campaign.id}
+                            >
+                              <Send className="h-4 w-4 mr-1" />
+                              {sendingCampaignId === campaign.id ? 'Sending...' : 'Send Now'}
+                            </Button>
+                          </>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => handleDelete(campaign.id)}
+                        >
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Create Campaign Modal */}
       {showCreateModal && selectedClient && (
         <CreateCampaignModal
           clientId={selectedClient.id}
+          folders={folders}
           onClose={() => setShowCreateModal(false)}
           onSuccess={() => {
             setShowCreateModal(false)
             fetchCampaigns()
+            fetchAllCampaigns()
           }}
         />
       )}
@@ -269,11 +502,13 @@ export default function Campaigns() {
       {editingCampaign && selectedClient && (
         <CreateCampaignModal
           clientId={selectedClient.id}
+          folders={folders}
           campaign={editingCampaign}
           onClose={() => setEditingCampaign(null)}
           onSuccess={() => {
             setEditingCampaign(null)
             fetchCampaigns()
+            fetchAllCampaigns()
           }}
         />
       )}
@@ -283,6 +518,44 @@ export default function Campaigns() {
         <SendTestEmailModal
           campaign={showTestEmailModal}
           onClose={() => setShowTestEmailModal(null)}
+        />
+      )}
+
+      {/* Create Folder Modal */}
+      {showCreateFolderModal && selectedClient && (
+        <CreateFolderModal
+          clientId={selectedClient.id}
+          onClose={() => setShowCreateFolderModal(false)}
+          onSuccess={() => {
+            setShowCreateFolderModal(false)
+            fetchFolders()
+          }}
+        />
+      )}
+
+      {/* Edit Folder Modal */}
+      {editingFolder && (
+        <EditFolderModal
+          folder={editingFolder}
+          onClose={() => setEditingFolder(null)}
+          onSuccess={() => {
+            setEditingFolder(null)
+            fetchFolders()
+          }}
+        />
+      )}
+
+      {/* Move Campaign to Folder Modal */}
+      {movingCampaign && (
+        <MoveToFolderModal
+          campaign={movingCampaign}
+          folders={folders}
+          onClose={() => setMovingCampaign(null)}
+          onSuccess={() => {
+            setMovingCampaign(null)
+            fetchCampaigns()
+            fetchAllCampaigns()
+          }}
         />
       )}
     </div>
@@ -295,6 +568,7 @@ export default function Campaigns() {
       const { error } = await supabase.from('campaigns').delete().eq('id', id)
       if (error) throw error
       fetchCampaigns()
+      fetchAllCampaigns()
     } catch (error) {
       console.error('Error deleting campaign:', error)
       alert('Failed to delete campaign')
@@ -317,11 +591,13 @@ function CreateCampaignModal({
   onSuccess,
   clientId,
   campaign,
+  folders,
 }: {
   onClose: () => void
   onSuccess: () => void
   clientId: string
   campaign?: Campaign
+  folders: Folder[]
 }) {
   const isEditing = !!campaign
   const [templates, setTemplates] = useState<Template[]>([])
@@ -341,6 +617,7 @@ function CreateCampaignModal({
     filter_tags: campaign?.filter_tags || ([] as string[]),
     scheduled_at: campaign?.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
     utm_params: campaign?.utm_params || '',
+    folder_id: campaign?.folder_id || '',
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -382,6 +659,7 @@ function CreateCampaignModal({
         filter_tags: campaign.filter_tags || [],
         scheduled_at: campaign.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
         utm_params: campaign.utm_params || '',
+        folder_id: campaign.folder_id || '',
       })
     }
   }, [campaign])
@@ -508,6 +786,7 @@ function CreateCampaignModal({
         ...formData,
         template_id: formData.template_id || null,
         reply_to: formData.reply_to || null,
+        folder_id: formData.folder_id || null,
         scheduled_at: scheduledAtUtc,
         recipient_count: recipientCount,
         status: formData.scheduled_at ? 'scheduled' : 'draft',
@@ -553,6 +832,26 @@ function CreateCampaignModal({
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           />
+
+          {folders.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Folder (optional)
+              </label>
+              <select
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                value={formData.folder_id}
+                onChange={(e) => setFormData({ ...formData, folder_id: e.target.value })}
+              >
+                <option value="">No folder</option>
+                {folders.map((folder) => (
+                  <option key={folder.id} value={folder.id}>
+                    {folder.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -878,6 +1177,245 @@ function SendTestEmailModal({
             </Button>
             <Button type="submit" disabled={sending || emailCount === 0}>
               {sending ? 'Sending...' : `Send Test${emailCount > 1 ? ` (${emailCount})` : ''}`}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function CreateFolderModal({
+  clientId,
+  onClose,
+  onSuccess,
+}: {
+  clientId: string
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [name, setName] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+
+    try {
+      const { error } = await supabase
+        .from('campaign_folders')
+        .insert({ name: name.trim(), client_id: clientId })
+
+      if (error) {
+        if (error.message.includes('duplicate') || error.message.includes('unique')) {
+          alert('A folder with this name already exists')
+        } else {
+          throw error
+        }
+        return
+      }
+
+      onSuccess()
+    } catch (error) {
+      console.error('Error creating folder:', error)
+      alert('Failed to create folder')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Create Folder</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <Input
+            label="Folder Name *"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="e.g., Q1 2025 Campaigns"
+          />
+
+          <div className="flex justify-end gap-3 pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting || !name.trim()}>
+              {submitting ? 'Creating...' : 'Create Folder'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function EditFolderModal({
+  folder,
+  onClose,
+  onSuccess,
+}: {
+  folder: Folder
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [name, setName] = useState(folder.name)
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+
+    try {
+      const { error } = await supabase
+        .from('campaign_folders')
+        .update({ name: name.trim() })
+        .eq('id', folder.id)
+
+      if (error) {
+        if (error.message.includes('duplicate') || error.message.includes('unique')) {
+          alert('A folder with this name already exists')
+        } else {
+          throw error
+        }
+        return
+      }
+
+      onSuccess()
+    } catch (error) {
+      console.error('Error updating folder:', error)
+      alert('Failed to update folder')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Rename Folder</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <Input
+            label="Folder Name *"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+
+          <div className="flex justify-end gap-3 pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting || !name.trim() || name === folder.name}>
+              {submitting ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function MoveToFolderModal({
+  campaign,
+  folders,
+  onClose,
+  onSuccess,
+}: {
+  campaign: Campaign
+  folders: Folder[]
+  onClose: () => void
+  onSuccess: () => void
+}) {
+  const [selectedFolderId, setSelectedFolderId] = useState<string>(campaign.folder_id || '')
+  const [submitting, setSubmitting] = useState(false)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setSubmitting(true)
+
+    try {
+      const { error } = await supabase
+        .from('campaigns')
+        .update({ folder_id: selectedFolderId || null })
+        .eq('id', campaign.id)
+
+      if (error) throw error
+
+      onSuccess()
+    } catch (error) {
+      console.error('Error moving campaign:', error)
+      alert('Failed to move campaign')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-md">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold">Move to Folder</h2>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        <p className="text-sm text-gray-600 mb-4">
+          Move "<strong>{campaign.name}</strong>" to:
+        </p>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            <label className="flex items-center gap-3 p-3 border rounded-md cursor-pointer hover:bg-gray-50">
+              <input
+                type="radio"
+                name="folder"
+                value=""
+                checked={selectedFolderId === ''}
+                onChange={(e) => setSelectedFolderId(e.target.value)}
+                className="text-blue-600"
+              />
+              <span className="text-sm text-gray-700">Unfiled</span>
+            </label>
+            {folders.map((folder) => (
+              <label
+                key={folder.id}
+                className="flex items-center gap-3 p-3 border rounded-md cursor-pointer hover:bg-gray-50"
+              >
+                <input
+                  type="radio"
+                  name="folder"
+                  value={folder.id}
+                  checked={selectedFolderId === folder.id}
+                  onChange={(e) => setSelectedFolderId(e.target.value)}
+                  className="text-blue-600"
+                />
+                <FolderOpen className="h-4 w-4 text-gray-500" />
+                <span className="text-sm text-gray-700">{folder.name}</span>
+              </label>
+            ))}
+          </div>
+
+          <div className="flex justify-end gap-3 pt-4">
+            <Button type="button" variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? 'Moving...' : 'Move Campaign'}
             </Button>
           </div>
         </form>

@@ -50,6 +50,7 @@ export interface Campaign {
   filter_tags?: string[]
   ip_pool?: string
   utm_params?: string
+  folder_id?: string
   created_at: string
   updated_at: string
   client_id?: string
