@@ -66,13 +66,16 @@ export default function Analytics() {
 
   const fetchEvents = async (campaignId: string) => {
     try {
-      const { data, error } = await supabase
+      // Fetch all events (Supabase default limit is 1000, we need more)
+      const { data, error, count } = await supabase
         .from('analytics_events')
-        .select('*')
+        .select('*', { count: 'exact' })
         .eq('campaign_id', campaignId)
         .order('timestamp', { ascending: false })
+        .limit(10000)
 
       if (error) throw error
+      console.log(`Fetched ${data?.length} events (total count: ${count})`)
       setEvents(data || [])
     } catch (error) {
       console.error('Error fetching events:', error)
