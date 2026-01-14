@@ -4,7 +4,9 @@ import { useClient } from '../context/ClientContext'
 import type { Campaign, AnalyticsEvent } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X } from 'lucide-react'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw } from 'lucide-react'
+
+const API_URL = import.meta.env.VITE_API_URL || ''
 
 // Extended campaign type with template data
 interface CampaignWithTemplate extends Campaign {
@@ -21,6 +23,8 @@ export default function Analytics() {
   const [events, setEvents] = useState<AnalyticsEvent[]>([])
   const [loading, setLoading] = useState(true)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncResult, setSyncResult] = useState<{ inserted: number; messagesFound: number } | null>(null)
 
   useEffect(() => {
     fetchCampaigns()
@@ -72,6 +76,35 @@ export default function Analytics() {
       setEvents(data || [])
     } catch (error) {
       console.error('Error fetching events:', error)
+    }
+  }
+
+  const syncFromSendGrid = async () => {
+    if (!selectedCampaign) return
+
+    setSyncing(true)
+    setSyncResult(null)
+
+    try {
+      const response = await fetch(`${API_URL}/api/campaigns/${selectedCampaign}/sync-sendgrid`, {
+        method: 'POST',
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to sync from SendGrid')
+      }
+
+      setSyncResult({ inserted: data.inserted, messagesFound: data.messagesFound })
+
+      // Refresh events after sync
+      await fetchEvents(selectedCampaign)
+    } catch (error) {
+      console.error('Error syncing from SendGrid:', error)
+      alert(`Sync failed: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    } finally {
+      setSyncing(false)
     }
   }
 
@@ -142,20 +175,40 @@ export default function Analytics() {
           {/* Campaign Selector */}
           <Card>
             <CardContent className="pt-6">
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Select Campaign
-              </label>
-              <select
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-                value={selectedCampaign}
-                onChange={(e) => setSelectedCampaign(e.target.value)}
-              >
-                {campaigns.map((campaign) => (
-                  <option key={campaign.id} value={campaign.id}>
-                    {campaign.name} - {new Date(campaign.created_at).toLocaleDateString()}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-end gap-4">
+                <div className="flex-1">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Campaign
+                  </label>
+                  <select
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    value={selectedCampaign}
+                    onChange={(e) => {
+                      setSelectedCampaign(e.target.value)
+                      setSyncResult(null)
+                    }}
+                  >
+                    {campaigns.map((campaign) => (
+                      <option key={campaign.id} value={campaign.id}>
+                        {campaign.name} - {new Date(campaign.created_at).toLocaleDateString()}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <Button
+                  variant="outline"
+                  onClick={syncFromSendGrid}
+                  disabled={syncing || !selectedCampaign}
+                >
+                  <RefreshCw className={`h-4 w-4 mr-2 ${syncing ? 'animate-spin' : ''}`} />
+                  {syncing ? 'Syncing...' : 'Sync from SendGrid'}
+                </Button>
+              </div>
+              {syncResult && (
+                <div className="mt-3 text-sm text-green-600">
+                  Sync complete: Found {syncResult.messagesFound} messages, inserted {syncResult.inserted} new events
+                </div>
+              )}
             </CardContent>
           </Card>
 

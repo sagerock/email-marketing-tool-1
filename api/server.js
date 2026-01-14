@@ -581,6 +581,138 @@ app.get('/api/sendgrid/ip-pools', async (req, res) => {
 })
 
 /**
+ * Sync analytics events from SendGrid for a specific campaign
+ * Pulls event data directly from SendGrid's Email Activity API
+ */
+app.post('/api/campaigns/:id/sync-sendgrid', async (req, res) => {
+  try {
+    const campaignId = req.params.id
+
+    // 1. Get campaign details
+    const { data: campaign, error: campaignError } = await supabase
+      .from('campaigns')
+      .select('*, client:clients(id, sendgrid_api_key)')
+      .eq('id', campaignId)
+      .single()
+
+    if (campaignError || !campaign) {
+      return res.status(404).json({ error: 'Campaign not found' })
+    }
+
+    if (!campaign.client?.sendgrid_api_key) {
+      return res.status(400).json({ error: 'No SendGrid API key configured for this client' })
+    }
+
+    if (!campaign.sent_at) {
+      return res.status(400).json({ error: 'Campaign has not been sent yet' })
+    }
+
+    // 2. Set up SendGrid client
+    sgClient.setApiKey(campaign.client.sendgrid_api_key)
+
+    // 3. Build query for SendGrid Email Activity API
+    // Query messages from around the time the campaign was sent
+    const sentDate = new Date(campaign.sent_at)
+    const startDate = new Date(sentDate.getTime() - 60 * 60 * 1000) // 1 hour before
+    const endDate = new Date(sentDate.getTime() + 24 * 60 * 60 * 1000) // 24 hours after
+
+    // Format dates for SendGrid API (YYYY-MM-DD)
+    const formatDate = (d) => d.toISOString().split('T')[0]
+
+    // Query SendGrid for messages matching the campaign subject
+    const queryParams = new URLSearchParams({
+      limit: '1000',
+      query: `subject="${campaign.subject}" AND last_event_time BETWEEN TIMESTAMP "${formatDate(startDate)}" AND TIMESTAMP "${formatDate(endDate)}"`,
+    })
+
+    const request = {
+      method: 'GET',
+      url: `/v3/messages?${queryParams.toString()}`,
+    }
+
+    console.log(`📊 Syncing SendGrid events for campaign: ${campaign.name}`)
+    console.log(`   Query: ${queryParams.get('query')}`)
+
+    const [response] = await sgClient.request(request)
+    const messages = response.body.messages || []
+
+    console.log(`   Found ${messages.length} messages in SendGrid`)
+
+    // 4. Map SendGrid status to our event types
+    const statusToEventType = {
+      delivered: 'delivered',
+      open: 'open',
+      click: 'click',
+      bounce: 'bounce',
+      blocked: 'bounce',
+      spam_report: 'spam',
+      unsubscribe: 'unsubscribe',
+    }
+
+    // 5. Process each message and insert events
+    let inserted = 0
+    let skipped = 0
+
+    for (const message of messages) {
+      const email = message.to_email
+      const status = message.status
+
+      const eventType = statusToEventType[status]
+      if (!eventType) {
+        skipped++
+        continue
+      }
+
+      // Check if we already have this event
+      const { data: existing } = await supabase
+        .from('analytics_events')
+        .select('id')
+        .eq('campaign_id', campaignId)
+        .eq('email', email)
+        .eq('event_type', eventType)
+        .limit(1)
+
+      if (existing && existing.length > 0) {
+        skipped++
+        continue
+      }
+
+      // Insert the event
+      const { error: insertError } = await supabase
+        .from('analytics_events')
+        .insert({
+          campaign_id: campaignId,
+          email: email,
+          event_type: eventType,
+          timestamp: message.last_event_time || campaign.sent_at,
+          sg_event_id: `sync-${message.msg_id}-${eventType}`,
+        })
+
+      if (insertError) {
+        if (!insertError.message?.includes('duplicate key')) {
+          console.error(`   Error inserting event for ${email}:`, insertError.message)
+        }
+        skipped++
+      } else {
+        inserted++
+      }
+    }
+
+    console.log(`   Inserted ${inserted} events, skipped ${skipped}`)
+
+    res.json({
+      success: true,
+      messagesFound: messages.length,
+      inserted,
+      skipped,
+    })
+  } catch (error) {
+    console.error('Error syncing SendGrid events:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Health check endpoint
  */
 app.get('/api/health', (req, res) => {
