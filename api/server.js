@@ -619,15 +619,20 @@ app.post('/api/campaigns/:id/sync-sendgrid', async (req, res) => {
     // Escape quotes in subject for SendGrid query
     const escapedSubject = campaign.subject.replace(/"/g, '\\"')
 
-    // Build query - SendGrid uses ISO 8601 format with full timestamps
+    // Build query - SendGrid uses ISO 8601 format
     const query = `subject="${escapedSubject}" AND last_event_time BETWEEN TIMESTAMP "${startDate.toISOString()}" AND TIMESTAMP "${endDate.toISOString()}"`
 
     console.log(`📊 Syncing SendGrid events for campaign: ${campaign.name}`)
     console.log(`   Query: ${query}`)
 
+    // Use qs parameter for query strings - the client library handles encoding
     const request = {
       method: 'GET',
-      url: `/v3/messages?limit=1000&query=${encodeURIComponent(query)}`,
+      url: '/v3/messages',
+      qs: {
+        limit: 1000,
+        query: query,
+      },
     }
 
     let response
@@ -639,6 +644,11 @@ app.post('/api/campaigns/:id/sync-sendgrid', async (req, res) => {
       if (sgError.code === 403 || sgError.response?.statusCode === 403) {
         return res.status(400).json({
           error: 'Email Activity API not available. This feature requires the Email Activity Feed add-on in SendGrid.'
+        })
+      }
+      if (sgError.code === 400 || sgError.response?.statusCode === 400) {
+        return res.status(400).json({
+          error: 'Invalid query. The Email Activity API may not be enabled for this account.'
         })
       }
       throw new Error(sgError.response?.body?.errors?.[0]?.message || sgError.message || 'SendGrid API error')
