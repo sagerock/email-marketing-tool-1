@@ -614,26 +614,35 @@ app.post('/api/campaigns/:id/sync-sendgrid', async (req, res) => {
     // Query messages from around the time the campaign was sent
     const sentDate = new Date(campaign.sent_at)
     const startDate = new Date(sentDate.getTime() - 60 * 60 * 1000) // 1 hour before
-    const endDate = new Date(sentDate.getTime() + 24 * 60 * 60 * 1000) // 24 hours after
+    const endDate = new Date(sentDate.getTime() + 7 * 24 * 60 * 60 * 1000) // 7 days after
 
-    // Format dates for SendGrid API (YYYY-MM-DD)
-    const formatDate = (d) => d.toISOString().split('T')[0]
+    // Escape quotes in subject for SendGrid query
+    const escapedSubject = campaign.subject.replace(/"/g, '\\"')
 
-    // Query SendGrid for messages matching the campaign subject
-    const queryParams = new URLSearchParams({
-      limit: '1000',
-      query: `subject="${campaign.subject}" AND last_event_time BETWEEN TIMESTAMP "${formatDate(startDate)}" AND TIMESTAMP "${formatDate(endDate)}"`,
-    })
+    // Build query - SendGrid uses ISO 8601 format with full timestamps
+    const query = `subject="${escapedSubject}" AND last_event_time BETWEEN TIMESTAMP "${startDate.toISOString()}" AND TIMESTAMP "${endDate.toISOString()}"`
+
+    console.log(`📊 Syncing SendGrid events for campaign: ${campaign.name}`)
+    console.log(`   Query: ${query}`)
 
     const request = {
       method: 'GET',
-      url: `/v3/messages?${queryParams.toString()}`,
+      url: `/v3/messages?limit=1000&query=${encodeURIComponent(query)}`,
     }
 
-    console.log(`📊 Syncing SendGrid events for campaign: ${campaign.name}`)
-    console.log(`   Query: ${queryParams.get('query')}`)
-
-    const [response] = await sgClient.request(request)
+    let response
+    try {
+      [response] = await sgClient.request(request)
+    } catch (sgError) {
+      console.error('SendGrid API error:', sgError.response?.body || sgError.message)
+      // If Email Activity API fails, return a helpful error
+      if (sgError.code === 403 || sgError.response?.statusCode === 403) {
+        return res.status(400).json({
+          error: 'Email Activity API not available. This feature requires the Email Activity Feed add-on in SendGrid.'
+        })
+      }
+      throw new Error(sgError.response?.body?.errors?.[0]?.message || sgError.message || 'SendGrid API error')
+    }
     const messages = response.body.messages || []
 
     console.log(`   Found ${messages.length} messages in SendGrid`)
