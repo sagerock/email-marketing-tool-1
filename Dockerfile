@@ -2,6 +2,14 @@ FROM node:20-alpine
 
 WORKDIR /app
 
+# Build arguments for Vite (needed at build time)
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+
+# Set as environment variables so Vite can use them during build
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+
 # Copy package files
 COPY package*.json ./
 COPY api/package*.json ./api/
@@ -15,7 +23,7 @@ RUN cd api && npm ci || npm install
 # Copy all source files
 COPY . .
 
-# Build frontend
+# Build frontend (uses VITE_* env vars)
 RUN npm run build
 
 # Expose port
