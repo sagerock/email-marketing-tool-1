@@ -8,7 +8,7 @@ import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2, Users } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+const API_URL = import.meta.env.VITE_API_URL || ''
 
 interface SalesforceStatus {
   connected: boolean

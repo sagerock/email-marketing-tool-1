@@ -897,7 +897,7 @@ function EditSequenceModal({
 
     setEnrolling(true)
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const apiUrl = import.meta.env.VITE_API_URL || ''
       const response = await fetch(`${apiUrl}/api/sequences/${sequence.id}/enroll-campaign-members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1042,7 +1042,7 @@ function EditSequenceModal({
       // If user chose to enroll existing members
       if (enrollExisting && formData.trigger_salesforce_campaign_ids.length > 0) {
         try {
-          const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+          const apiUrl = import.meta.env.VITE_API_URL || ''
           const response = await fetch(`${apiUrl}/api/sequences/${sequence.id}/enroll-campaign-members`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },

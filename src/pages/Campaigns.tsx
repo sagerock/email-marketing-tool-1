@@ -207,7 +207,7 @@ export default function Campaigns() {
 
     setSendingCampaignId(campaignId)
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const apiUrl = import.meta.env.VITE_API_URL || ''
       const response = await fetch(`${apiUrl}/api/send-campaign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1187,7 +1187,7 @@ function SendTestEmailModal({
         throw new Error('Please enter at least one email address')
       }
 
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001'
+      const apiUrl = import.meta.env.VITE_API_URL || ''
       const response = await fetch(`${apiUrl}/api/send-test-email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
