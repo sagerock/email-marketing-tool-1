@@ -21,5 +21,6 @@ RUN npm run build
 # Expose port
 EXPOSE 8080
 
-# Start the server
-CMD ["node", "api/server.js"]
+# Set working directory to api and start server
+WORKDIR /app/api
+CMD ["node", "server.js"]
