@@ -656,63 +656,76 @@ app.post('/api/campaigns/:id/sync-sendgrid', async (req, res) => {
 
     console.log(`   Found ${messages.length} messages in SendGrid`)
 
-    // 4. Map SendGrid status to our event types
-    const statusToEventType = {
-      delivered: 'delivered',
-      open: 'open',
-      click: 'click',
-      bounce: 'bounce',
-      blocked: 'bounce',
-      spam_report: 'spam',
-      unsubscribe: 'unsubscribe',
-    }
-
-    // 5. Process each message and insert events
+    // 5. Process each message and insert events for delivered, opens, and clicks
     let inserted = 0
     let skipped = 0
 
     for (const message of messages) {
       const email = message.to_email
-      const status = message.status
+      const timestamp = message.last_event_time || campaign.sent_at
 
-      const eventType = statusToEventType[status]
-      if (!eventType) {
-        skipped++
-        continue
-      }
+      // Helper function to insert event if not exists
+      const insertEvent = async (eventType, eventId) => {
+        const { data: existing } = await supabase
+          .from('analytics_events')
+          .select('id')
+          .eq('campaign_id', campaignId)
+          .eq('email', email)
+          .eq('event_type', eventType)
+          .limit(1)
 
-      // Check if we already have this event
-      const { data: existing } = await supabase
-        .from('analytics_events')
-        .select('id')
-        .eq('campaign_id', campaignId)
-        .eq('email', email)
-        .eq('event_type', eventType)
-        .limit(1)
-
-      if (existing && existing.length > 0) {
-        skipped++
-        continue
-      }
-
-      // Insert the event
-      const { error: insertError } = await supabase
-        .from('analytics_events')
-        .insert({
-          campaign_id: campaignId,
-          email: email,
-          event_type: eventType,
-          timestamp: message.last_event_time || campaign.sent_at,
-          sg_event_id: `sync-${message.msg_id}-${eventType}`,
-        })
-
-      if (insertError) {
-        if (!insertError.message?.includes('duplicate key')) {
-          console.error(`   Error inserting event for ${email}:`, insertError.message)
+        if (existing && existing.length > 0) {
+          return false // Already exists
         }
-        skipped++
-      } else {
-        inserted++
+
+        const { error: insertError } = await supabase
+          .from('analytics_events')
+          .insert({
+            campaign_id: campaignId,
+            email: email,
+            event_type: eventType,
+            timestamp: timestamp,
+            sg_event_id: eventId,
+          })
+
+        if (insertError && !insertError.message?.includes('duplicate key')) {
+          console.error(`   Error inserting ${eventType} for ${email}:`, insertError.message)
+          return false
+        }
+        return !insertError
+      }
+
+      // Insert delivered event if status is delivered
+      if (message.status === 'delivered') {
+        if (await insertEvent('delivered', `sync-${message.msg_id}-delivered`)) {
+          inserted++
+        } else {
+          skipped++
+        }
+      } else if (message.status === 'not_delivered' || message.status === 'bounced') {
+        if (await insertEvent('bounce', `sync-${message.msg_id}-bounce`)) {
+          inserted++
+        } else {
+          skipped++
+        }
+      }
+
+      // Insert open event if opens_count > 0
+      if (message.opens_count > 0) {
+        if (await insertEvent('open', `sync-${message.msg_id}-open`)) {
+          inserted++
+        } else {
+          skipped++
+        }
+      }
+
+      // Insert click event if clicks_count > 0
+      if (message.clicks_count > 0) {
+        if (await insertEvent('click', `sync-${message.msg_id}-click`)) {
+          inserted++
+        } else {
+          skipped++
+        }
       }
     }
 
