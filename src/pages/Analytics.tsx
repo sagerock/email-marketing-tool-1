@@ -16,11 +16,22 @@ interface CampaignWithTemplate extends Campaign {
   } | null
 }
 
+interface EventCounts {
+  delivered: number
+  opens: number
+  uniqueOpens: number
+  clicks: number
+  uniqueClicks: number
+  bounces: number
+  spam: number
+}
+
 export default function Analytics() {
   const { selectedClient } = useClient()
   const [campaigns, setCampaigns] = useState<CampaignWithTemplate[]>([])
   const [selectedCampaign, setSelectedCampaign] = useState<string>('')
   const [events, setEvents] = useState<AnalyticsEvent[]>([])
+  const [eventCounts, setEventCounts] = useState<EventCounts | null>(null)
   const [loading, setLoading] = useState(true)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -66,17 +77,46 @@ export default function Analytics() {
 
   const fetchEvents = async (campaignId: string) => {
     try {
-      // Fetch all events (Supabase default limit is 1000, we need more)
-      const { data, error, count } = await supabase
+      // Fetch recent events for the table (limit 100 for display)
+      const { data, error } = await supabase
         .from('analytics_events')
-        .select('*', { count: 'exact' })
+        .select('*')
         .eq('campaign_id', campaignId)
         .order('timestamp', { ascending: false })
-        .limit(10000)
+        .limit(100)
 
       if (error) throw error
-      console.log(`Fetched ${data?.length} events (total count: ${count})`)
       setEvents(data || [])
+
+      // Fetch counts separately using count queries (more efficient than fetching all rows)
+      const [deliveredRes, opensRes, clicksRes, bouncesRes, spamRes] = await Promise.all([
+        supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'delivered'),
+        supabase.from('analytics_events').select('email', { count: 'exact' }).eq('campaign_id', campaignId).eq('event_type', 'open'),
+        supabase.from('analytics_events').select('email', { count: 'exact' }).eq('campaign_id', campaignId).eq('event_type', 'click'),
+        supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'bounce'),
+        supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'spam'),
+      ])
+
+      // For unique opens/clicks, we need to get distinct emails
+      const [uniqueOpensRes, uniqueClicksRes] = await Promise.all([
+        supabase.from('analytics_events').select('email').eq('campaign_id', campaignId).eq('event_type', 'open'),
+        supabase.from('analytics_events').select('email').eq('campaign_id', campaignId).eq('event_type', 'click'),
+      ])
+
+      const uniqueOpenEmails = new Set(uniqueOpensRes.data?.map(e => e.email) || [])
+      const uniqueClickEmails = new Set(uniqueClicksRes.data?.map(e => e.email) || [])
+
+      setEventCounts({
+        delivered: deliveredRes.count || 0,
+        opens: opensRes.count || 0,
+        uniqueOpens: uniqueOpenEmails.size,
+        clicks: clicksRes.count || 0,
+        uniqueClicks: uniqueClickEmails.size,
+        bounces: bouncesRes.count || 0,
+        spam: spamRes.count || 0,
+      })
+
+      console.log(`Event counts - delivered: ${deliveredRes.count}, opens: ${opensRes.count}, clicks: ${clicksRes.count}`)
     } catch (error) {
       console.error('Error fetching events:', error)
     }
@@ -113,7 +153,7 @@ export default function Analytics() {
 
   const getStats = () => {
     const campaign = campaigns.find((c) => c.id === selectedCampaign)
-    if (!campaign) {
+    if (!campaign || !eventCounts) {
       return {
         sent: 0,
         delivered: 0,
@@ -126,27 +166,15 @@ export default function Analytics() {
       }
     }
 
-    const delivered = events.filter((e) => e.event_type === 'delivered').length
-    const opens = events.filter((e) => e.event_type === 'open').length
-    const uniqueOpens = new Set(
-      events.filter((e) => e.event_type === 'open').map((e) => e.email)
-    ).size
-    const clicks = events.filter((e) => e.event_type === 'click').length
-    const uniqueClicks = new Set(
-      events.filter((e) => e.event_type === 'click').map((e) => e.email)
-    ).size
-    const bounces = events.filter((e) => e.event_type === 'bounce').length
-    const spam = events.filter((e) => e.event_type === 'spam').length
-
     return {
       sent: campaign.recipient_count,
-      delivered,
-      opens,
-      uniqueOpens,
-      clicks,
-      uniqueClicks,
-      bounces,
-      spam,
+      delivered: eventCounts.delivered,
+      opens: eventCounts.opens,
+      uniqueOpens: eventCounts.uniqueOpens,
+      clicks: eventCounts.clicks,
+      uniqueClicks: eventCounts.uniqueClicks,
+      bounces: eventCounts.bounces,
+      spam: eventCounts.spam,
     }
   }
 
