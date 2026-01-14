@@ -18,8 +18,14 @@ npm run preview    # Preview production build
 
 ### Backend API (api/ directory)
 ```bash
-cd api && npm run dev    # Start with nodemon (auto-reload)
+npm run dev:api          # Start API with nodemon (auto-reload)
 cd api && npm start      # Start production server (port 3001)
+```
+
+### Combined (for production)
+```bash
+npm run build:all    # Build frontend + install API deps
+npm start            # Start server (serves both frontend and API)
 ```
 
 ## Tech Stack
@@ -30,7 +36,7 @@ cd api && npm start      # Start production server (port 3001)
 - **Auth**: Supabase Auth with PKCE flow
 - **Email**: SendGrid (API keys stored per-client in database)
 - **State**: React Context (AuthContext, ClientContext) + React Query
-- **Deployment**: Vercel (frontend), Railway (backend)
+- **Deployment**: Railway (unified frontend + backend)
 
 ## Architecture
 
@@ -240,20 +246,15 @@ Uses `cn()` utility for merging Tailwind classes with clsx + tailwind-merge.
 
 ## Environment Variables
 
-### Frontend (.env)
+### Railway (unified deployment)
 ```
-VITE_SUPABASE_URL=
-VITE_SUPABASE_ANON_KEY=
-VITE_API_URL=              # Backend API URL
-```
-
-### Backend (api/.env)
-```
-VITE_SUPABASE_URL=
-SUPABASE_SERVICE_KEY=      # Service role key (elevated permissions)
-PORT=3001
-NODE_ENV=
-BASE_URL=                  # For unsubscribe links
+VITE_SUPABASE_URL=         # Supabase project URL
+VITE_SUPABASE_ANON_KEY=    # Supabase anon key (frontend)
+SUPABASE_SERVICE_KEY=      # Service role key (backend, elevated permissions)
+VITE_API_URL=              # Leave empty for same-origin (unified deployment)
+BASE_URL=                  # App URL for unsubscribe links
+PORT=3001                  # Railway sets this automatically
+NODE_ENV=production
 ```
 
 Note: SendGrid API keys and Salesforce credentials are stored per-client in the `clients` database table, not in environment variables.

@@ -14,6 +14,7 @@
 
 const express = require('express')
 const cors = require('cors')
+const path = require('path')
 const cron = require('node-cron')
 const sgMail = require('@sendgrid/mail')
 const sgClient = require('@sendgrid/client')
@@ -464,8 +465,15 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
     const events = req.body
 
     if (!Array.isArray(events)) {
+      console.error('SendGrid webhook: Invalid payload (not an array)', req.body)
       return res.status(400).json({ error: 'Invalid payload' })
     }
+
+    console.log(`SendGrid webhook: Received ${events.length} events`)
+
+    let processed = 0
+    let skipped = 0
+    let errors = 0
 
     // Process each event
     for (const event of events) {
@@ -473,7 +481,8 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
       const campaignId = event.campaign_id || event.custom_args?.campaign_id
 
       if (!campaignId) {
-        console.warn('Event missing campaign_id:', event)
+        console.warn('Event missing campaign_id:', JSON.stringify(event))
+        skipped++
         continue
       }
 
@@ -489,10 +498,14 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
       }
 
       const eventType = eventTypeMap[event.event]
-      if (!eventType) continue
+      if (!eventType) {
+        console.log(`SendGrid webhook: Skipping unmapped event type: ${event.event}`)
+        skipped++
+        continue
+      }
 
       // Insert event into database
-      await supabase.from('analytics_events').insert({
+      const { error: insertError } = await supabase.from('analytics_events').insert({
         campaign_id: campaignId,
         email: event.email,
         event_type: eventType,
@@ -502,6 +515,17 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
         ip_address: event.ip || null,
         sg_event_id: event.sg_event_id,
       })
+
+      if (insertError) {
+        // Don't log duplicate key errors as they're expected
+        if (!insertError.message?.includes('duplicate key')) {
+          console.error(`SendGrid webhook: Insert error for ${event.email}:`, insertError.message)
+        }
+        errors++
+        continue
+      }
+
+      processed++
 
       // If unsubscribe event, update contact status
       if (eventType === 'unsubscribe' && event.email) {
@@ -515,6 +539,7 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
       }
     }
 
+    console.log(`SendGrid webhook: Processed ${processed}, skipped ${skipped}, errors ${errors}`)
     res.status(200).send('OK')
   } catch (error) {
     console.error('Webhook error:', error)
@@ -2000,6 +2025,21 @@ app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) 
     console.error('Error enrolling campaign members:', error)
     res.status(500).json({ error: error.message })
   }
+})
+
+// ============================================================
+// STATIC FILE SERVING (Frontend)
+// Serve the built React app from the dist folder
+// This must come AFTER all API routes
+// ============================================================
+
+// Serve static files from the dist directory
+app.use(express.static(path.join(__dirname, '../dist')))
+
+// Handle SPA routing - serve index.html for all non-API routes
+// This allows React Router to handle client-side routing
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, '../dist/index.html'))
 })
 
 app.listen(PORT, () => {

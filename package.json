@@ -5,7 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:api": "cd api && npm run dev",
     "build": "tsc -b && vite build",
+    "build:all": "npm install && npm run build && cd api && npm install",
+    "start": "cd api && npm start",
     "lint": "eslint .",
     "preview": "vite preview"
   },
