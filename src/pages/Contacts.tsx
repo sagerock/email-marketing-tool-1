@@ -315,6 +315,15 @@ export default function Contacts() {
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">
                       Tags
                     </th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">
+                      Opens
+                    </th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">
+                      Clicks
+                    </th>
+                    <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">
+                      Score
+                    </th>
                     <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">
                       Status
                     </th>
@@ -514,9 +523,41 @@ function ContactRow({
           )}
         </div>
       </td>
+      <td className="py-3 px-4 text-sm text-gray-600 text-right">
+        {contact.total_opens || 0}
+      </td>
+      <td className="py-3 px-4 text-sm text-gray-600 text-right">
+        {contact.total_clicks || 0}
+      </td>
+      <td className="py-3 px-4 text-sm text-right">
+        <span className={`font-medium ${
+          (contact.engagement_score || 0) > 10 ? 'text-green-600' :
+          (contact.engagement_score || 0) > 0 ? 'text-blue-600' : 'text-gray-400'
+        }`}>
+          {contact.engagement_score || 0}
+        </span>
+      </td>
       <td className="py-3 px-4">
         <div className="flex flex-col gap-1">
-          {contact.unsubscribed ? (
+          {contact.bounce_status === 'hard' ? (
+            <>
+              <Badge variant="danger">Hard Bounce</Badge>
+              {contact.bounced_at && (
+                <span className="text-xs text-gray-500">
+                  {new Date(contact.bounced_at).toLocaleDateString()}
+                </span>
+              )}
+            </>
+          ) : contact.bounce_status === 'soft' ? (
+            <>
+              <Badge variant="warning">Soft Bounce</Badge>
+              {contact.bounced_at && (
+                <span className="text-xs text-gray-500">
+                  {new Date(contact.bounced_at).toLocaleDateString()}
+                </span>
+              )}
+            </>
+          ) : contact.unsubscribed ? (
             <>
               <Badge variant="danger">Unsubscribed</Badge>
               {contact.unsubscribed_at && (

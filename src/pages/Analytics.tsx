@@ -4,7 +4,8 @@ import { useClient } from '../context/ClientContext'
 import type { Campaign, AnalyticsEvent } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard } from 'lucide-react'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users } from 'lucide-react'
+import type { Contact } from '../types/index.js'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -49,9 +50,13 @@ export default function Analytics() {
   const [showPreviewModal, setShowPreviewModal] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ inserted: number; messagesFound: number } | null>(null)
-  const [viewMode, setViewMode] = useState<'details' | 'table'>('details')
+  const [viewMode, setViewMode] = useState<'details' | 'table' | 'subscribers'>('details')
   const [allCampaignMetrics, setAllCampaignMetrics] = useState<CampaignMetrics[]>([])
   const [loadingMetrics, setLoadingMetrics] = useState(false)
+  const [subscriberTab, setSubscriberTab] = useState<'top' | 'bounced'>('top')
+  const [topSubscribers, setTopSubscribers] = useState<Contact[]>([])
+  const [bouncedContacts, setBouncedContacts] = useState<(Contact & { campaign_name?: string })[]>([])
+  const [loadingSubscribers, setLoadingSubscribers] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -278,6 +283,61 @@ export default function Analytics() {
     window.URL.revokeObjectURL(url)
   }
 
+  // Fetch top engaged subscribers
+  const fetchTopSubscribers = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .gt('engagement_score', 0)
+        .order('engagement_score', { ascending: false })
+        .limit(100)
+
+      if (error) throw error
+      setTopSubscribers(data || [])
+    } catch (error) {
+      console.error('Error fetching top subscribers:', error)
+    }
+  }
+
+  // Fetch bounced contacts with campaign info
+  const fetchBouncedContacts = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*, last_bounce_campaign:campaigns!last_bounce_campaign_id(name)')
+        .eq('client_id', selectedClient.id)
+        .neq('bounce_status', 'none')
+        .not('bounce_status', 'is', null)
+        .order('bounced_at', { ascending: false })
+        .limit(100)
+
+      if (error) throw error
+      setBouncedContacts(
+        (data || []).map((c: any) => ({
+          ...c,
+          campaign_name: c.last_bounce_campaign?.name || 'Unknown'
+        }))
+      )
+    } catch (error) {
+      console.error('Error fetching bounced contacts:', error)
+    }
+  }
+
+  // Load subscriber data when switching to subscribers view
+  useEffect(() => {
+    if (viewMode === 'subscribers' && selectedClient) {
+      setLoadingSubscribers(true)
+      Promise.all([fetchTopSubscribers(), fetchBouncedContacts()])
+        .finally(() => setLoadingSubscribers(false))
+    }
+  }, [viewMode, selectedClient])
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -305,6 +365,14 @@ export default function Analytics() {
             >
               <Table className="h-4 w-4 mr-2" />
               All Campaigns
+            </Button>
+            <Button
+              variant={viewMode === 'subscribers' ? 'primary' : 'outline'}
+              size="sm"
+              onClick={() => setViewMode('subscribers')}
+            >
+              <Users className="h-4 w-4 mr-2" />
+              Subscribers
             </Button>
           </div>
         )}
@@ -386,6 +454,132 @@ export default function Analytics() {
                   </tbody>
                 </table>
               </div>
+            )}
+          </CardContent>
+        </Card>
+      ) : viewMode === 'subscribers' ? (
+        /* Subscribers View */
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Subscriber Engagement</CardTitle>
+              <div className="flex gap-2">
+                <Button
+                  variant={subscriberTab === 'top' ? 'primary' : 'outline'}
+                  size="sm"
+                  onClick={() => setSubscriberTab('top')}
+                >
+                  Top Engaged ({topSubscribers.length})
+                </Button>
+                <Button
+                  variant={subscriberTab === 'bounced' ? 'primary' : 'outline'}
+                  size="sm"
+                  onClick={() => setSubscriberTab('bounced')}
+                >
+                  Bounced ({bouncedContacts.length})
+                </Button>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {loadingSubscribers ? (
+              <div className="text-center py-12 text-gray-500">Loading subscriber data...</div>
+            ) : subscriberTab === 'top' ? (
+              topSubscribers.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <Users className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                  <p>No engagement data yet. Open and click events will populate this list.</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Opens</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Clicks</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Score</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Last Engaged</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {topSubscribers.map((contact) => (
+                        <tr key={contact.id} className="hover:bg-gray-50">
+                          <td className="py-3 px-4 text-sm text-gray-900">{contact.email}</td>
+                          <td className="py-3 px-4 text-sm text-gray-600">
+                            {contact.first_name || contact.last_name
+                              ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
+                              : '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-900 text-right">{contact.total_opens || 0}</td>
+                          <td className="py-3 px-4 text-sm text-gray-900 text-right">{contact.total_clicks || 0}</td>
+                          <td className="py-3 px-4 text-sm text-right">
+                            <span className={`font-medium ${
+                              (contact.engagement_score || 0) > 10 ? 'text-green-600' : 'text-blue-600'
+                            }`}>
+                              {contact.engagement_score || 0}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-600">
+                            {contact.last_engaged_at
+                              ? new Date(contact.last_engaged_at).toLocaleDateString()
+                              : '-'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            ) : (
+              bouncedContacts.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <AlertCircle className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                  <p>No bounced contacts. Great job maintaining list hygiene!</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Bounce Type</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Bounced At</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Campaign</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {bouncedContacts.map((contact) => (
+                        <tr key={contact.id} className="hover:bg-gray-50">
+                          <td className="py-3 px-4 text-sm text-gray-900">{contact.email}</td>
+                          <td className="py-3 px-4 text-sm text-gray-600">
+                            {contact.first_name || contact.last_name
+                              ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
+                              : '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm">
+                            <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
+                              contact.bounce_status === 'hard'
+                                ? 'bg-red-100 text-red-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }`}>
+                              {contact.bounce_status === 'hard' ? 'Hard Bounce' : 'Soft Bounce'}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-600">
+                            {contact.bounced_at
+                              ? new Date(contact.bounced_at).toLocaleDateString()
+                              : '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-gray-600">{contact.campaign_name}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
             )}
           </CardContent>
         </Card>

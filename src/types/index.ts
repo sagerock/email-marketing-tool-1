@@ -12,6 +12,15 @@ export interface Contact {
   created_at: string
   updated_at: string
   client_id?: string
+  // Bounce tracking
+  bounce_status?: 'none' | 'soft' | 'hard'
+  bounced_at?: string
+  last_bounce_campaign_id?: string
+  // Engagement tracking
+  engagement_score?: number
+  total_opens?: number
+  total_clicks?: number
+  last_engaged_at?: string
 }
 
 export interface Template {

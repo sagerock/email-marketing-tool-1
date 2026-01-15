@@ -162,6 +162,13 @@ async function sendCampaignById(campaignId) {
     console.log(`📧 After tag filter: ${contacts.length} contacts`)
   }
 
+  // Exclude hard-bounced contacts (they cannot receive emails)
+  const beforeBounceFilter = contacts.length
+  contacts = contacts.filter((contact) => contact.bounce_status !== 'hard')
+  if (contacts.length < beforeBounceFilter) {
+    console.log(`📧 Excluded ${beforeBounceFilter - contacts.length} hard-bounced contacts, ${contacts.length} remaining`)
+  }
+
   // 6. Update campaign status
   await supabase
     .from('campaigns')
@@ -537,6 +544,55 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
           })
           .eq('email', event.email)
       }
+
+      // If bounce event, flag contact as bounced
+      if (eventType === 'bounce' && event.email) {
+        // Determine bounce type from SendGrid event data
+        // Hard bounces: invalid, bounce, blocked - permanent delivery failures
+        // Soft bounces: deferred - temporary issues
+        const isHardBounce = ['invalid', 'bounce', 'blocked'].includes(event.type) ||
+                            event.reason?.toLowerCase().includes('invalid') ||
+                            event.reason?.toLowerCase().includes('does not exist')
+
+        await supabase
+          .from('contacts')
+          .update({
+            bounce_status: isHardBounce ? 'hard' : 'soft',
+            bounced_at: new Date(event.timestamp * 1000).toISOString(),
+            last_bounce_campaign_id: campaignId,
+          })
+          .eq('email', event.email)
+
+        console.log(`Bounce recorded for ${event.email}: ${isHardBounce ? 'hard' : 'soft'} bounce`)
+      }
+
+      // If open or click event, update engagement metrics
+      if ((eventType === 'open' || eventType === 'click') && event.email) {
+        const eventTimestamp = new Date(event.timestamp * 1000).toISOString()
+
+        // Fetch current engagement values
+        const { data: contact } = await supabase
+          .from('contacts')
+          .select('total_opens, total_clicks, engagement_score')
+          .eq('email', event.email)
+          .single()
+
+        if (contact) {
+          const newOpens = (contact.total_opens || 0) + (eventType === 'open' ? 1 : 0)
+          const newClicks = (contact.total_clicks || 0) + (eventType === 'click' ? 1 : 0)
+          const newScore = newOpens + (newClicks * 2) // clicks worth 2 points
+
+          await supabase
+            .from('contacts')
+            .update({
+              total_opens: newOpens,
+              total_clicks: newClicks,
+              engagement_score: newScore,
+              last_engaged_at: eventTimestamp,
+            })
+            .eq('email', event.email)
+        }
+      }
     }
 
     console.log(`SendGrid webhook: Processed ${processed}, skipped ${skipped}, errors ${errors}`)
@@ -900,8 +956,8 @@ app.post('/api/sequences/process', async (req, res) => {
         const { enrollment, step } = scheduledEmail
         const { sequence, contact } = enrollment
 
-        // Skip if sequence is not active or contact is unsubscribed
-        if (sequence.status !== 'active' || contact.unsubscribed) {
+        // Skip if sequence is not active, contact is unsubscribed, or contact has hard bounce
+        if (sequence.status !== 'active' || contact.unsubscribed || contact.bounce_status === 'hard') {
           await supabase
             .from('scheduled_emails')
             .update({ status: 'cancelled' })
@@ -2186,6 +2242,119 @@ app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) 
     })
   } catch (error) {
     console.error('Error enrolling campaign members:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Backfill engagement scores for existing contacts
+ * Calculates total_opens, total_clicks, engagement_score from analytics_events
+ */
+app.post('/api/contacts/backfill-engagement', async (req, res) => {
+  try {
+    const { clientId } = req.body
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    console.log(`📊 Starting engagement backfill for client ${clientId}`)
+
+    // Get all contacts for this client
+    const { data: contacts, error: contactsError } = await supabase
+      .from('contacts')
+      .select('id, email')
+      .eq('client_id', clientId)
+
+    if (contactsError) throw contactsError
+
+    if (!contacts || contacts.length === 0) {
+      return res.json({ updated: 0, message: 'No contacts found' })
+    }
+
+    console.log(`   Found ${contacts.length} contacts to process`)
+
+    let updated = 0
+
+    // Process each contact
+    for (const contact of contacts) {
+      // Get open count
+      const { count: openCount } = await supabase
+        .from('analytics_events')
+        .select('*', { count: 'exact', head: true })
+        .eq('email', contact.email)
+        .eq('event_type', 'open')
+
+      // Get click count
+      const { count: clickCount } = await supabase
+        .from('analytics_events')
+        .select('*', { count: 'exact', head: true })
+        .eq('email', contact.email)
+        .eq('event_type', 'click')
+
+      // Get bounce status
+      const { data: bounceEvent } = await supabase
+        .from('analytics_events')
+        .select('timestamp, campaign_id')
+        .eq('email', contact.email)
+        .eq('event_type', 'bounce')
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .single()
+
+      // Get last engagement timestamp
+      const { data: lastEngagement } = await supabase
+        .from('analytics_events')
+        .select('timestamp')
+        .eq('email', contact.email)
+        .in('event_type', ['open', 'click'])
+        .order('timestamp', { ascending: false })
+        .limit(1)
+        .single()
+
+      const totalOpens = openCount || 0
+      const totalClicks = clickCount || 0
+      const engagementScore = totalOpens + (totalClicks * 2)
+
+      // Build update object
+      const updateData = {
+        total_opens: totalOpens,
+        total_clicks: totalClicks,
+        engagement_score: engagementScore,
+      }
+
+      // Add bounce data if present
+      if (bounceEvent) {
+        updateData.bounce_status = 'hard' // Assume hard bounce for historical data
+        updateData.bounced_at = bounceEvent.timestamp
+        updateData.last_bounce_campaign_id = bounceEvent.campaign_id
+      }
+
+      // Add last engaged timestamp
+      if (lastEngagement) {
+        updateData.last_engaged_at = lastEngagement.timestamp
+      }
+
+      // Update contact
+      const { error: updateError } = await supabase
+        .from('contacts')
+        .update(updateData)
+        .eq('id', contact.id)
+
+      if (!updateError) {
+        updated++
+      }
+    }
+
+    console.log(`   Updated ${updated} contacts`)
+
+    res.json({
+      updated,
+      total: contacts.length,
+      message: `Successfully backfilled engagement data for ${updated} contacts`,
+    })
+  } catch (error) {
+    console.error('Error backfilling engagement:', error)
     res.status(500).json({ error: error.message })
   }
 })
