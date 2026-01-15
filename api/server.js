@@ -2289,15 +2289,29 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
     console.log(`📊 Starting optimized engagement backfill for client ${clientId}`)
 
     // Step 1: Get all unique emails that have ANY analytics events
-    console.log(`   Step 1: Finding emails with analytics events...`)
-    const { data: emailsWithEvents, error: emailsError } = await supabase
-      .from('analytics_events')
-      .select('email')
+    // Paginate through all events to avoid Supabase's default 1000 row limit
+    console.log(`   Step 1: Finding emails with analytics events (paginated)...`)
+    const allEmails = new Set()
+    let offset = 0
+    const batchSize = 10000
 
-    if (emailsError) throw emailsError
+    while (true) {
+      const { data: batch, error } = await supabase
+        .from('analytics_events')
+        .select('email')
+        .range(offset, offset + batchSize - 1)
 
-    // Get unique emails
-    const uniqueEmails = [...new Set(emailsWithEvents?.map(e => e.email) || [])]
+      if (error) throw error
+      if (!batch || batch.length === 0) break
+
+      batch.forEach(e => allEmails.add(e.email))
+      console.log(`   Fetched ${offset + batch.length} events, ${allEmails.size} unique emails so far...`)
+      offset += batchSize
+
+      if (batch.length < batchSize) break
+    }
+
+    const uniqueEmails = Array.from(allEmails)
     console.log(`   Found ${uniqueEmails.length} unique emails with analytics events`)
 
     if (uniqueEmails.length === 0) {
