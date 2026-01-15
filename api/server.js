@@ -2248,7 +2248,7 @@ app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) 
 
 /**
  * Backfill engagement scores for existing contacts
- * Calculates total_opens, total_clicks, engagement_score from analytics_events
+ * OPTIMIZED: Only processes contacts that have analytics events
  */
 app.post('/api/contacts/backfill-engagement', async (req, res) => {
   try {
@@ -2258,41 +2258,50 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
       return res.status(400).json({ error: 'clientId is required' })
     }
 
-    console.log(`📊 Starting engagement backfill for client ${clientId}`)
+    console.log(`📊 Starting optimized engagement backfill for client ${clientId}`)
 
-    // Get all contacts for this client (paginate to get all)
-    let allContacts = []
-    let offset = 0
-    const pageSize = 1000
+    // Step 1: Get all unique emails that have ANY analytics events
+    console.log(`   Step 1: Finding emails with analytics events...`)
+    const { data: emailsWithEvents, error: emailsError } = await supabase
+      .from('analytics_events')
+      .select('email')
 
-    while (true) {
-      const { data: pageContacts, error: contactsError } = await supabase
-        .from('contacts')
-        .select('id, email')
-        .eq('client_id', clientId)
-        .range(offset, offset + pageSize - 1)
+    if (emailsError) throw emailsError
 
-      if (contactsError) throw contactsError
-      if (!pageContacts || pageContacts.length === 0) break
+    // Get unique emails
+    const uniqueEmails = [...new Set(emailsWithEvents?.map(e => e.email) || [])]
+    console.log(`   Found ${uniqueEmails.length} unique emails with analytics events`)
 
-      allContacts = allContacts.concat(pageContacts)
-      console.log(`   Fetched ${allContacts.length} contacts so far...`)
-      offset += pageSize
-
-      if (pageContacts.length < pageSize) break
+    if (uniqueEmails.length === 0) {
+      return res.json({ updated: 0, total: 0, message: 'No analytics events found' })
     }
 
-    if (allContacts.length === 0) {
-      return res.json({ updated: 0, message: 'No contacts found' })
+    // Step 2: Get contacts for this client that match those emails
+    console.log(`   Step 2: Matching to contacts for this client...`)
+    const { data: contacts, error: contactsError } = await supabase
+      .from('contacts')
+      .select('id, email')
+      .eq('client_id', clientId)
+      .in('email', uniqueEmails)
+
+    if (contactsError) throw contactsError
+
+    if (!contacts || contacts.length === 0) {
+      return res.json({ updated: 0, total: 0, message: 'No matching contacts found' })
     }
 
-    const contacts = allContacts
-    console.log(`   Found ${contacts.length} total contacts to process`)
+    console.log(`   Found ${contacts.length} contacts to process (skipping ${uniqueEmails.length - contacts.length} emails not in this client)`)
 
+    // Step 3: Process each contact with events
     let updated = 0
+    let processed = 0
 
-    // Process each contact
     for (const contact of contacts) {
+      processed++
+      if (processed % 100 === 0) {
+        console.log(`   Processing ${processed}/${contacts.length}...`)
+      }
+
       // Get open count
       const { count: openCount } = await supabase
         .from('analytics_events')
@@ -2361,7 +2370,7 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
       }
     }
 
-    console.log(`   Updated ${updated} contacts`)
+    console.log(`   ✅ Updated ${updated} of ${contacts.length} contacts`)
 
     res.json({
       updated,
