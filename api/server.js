@@ -2318,6 +2318,11 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
       return res.json({ updated: 0, total: 0, message: 'No matching contacts found' })
     }
 
+    // Debug: check if our suspicious contacts are in the list
+    const debugEmails = ['judith.neiman@wynnlasvegas.com', 'kaydia_king@heart-nta.org', 'kbarnes@estee.ca']
+    const foundDebugContacts = contacts.filter(c => debugEmails.includes(c.email))
+    console.log(`   DEBUG: Found ${foundDebugContacts.length} of 3 suspicious contacts:`, foundDebugContacts.map(c => c.email))
+
     console.log(`   Found ${contacts.length} contacts to process (skipping ${uniqueEmails.length - contacts.length} emails not in this client)`)
 
     // Step 3: Process each contact with events
@@ -2373,15 +2378,26 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
             const maxTime = Math.max(...timestamps)
             const timeSpreadSeconds = (maxTime - minTime) / 1000
 
+            // Debug logging for suspicious contacts
+            const debugEmails = ['judith.neiman@wynnlasvegas.com', 'kaydia_king@heart-nta.org', 'kbarnes@estee.ca']
+            if (debugEmails.includes(contact.email)) {
+              console.log(`   DEBUG ${contact.email}: ${campClicks.length} clicks, timeSpread=${timeSpreadSeconds}s, raw timestamps:`, campClicks.slice(0, 3).map(c => c.timestamp))
+            }
+
             // If all clicks happened within 30 seconds, likely a bot
             // Bots click all links nearly simultaneously
             if (timeSpreadSeconds <= 30) {
               // Bot detected - don't count these clicks
-              // console.log(`   Bot detected for ${contact.email} in campaign ${campId}: ${campClicks.length} clicks in ${timeSpreadSeconds}s`)
+              if (debugEmails.includes(contact.email)) {
+                console.log(`   DEBUG ${contact.email}: BOT DETECTED - setting clicks to 0`)
+              }
             } else {
               // Human behavior - count unique URLs clicked
               const uniqueUrls = new Set(campClicks.map(c => c.url).filter(Boolean))
               humanClicks += uniqueUrls.size
+              if (debugEmails.includes(contact.email)) {
+                console.log(`   DEBUG ${contact.email}: HUMAN - counting ${uniqueUrls.size} unique URLs`)
+              }
             }
           }
         }
