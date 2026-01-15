@@ -24,6 +24,7 @@ interface EventCounts {
   uniqueClicks: number
   bounces: number
   spam: number
+  unsubscribes: number
 }
 
 export default function Analytics() {
@@ -89,12 +90,13 @@ export default function Analytics() {
       setEvents(data || [])
 
       // Fetch counts separately using count queries (more efficient than fetching all rows)
-      const [deliveredRes, opensRes, clicksRes, bouncesRes, spamRes] = await Promise.all([
+      const [deliveredRes, opensRes, clicksRes, bouncesRes, spamRes, unsubscribesRes] = await Promise.all([
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'delivered'),
         supabase.from('analytics_events').select('email', { count: 'exact' }).eq('campaign_id', campaignId).eq('event_type', 'open'),
         supabase.from('analytics_events').select('email', { count: 'exact' }).eq('campaign_id', campaignId).eq('event_type', 'click'),
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'bounce'),
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'spam'),
+        supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'unsubscribe'),
       ])
 
       // For unique opens/clicks, we need to get distinct emails
@@ -114,6 +116,7 @@ export default function Analytics() {
         uniqueClicks: uniqueClickEmails.size,
         bounces: bouncesRes.count || 0,
         spam: spamRes.count || 0,
+        unsubscribes: unsubscribesRes.count || 0,
       })
 
       console.log(`Event counts - delivered: ${deliveredRes.count}, opens: ${opensRes.count}, clicks: ${clicksRes.count}`)
@@ -163,6 +166,7 @@ export default function Analytics() {
         uniqueClicks: 0,
         bounces: 0,
         spam: 0,
+        unsubscribes: 0,
       }
     }
 
@@ -175,6 +179,7 @@ export default function Analytics() {
       uniqueClicks: eventCounts.uniqueClicks,
       bounces: eventCounts.bounces,
       spam: eventCounts.spam,
+      unsubscribes: eventCounts.unsubscribes,
     }
   }
 
@@ -372,7 +377,13 @@ export default function Analytics() {
                       {stats.spam}
                     </span>
                   </div>
-                  {(stats.bounces > 0 || stats.spam > 0) && (
+                  <div className="flex justify-between">
+                    <span className="text-sm text-gray-600">Unsubscribes</span>
+                    <span className="text-sm font-medium text-orange-600">
+                      {stats.unsubscribes}
+                    </span>
+                  </div>
+                  {(stats.bounces > 0 || stats.spam > 0 || stats.unsubscribes > 0) && (
                     <div className="pt-2 border-t border-gray-200">
                       <div className="flex items-start gap-2 text-sm text-amber-600">
                         <AlertCircle className="h-4 w-4 mt-0.5" />
