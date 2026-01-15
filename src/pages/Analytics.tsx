@@ -501,6 +501,7 @@ export default function Analytics() {
                         <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Clicks</th>
                         <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Score</th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Last Engaged</th>
+                        <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">Status</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
@@ -525,6 +526,17 @@ export default function Analytics() {
                             {contact.last_engaged_at
                               ? new Date(contact.last_engaged_at).toLocaleDateString()
                               : '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm text-center">
+                            {contact.unsubscribed ? (
+                              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-red-100 text-red-800">
+                                Unsubscribed
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-1 rounded text-xs font-medium bg-green-100 text-green-800">
+                                Subscribed
+                              </span>
+                            )}
                           </td>
                         </tr>
                       ))}

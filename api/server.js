@@ -2260,19 +2260,34 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
 
     console.log(`📊 Starting engagement backfill for client ${clientId}`)
 
-    // Get all contacts for this client
-    const { data: contacts, error: contactsError } = await supabase
-      .from('contacts')
-      .select('id, email')
-      .eq('client_id', clientId)
+    // Get all contacts for this client (paginate to get all)
+    let allContacts = []
+    let offset = 0
+    const pageSize = 1000
 
-    if (contactsError) throw contactsError
+    while (true) {
+      const { data: pageContacts, error: contactsError } = await supabase
+        .from('contacts')
+        .select('id, email')
+        .eq('client_id', clientId)
+        .range(offset, offset + pageSize - 1)
 
-    if (!contacts || contacts.length === 0) {
+      if (contactsError) throw contactsError
+      if (!pageContacts || pageContacts.length === 0) break
+
+      allContacts = allContacts.concat(pageContacts)
+      console.log(`   Fetched ${allContacts.length} contacts so far...`)
+      offset += pageSize
+
+      if (pageContacts.length < pageSize) break
+    }
+
+    if (allContacts.length === 0) {
       return res.json({ updated: 0, message: 'No contacts found' })
     }
 
-    console.log(`   Found ${contacts.length} contacts to process`)
+    const contacts = allContacts
+    console.log(`   Found ${contacts.length} total contacts to process`)
 
     let updated = 0
 
