@@ -569,6 +569,7 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
       // If open or click event, update engagement metrics
       if ((eventType === 'open' || eventType === 'click') && event.email) {
         const eventTimestamp = new Date(event.timestamp * 1000).toISOString()
+        const eventUnixTime = event.timestamp
 
         // Fetch current engagement values
         const { data: contact } = await supabase
@@ -578,8 +579,35 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
           .single()
 
         if (contact) {
+          let shouldCountClick = true
+
+          // Bot detection for clicks
+          if (eventType === 'click' && campaignId) {
+            // Check for recent clicks from same email for same campaign (within last 60 seconds)
+            const oneMinuteAgo = eventUnixTime - 60
+            const { data: recentClicks } = await supabase
+              .from('analytics_events')
+              .select('url, timestamp')
+              .eq('email', event.email)
+              .eq('campaign_id', campaignId)
+              .eq('event_type', 'click')
+              .gte('timestamp', oneMinuteAgo)
+
+            if (recentClicks && recentClicks.length >= 5) {
+              // 5+ clicks in the last minute for same campaign = likely bot
+              shouldCountClick = false
+              // console.log(`Bot detected: ${event.email} has ${recentClicks.length} clicks in last 60s`)
+            } else if (recentClicks && event.url) {
+              // Check if this exact URL was already clicked
+              const alreadyClicked = recentClicks.some(c => c.url === event.url)
+              if (alreadyClicked) {
+                shouldCountClick = false // Don't count duplicate URL clicks
+              }
+            }
+          }
+
           const newOpens = (contact.total_opens || 0) + (eventType === 'open' ? 1 : 0)
-          const newClicks = (contact.total_clicks || 0) + (eventType === 'click' ? 1 : 0)
+          const newClicks = (contact.total_clicks || 0) + (eventType === 'click' && shouldCountClick ? 1 : 0)
           const newScore = newOpens + (newClicks * 2) // clicks worth 2 points
 
           await supabase
@@ -2302,19 +2330,61 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
         console.log(`   Processing ${processed}/${contacts.length}...`)
       }
 
-      // Get open count
+      // Get open count (opens are reliable, not typically faked by bots)
       const { count: openCount } = await supabase
         .from('analytics_events')
         .select('*', { count: 'exact', head: true })
         .eq('email', contact.email)
         .eq('event_type', 'open')
 
-      // Get click count
-      const { count: clickCount } = await supabase
+      // Get click events with timestamps and URLs for bot detection
+      const { data: clickEvents } = await supabase
         .from('analytics_events')
-        .select('*', { count: 'exact', head: true })
+        .select('timestamp, url, campaign_id')
         .eq('email', contact.email)
         .eq('event_type', 'click')
+        .order('timestamp', { ascending: true })
+
+      // Calculate human clicks (filtering out bot activity)
+      let humanClicks = 0
+      if (clickEvents && clickEvents.length > 0) {
+        // Group clicks by campaign
+        const clicksByCampaign = {}
+        for (const click of clickEvents) {
+          const campId = click.campaign_id || 'unknown'
+          if (!clicksByCampaign[campId]) {
+            clicksByCampaign[campId] = []
+          }
+          clicksByCampaign[campId].push(click)
+        }
+
+        // For each campaign, check if clicks look like bot or human
+        for (const campId in clicksByCampaign) {
+          const campClicks = clicksByCampaign[campId]
+
+          if (campClicks.length === 1) {
+            // Single click is likely human
+            humanClicks += 1
+          } else {
+            // Multiple clicks - check time spread
+            const timestamps = campClicks.map(c => c.timestamp)
+            const minTime = Math.min(...timestamps)
+            const maxTime = Math.max(...timestamps)
+            const timeSpreadSeconds = maxTime - minTime
+
+            // If all clicks happened within 30 seconds, likely a bot
+            // Bots click all links nearly simultaneously
+            if (timeSpreadSeconds <= 30) {
+              // Bot detected - don't count these clicks
+              // console.log(`   Bot detected for ${contact.email} in campaign ${campId}: ${campClicks.length} clicks in ${timeSpreadSeconds}s`)
+            } else {
+              // Human behavior - count unique URLs clicked
+              const uniqueUrls = new Set(campClicks.map(c => c.url).filter(Boolean))
+              humanClicks += uniqueUrls.size
+            }
+          }
+        }
+      }
 
       // Get bounce status
       const { data: bounceEvent } = await supabase
@@ -2337,7 +2407,7 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
         .single()
 
       const totalOpens = openCount || 0
-      const totalClicks = clickCount || 0
+      const totalClicks = humanClicks // Use bot-filtered click count
       const engagementScore = totalOpens + (totalClicks * 2)
 
       // Build update object
