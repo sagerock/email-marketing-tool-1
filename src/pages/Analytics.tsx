@@ -4,7 +4,7 @@ import { useClient } from '../context/ClientContext'
 import type { Campaign, AnalyticsEvent } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw } from 'lucide-react'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -27,6 +27,18 @@ interface EventCounts {
   unsubscribes: number
 }
 
+interface CampaignMetrics {
+  id: string
+  name: string
+  sent_at: string
+  sent: number
+  delivered: number
+  uniqueOpens: number
+  uniqueClicks: number
+  bounces: number
+  unsubscribes: number
+}
+
 export default function Analytics() {
   const { selectedClient } = useClient()
   const [campaigns, setCampaigns] = useState<CampaignWithTemplate[]>([])
@@ -37,6 +49,9 @@ export default function Analytics() {
   const [showPreviewModal, setShowPreviewModal] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ inserted: number; messagesFound: number } | null>(null)
+  const [viewMode, setViewMode] = useState<'details' | 'table'>('details')
+  const [allCampaignMetrics, setAllCampaignMetrics] = useState<CampaignMetrics[]>([])
+  const [loadingMetrics, setLoadingMetrics] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -185,14 +200,114 @@ export default function Analytics() {
 
   const stats = getStats()
 
+  // Fetch metrics for all campaigns (for table view)
+  const fetchAllCampaignMetrics = async () => {
+    if (!selectedClient || campaigns.length === 0) return
+
+    setLoadingMetrics(true)
+    try {
+      const metricsPromises = campaigns.map(async (campaign) => {
+        const [deliveredRes, uniqueOpensRes, uniqueClicksRes, bouncesRes, unsubscribesRes] = await Promise.all([
+          supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaign.id).eq('event_type', 'delivered'),
+          supabase.from('analytics_events').select('email').eq('campaign_id', campaign.id).eq('event_type', 'open'),
+          supabase.from('analytics_events').select('email').eq('campaign_id', campaign.id).eq('event_type', 'click'),
+          supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaign.id).eq('event_type', 'bounce'),
+          supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaign.id).eq('event_type', 'unsubscribe'),
+        ])
+
+        const uniqueOpenEmails = new Set(uniqueOpensRes.data?.map(e => e.email) || [])
+        const uniqueClickEmails = new Set(uniqueClicksRes.data?.map(e => e.email) || [])
+
+        return {
+          id: campaign.id,
+          name: campaign.name,
+          sent_at: campaign.sent_at || campaign.created_at,
+          sent: campaign.recipient_count || 0,
+          delivered: deliveredRes.count || 0,
+          uniqueOpens: uniqueOpenEmails.size,
+          uniqueClicks: uniqueClickEmails.size,
+          bounces: bouncesRes.count || 0,
+          unsubscribes: unsubscribesRes.count || 0,
+        }
+      })
+
+      const metrics = await Promise.all(metricsPromises)
+      // Sort by sent_at descending (most recent first)
+      metrics.sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
+      setAllCampaignMetrics(metrics)
+    } catch (error) {
+      console.error('Error fetching campaign metrics:', error)
+    } finally {
+      setLoadingMetrics(false)
+    }
+  }
+
+  // Load metrics when switching to table view
+  useEffect(() => {
+    if (viewMode === 'table' && allCampaignMetrics.length === 0 && campaigns.length > 0) {
+      fetchAllCampaignMetrics()
+    }
+  }, [viewMode, campaigns])
+
+  // Export to CSV
+  const exportToCSV = () => {
+    if (allCampaignMetrics.length === 0) return
+
+    const headers = ['Campaign Name', 'Sent Date', 'Sent', 'Delivered', 'Delivery %', 'Unique Opens', 'Open %', 'Unique Clicks', 'CTR %', 'Bounces', 'Unsubscribes']
+    const rows = allCampaignMetrics.map(m => [
+      `"${m.name.replace(/"/g, '""')}"`,
+      new Date(m.sent_at).toLocaleDateString(),
+      m.sent,
+      m.delivered,
+      m.sent > 0 ? ((m.delivered / m.sent) * 100).toFixed(1) + '%' : '0%',
+      m.uniqueOpens,
+      m.delivered > 0 ? ((m.uniqueOpens / m.delivered) * 100).toFixed(1) + '%' : '0%',
+      m.uniqueClicks,
+      m.uniqueOpens > 0 ? ((m.uniqueClicks / m.uniqueOpens) * 100).toFixed(1) + '%' : '0%',
+      m.bounces,
+      m.unsubscribes,
+    ])
+
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `campaign-analytics-${new Date().toISOString().split('T')[0]}.csv`
+    a.click()
+    window.URL.revokeObjectURL(url)
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900">Analytics</h1>
-        <p className="mt-1 text-sm text-gray-600">
-          Track the performance of your email campaigns
-        </p>
+      <div className="flex justify-between items-start">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900">Analytics</h1>
+          <p className="mt-1 text-sm text-gray-600">
+            Track the performance of your email campaigns
+          </p>
+        </div>
+        {campaigns.length > 0 && (
+          <div className="flex gap-2">
+            <Button
+              variant={viewMode === 'details' ? 'primary' : 'outline'}
+              size="sm"
+              onClick={() => setViewMode('details')}
+            >
+              <LayoutDashboard className="h-4 w-4 mr-2" />
+              Campaign Details
+            </Button>
+            <Button
+              variant={viewMode === 'table' ? 'primary' : 'outline'}
+              size="sm"
+              onClick={() => setViewMode('table')}
+            >
+              <Table className="h-4 w-4 mr-2" />
+              All Campaigns
+            </Button>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -206,8 +321,77 @@ export default function Analytics() {
             </div>
           </CardContent>
         </Card>
+      ) : viewMode === 'table' ? (
+        /* All Campaigns Table View */
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle>All Campaign Analytics</CardTitle>
+            <Button variant="outline" size="sm" onClick={exportToCSV} disabled={allCampaignMetrics.length === 0}>
+              <Download className="h-4 w-4 mr-2" />
+              Export CSV
+            </Button>
+          </CardHeader>
+          <CardContent>
+            {loadingMetrics ? (
+              <div className="text-center py-12 text-gray-500">Loading campaign metrics...</div>
+            ) : allCampaignMetrics.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">No campaign data available.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Campaign</th>
+                      <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Sent Date</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Sent</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Delivered</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Del %</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Opens</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Open %</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Clicks</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">CTR %</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Bounces</th>
+                      <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Unsubs</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {allCampaignMetrics.map((m) => (
+                      <tr
+                        key={m.id}
+                        className="hover:bg-gray-50 cursor-pointer"
+                        onClick={() => {
+                          setSelectedCampaign(m.id)
+                          setViewMode('details')
+                        }}
+                      >
+                        <td className="py-3 px-4 text-sm text-gray-900 font-medium">{m.name}</td>
+                        <td className="py-3 px-4 text-sm text-gray-600">{new Date(m.sent_at).toLocaleDateString()}</td>
+                        <td className="py-3 px-4 text-sm text-gray-900 text-right">{m.sent.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-sm text-gray-900 text-right">{m.delivered.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-sm text-gray-600 text-right">
+                          {m.sent > 0 ? ((m.delivered / m.sent) * 100).toFixed(1) : '0'}%
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-900 text-right">{m.uniqueOpens.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-sm text-gray-600 text-right">
+                          {m.delivered > 0 ? ((m.uniqueOpens / m.delivered) * 100).toFixed(1) : '0'}%
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-900 text-right">{m.uniqueClicks.toLocaleString()}</td>
+                        <td className="py-3 px-4 text-sm text-gray-600 text-right">
+                          {m.uniqueOpens > 0 ? ((m.uniqueClicks / m.uniqueOpens) * 100).toFixed(1) : '0'}%
+                        </td>
+                        <td className="py-3 px-4 text-sm text-red-600 text-right">{m.bounces}</td>
+                        <td className="py-3 px-4 text-sm text-orange-600 text-right">{m.unsubscribes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       ) : (
         <>
+          {/* Campaign Details View */}
           {/* Campaign Selector */}
           <Card>
             <CardContent className="pt-6">
