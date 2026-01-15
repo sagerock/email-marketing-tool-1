@@ -58,6 +58,10 @@ export default function Settings() {
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState<{ updated: number; total: number } | null>(null)
 
+  // Bounce type sync state
+  const [syncingBounceTypes, setSyncingBounceTypes] = useState(false)
+  const [bounceTypeSyncResult, setBounceTypeSyncResult] = useState<{ hard: number; soft: number } | null>(null)
+
   // Fetch Salesforce status and industry links when selected client changes
   useEffect(() => {
     if (selectedClient) {
@@ -326,6 +330,33 @@ export default function Settings() {
       alert('Backfill failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
     } finally {
       setBackfilling(false)
+    }
+  }
+
+  const syncBounceTypes = async () => {
+    if (!selectedClient) return
+    if (!confirm('This will sync bounce types from SendGrid to accurately classify hard vs soft bounces. Continue?')) return
+
+    setSyncingBounceTypes(true)
+    setBounceTypeSyncResult(null)
+    try {
+      const response = await fetch(`${API_URL}/api/contacts/sync-bounce-types`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: selectedClient.id }),
+      })
+      const data = await response.json()
+      if (response.ok) {
+        setBounceTypeSyncResult({ hard: data.hardBounces, soft: data.softBounces })
+        alert(data.message)
+      } else {
+        throw new Error(data.error || 'Sync failed')
+      }
+    } catch (error) {
+      console.error('Error syncing bounce types:', error)
+      alert('Sync failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
+    } finally {
+      setSyncingBounceTypes(false)
     }
   }
 
@@ -801,7 +832,7 @@ export default function Settings() {
               This updates opens, clicks, engagement scores, and bounce status from existing events.
             </p>
 
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-4">
               <Button
                 onClick={backfillEngagement}
                 disabled={backfilling}
@@ -819,16 +850,42 @@ export default function Settings() {
                 )}
               </Button>
 
+              <Button
+                variant="outline"
+                onClick={syncBounceTypes}
+                disabled={syncingBounceTypes}
+              >
+                {syncingBounceTypes ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Syncing...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Sync Bounce Types
+                  </>
+                )}
+              </Button>
+
               {backfillResult && (
                 <div className="flex items-center gap-2 text-sm text-green-600">
                   <CheckCircle className="h-4 w-4" />
                   <span>Updated {backfillResult.updated} of {backfillResult.total} contacts</span>
                 </div>
               )}
+
+              {bounceTypeSyncResult && (
+                <div className="flex items-center gap-2 text-sm text-green-600">
+                  <CheckCircle className="h-4 w-4" />
+                  <span>{bounceTypeSyncResult.hard} hard, {bounceTypeSyncResult.soft} soft bounces synced</span>
+                </div>
+              )}
             </div>
 
             <p className="text-xs text-gray-500 mt-4">
               Note: This is only needed for historical data. New engagement is tracked automatically via webhooks.
+              "Sync Bounce Types" fetches accurate hard/soft classification from SendGrid's suppression lists.
             </p>
           </CardContent>
         </Card>

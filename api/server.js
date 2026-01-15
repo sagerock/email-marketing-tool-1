@@ -2383,6 +2383,127 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
   }
 })
 
+/**
+ * Sync bounce types from SendGrid's suppression API
+ * Updates contacts with accurate hard/soft bounce classification
+ */
+app.post('/api/contacts/sync-bounce-types', async (req, res) => {
+  try {
+    const { clientId } = req.body
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    // Get client's SendGrid API key
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('sendgrid_api_key')
+      .eq('id', clientId)
+      .single()
+
+    if (clientError || !client) {
+      return res.status(404).json({ error: 'Client not found' })
+    }
+
+    console.log(`📧 Syncing bounce types from SendGrid for client ${clientId}`)
+
+    // Fetch bounces from SendGrid (hard bounces)
+    const bouncesResponse = await fetch('https://api.sendgrid.com/v3/suppression/bounces', {
+      headers: {
+        'Authorization': `Bearer ${client.sendgrid_api_key}`,
+        'Content-Type': 'application/json',
+      },
+    })
+
+    if (!bouncesResponse.ok) {
+      throw new Error(`SendGrid bounces API error: ${bouncesResponse.status}`)
+    }
+
+    const bounces = await bouncesResponse.json()
+    console.log(`   Found ${bounces.length} bounces in SendGrid`)
+
+    // Fetch blocks from SendGrid (usually soft/temporary issues)
+    const blocksResponse = await fetch('https://api.sendgrid.com/v3/suppression/blocks', {
+      headers: {
+        'Authorization': `Bearer ${client.sendgrid_api_key}`,
+        'Content-Type': 'application/json',
+      },
+    })
+
+    if (!blocksResponse.ok) {
+      throw new Error(`SendGrid blocks API error: ${blocksResponse.status}`)
+    }
+
+    const blocks = await blocksResponse.json()
+    console.log(`   Found ${blocks.length} blocks in SendGrid`)
+
+    // Create maps for quick lookup
+    const hardBounceEmails = new Set(bounces.map(b => b.email.toLowerCase()))
+    const softBounceEmails = new Set(blocks.map(b => b.email.toLowerCase()))
+
+    // Remove overlaps - if in both, treat as hard bounce
+    for (const email of hardBounceEmails) {
+      softBounceEmails.delete(email)
+    }
+
+    let hardUpdated = 0
+    let softUpdated = 0
+
+    // Update hard bounces
+    if (hardBounceEmails.size > 0) {
+      const hardEmails = Array.from(hardBounceEmails)
+
+      // Process in batches of 100 for the IN clause
+      for (let i = 0; i < hardEmails.length; i += 100) {
+        const batch = hardEmails.slice(i, i + 100)
+        const { data, error } = await supabase
+          .from('contacts')
+          .update({ bounce_status: 'hard' })
+          .eq('client_id', clientId)
+          .in('email', batch)
+          .select('id')
+
+        if (!error && data) {
+          hardUpdated += data.length
+        }
+      }
+    }
+
+    // Update soft bounces (blocks)
+    if (softBounceEmails.size > 0) {
+      const softEmails = Array.from(softBounceEmails)
+
+      for (let i = 0; i < softEmails.length; i += 100) {
+        const batch = softEmails.slice(i, i + 100)
+        const { data, error } = await supabase
+          .from('contacts')
+          .update({ bounce_status: 'soft' })
+          .eq('client_id', clientId)
+          .in('email', batch)
+          .select('id')
+
+        if (!error && data) {
+          softUpdated += data.length
+        }
+      }
+    }
+
+    console.log(`   ✅ Updated ${hardUpdated} hard bounces, ${softUpdated} soft bounces`)
+
+    res.json({
+      hardBounces: hardUpdated,
+      softBounces: softUpdated,
+      sendgridHardTotal: bounces.length,
+      sendgridSoftTotal: blocks.length,
+      message: `Updated ${hardUpdated} hard bounces and ${softUpdated} soft bounces from SendGrid`,
+    })
+  } catch (error) {
+    console.error('Error syncing bounce types:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // ============================================================
 // STATIC FILE SERVING (Frontend)
 // Serve the built React app from the dist folder
