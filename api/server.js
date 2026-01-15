@@ -2367,10 +2367,11 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
             humanClicks += 1
           } else {
             // Multiple clicks - check time spread
-            const timestamps = campClicks.map(c => c.timestamp)
+            // Convert timestamps to milliseconds for proper comparison
+            const timestamps = campClicks.map(c => new Date(c.timestamp).getTime())
             const minTime = Math.min(...timestamps)
             const maxTime = Math.max(...timestamps)
-            const timeSpreadSeconds = maxTime - minTime
+            const timeSpreadSeconds = (maxTime - minTime) / 1000
 
             // If all clicks happened within 30 seconds, likely a bot
             // Bots click all links nearly simultaneously
