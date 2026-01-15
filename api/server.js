@@ -583,25 +583,34 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
 
           // Bot detection for clicks
           if (eventType === 'click' && campaignId) {
-            // Check for recent clicks from same email for same campaign (within last 60 seconds)
-            const oneMinuteAgo = eventUnixTime - 60
-            const { data: recentClicks } = await supabase
+            // Get ALL clicks from this email for this campaign (for unique URL check)
+            const { data: allCampaignClicks } = await supabase
               .from('analytics_events')
               .select('url, timestamp')
               .eq('email', event.email)
               .eq('campaign_id', campaignId)
               .eq('event_type', 'click')
-              .gte('timestamp', oneMinuteAgo)
 
-            if (recentClicks && recentClicks.length >= 5) {
-              // 5+ clicks in the last minute for same campaign = likely bot
-              shouldCountClick = false
-              // console.log(`Bot detected: ${event.email} has ${recentClicks.length} clicks in last 60s`)
-            } else if (recentClicks && event.url) {
-              // Check if this exact URL was already clicked
-              const alreadyClicked = recentClicks.some(c => c.url === event.url)
-              if (alreadyClicked) {
-                shouldCountClick = false // Don't count duplicate URL clicks
+            if (allCampaignClicks) {
+              // Check for recent burst (5+ clicks in last 60 seconds)
+              const oneMinuteAgo = eventUnixTime - 60
+              const recentClicks = allCampaignClicks.filter(c => c.timestamp >= oneMinuteAgo)
+
+              if (recentClicks.length >= 5) {
+                // 5+ clicks in the last minute = likely bot burst
+                shouldCountClick = false
+              } else {
+                // Check total unique URLs - more than 5 = bot (humans click 1-3)
+                const uniqueUrls = new Set(allCampaignClicks.map(c => c.url).filter(Boolean))
+                if (event.url) uniqueUrls.add(event.url) // Include current click
+
+                if (uniqueUrls.size > 5) {
+                  // Too many unique URLs = bot clicking all links
+                  shouldCountClick = false
+                } else if (allCampaignClicks.some(c => c.url === event.url)) {
+                  // This exact URL was already clicked - don't count duplicates
+                  shouldCountClick = false
+                }
               }
             }
           }
@@ -2409,19 +2418,26 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
               console.log(`   DEBUG ${contact.email}: ${campClicks.length} clicks, timeSpread=${timeSpreadSeconds}s, raw timestamps:`, campClicks.slice(0, 3).map(c => c.timestamp))
             }
 
-            // If all clicks happened within 30 seconds, likely a bot
-            // Bots click all links nearly simultaneously
-            if (timeSpreadSeconds <= 30) {
+            // Count unique URLs clicked
+            const uniqueUrls = new Set(campClicks.map(c => c.url).filter(Boolean))
+            const uniqueUrlCount = uniqueUrls.size
+
+            // Bot detection:
+            // 1. All clicks within 30 seconds = bot (security scanner burst)
+            // 2. More than 5 unique URLs clicked = bot (humans click 1-3 links typically)
+            const isTimeBurstBot = timeSpreadSeconds <= 30
+            const isTooManyUrlsBot = uniqueUrlCount > 5
+
+            if (isTimeBurstBot || isTooManyUrlsBot) {
               // Bot detected - don't count these clicks
               if (debugEmails.includes(contact.email)) {
-                console.log(`   DEBUG ${contact.email}: BOT DETECTED - setting clicks to 0`)
+                console.log(`   DEBUG ${contact.email}: BOT DETECTED (timeBurst=${isTimeBurstBot}, tooManyUrls=${isTooManyUrlsBot}) - setting clicks to 0`)
               }
             } else {
               // Human behavior - count unique URLs clicked
-              const uniqueUrls = new Set(campClicks.map(c => c.url).filter(Boolean))
-              humanClicks += uniqueUrls.size
+              humanClicks += uniqueUrlCount
               if (debugEmails.includes(contact.email)) {
-                console.log(`   DEBUG ${contact.email}: HUMAN - counting ${uniqueUrls.size} unique URLs`)
+                console.log(`   DEBUG ${contact.email}: HUMAN - counting ${uniqueUrlCount} unique URLs`)
               }
             }
           }
