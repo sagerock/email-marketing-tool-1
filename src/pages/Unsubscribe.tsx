@@ -8,9 +8,10 @@ import { CheckCircle, XCircle, Mail } from 'lucide-react'
 export default function Unsubscribe() {
   const [searchParams] = useSearchParams()
   const token = searchParams.get('token')
+  const campaignId = searchParams.get('campaign_id')
 
   const [loading, setLoading] = useState(true)
-  const [contact, setContact] = useState<{ email: string; unsubscribed: boolean } | null>(null)
+  const [contact, setContact] = useState<{ id: string; email: string; unsubscribed: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [processing, setProcessing] = useState(false)
   const [success, setSuccess] = useState(false)
@@ -32,7 +33,7 @@ export default function Unsubscribe() {
     try {
       const { data, error: fetchError } = await supabase
         .from('contacts')
-        .select('email, unsubscribed')
+        .select('id, email, unsubscribed')
         .eq('unsubscribe_token', token)
         .single()
 
@@ -51,7 +52,7 @@ export default function Unsubscribe() {
   }
 
   const handleUnsubscribe = async () => {
-    if (!token) return
+    if (!token || !contact) return
 
     setProcessing(true)
     try {
@@ -64,6 +65,19 @@ export default function Unsubscribe() {
         .eq('unsubscribe_token', token)
 
       if (updateError) throw updateError
+
+      // Create analytics event for tracking (if campaign_id is available)
+      if (campaignId) {
+        await supabase
+          .from('analytics_events')
+          .insert({
+            campaign_id: campaignId,
+            email: contact.email,
+            event_type: 'unsubscribe',
+            timestamp: new Date().toISOString(),
+            sg_event_id: `unsubscribe-${contact.id}-${Date.now()}`,
+          })
+      }
 
       setSuccess(true)
       setContact((prev) => prev ? { ...prev, unsubscribed: true } : null)

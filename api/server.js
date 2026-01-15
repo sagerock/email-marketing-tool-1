@@ -209,8 +209,8 @@ async function sendCampaignById(campaignId) {
   }
 
   const emailPromises = contacts.map((contact) => {
-    // Generate unsubscribe URL
-    const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}`
+    // Generate unsubscribe URL with campaign_id for tracking
+    const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}&campaign_id=${campaignId}`
 
     // Get industry link for this contact
     const industryLink = contact.industry ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl) : defaultIndustryUrl
