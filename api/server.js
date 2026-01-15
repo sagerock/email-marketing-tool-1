@@ -2322,16 +2322,24 @@ app.post('/api/contacts/backfill-engagement', async (req, res) => {
     }
 
     // Step 2: Get contacts for this client that match those emails
+    // Batch the IN clause to avoid "Bad Request" with too many emails
     console.log(`   Step 2: Matching to contacts for this client...`)
-    const { data: contacts, error: contactsError } = await supabase
-      .from('contacts')
-      .select('id, email')
-      .eq('client_id', clientId)
-      .in('email', uniqueEmails)
+    const contacts = []
+    const emailBatchSize = 500 // Safe limit for IN clause
 
-    if (contactsError) throw contactsError
+    for (let i = 0; i < uniqueEmails.length; i += emailBatchSize) {
+      const emailBatch = uniqueEmails.slice(i, i + emailBatchSize)
+      const { data: contactBatch, error: contactsError } = await supabase
+        .from('contacts')
+        .select('id, email')
+        .eq('client_id', clientId)
+        .in('email', emailBatch)
 
-    if (!contacts || contacts.length === 0) {
+      if (contactsError) throw contactsError
+      if (contactBatch) contacts.push(...contactBatch)
+    }
+
+    if (contacts.length === 0) {
       return res.json({ updated: 0, total: 0, message: 'No matching contacts found' })
     }
 
