@@ -57,6 +57,7 @@ export default function Analytics() {
   const [topSubscribers, setTopSubscribers] = useState<Contact[]>([])
   const [bouncedContacts, setBouncedContacts] = useState<(Contact & { campaign_name?: string })[]>([])
   const [loadingSubscribers, setLoadingSubscribers] = useState(false)
+  const [bounceFilter, setBounceFilter] = useState<'all' | 'hard' | 'soft'>('all')
 
   useEffect(() => {
     fetchCampaigns()
@@ -545,53 +546,99 @@ export default function Analytics() {
                 </div>
               )
             ) : (
-              bouncedContacts.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">
-                  <AlertCircle className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-                  <p>No bounced contacts. Great job maintaining list hygiene!</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full">
-                    <thead>
-                      <tr className="border-b border-gray-200">
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Bounce Type</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Bounced At</th>
-                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Campaign</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-gray-200">
-                      {bouncedContacts.map((contact) => (
-                        <tr key={contact.id} className="hover:bg-gray-50">
-                          <td className="py-3 px-4 text-sm text-gray-900">{contact.email}</td>
-                          <td className="py-3 px-4 text-sm text-gray-600">
-                            {contact.first_name || contact.last_name
-                              ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
-                              : '-'}
-                          </td>
-                          <td className="py-3 px-4 text-sm">
-                            <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
-                              contact.bounce_status === 'hard'
-                                ? 'bg-red-100 text-red-800'
-                                : 'bg-yellow-100 text-yellow-800'
-                            }`}>
-                              {contact.bounce_status === 'hard' ? 'Hard Bounce' : 'Soft Bounce'}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-600">
-                            {contact.bounced_at
-                              ? new Date(contact.bounced_at).toLocaleDateString()
-                              : '-'}
-                          </td>
-                          <td className="py-3 px-4 text-sm text-gray-600">{contact.campaign_name}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )
+              (() => {
+                const filteredBounces = bouncedContacts.filter(c =>
+                  bounceFilter === 'all' ? true : c.bounce_status === bounceFilter
+                )
+                const hardCount = bouncedContacts.filter(c => c.bounce_status === 'hard').length
+                const softCount = bouncedContacts.filter(c => c.bounce_status === 'soft').length
+
+                return (
+                  <div className="space-y-4">
+                    {/* Bounce Type Filter */}
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setBounceFilter('all')}
+                        className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                          bounceFilter === 'all'
+                            ? 'bg-gray-900 text-white'
+                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                        }`}
+                      >
+                        All ({bouncedContacts.length})
+                      </button>
+                      <button
+                        onClick={() => setBounceFilter('hard')}
+                        className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                          bounceFilter === 'hard'
+                            ? 'bg-red-600 text-white'
+                            : 'bg-red-50 text-red-700 hover:bg-red-100'
+                        }`}
+                      >
+                        Hard ({hardCount})
+                      </button>
+                      <button
+                        onClick={() => setBounceFilter('soft')}
+                        className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                          bounceFilter === 'soft'
+                            ? 'bg-yellow-500 text-white'
+                            : 'bg-yellow-50 text-yellow-700 hover:bg-yellow-100'
+                        }`}
+                      >
+                        Soft ({softCount})
+                      </button>
+                    </div>
+
+                    {filteredBounces.length === 0 ? (
+                      <div className="text-center py-12 text-gray-500">
+                        <AlertCircle className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                        <p>No {bounceFilter === 'all' ? '' : bounceFilter + ' '}bounced contacts.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full">
+                          <thead>
+                            <tr className="border-b border-gray-200">
+                              <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
+                              <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
+                              <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Bounce Type</th>
+                              <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Bounced At</th>
+                              <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Campaign</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-200">
+                            {filteredBounces.map((contact) => (
+                              <tr key={contact.id} className="hover:bg-gray-50">
+                                <td className="py-3 px-4 text-sm text-gray-900">{contact.email}</td>
+                                <td className="py-3 px-4 text-sm text-gray-600">
+                                  {contact.first_name || contact.last_name
+                                    ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
+                                    : '-'}
+                                </td>
+                                <td className="py-3 px-4 text-sm">
+                                  <span className={`inline-flex items-center px-2 py-1 rounded text-xs font-medium ${
+                                    contact.bounce_status === 'hard'
+                                      ? 'bg-red-100 text-red-800'
+                                      : 'bg-yellow-100 text-yellow-800'
+                                  }`}>
+                                    {contact.bounce_status === 'hard' ? 'Hard Bounce' : 'Soft Bounce'}
+                                  </span>
+                                </td>
+                                <td className="py-3 px-4 text-sm text-gray-600">
+                                  {contact.bounced_at
+                                    ? new Date(contact.bounced_at).toLocaleDateString()
+                                    : '-'}
+                                </td>
+                                <td className="py-3 px-4 text-sm text-gray-600">{contact.campaign_name}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()
             )}
           </CardContent>
         </Card>
