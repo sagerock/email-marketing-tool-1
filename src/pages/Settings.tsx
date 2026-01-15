@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 // Settings page - includes client management, Salesforce integration, and UTM tracking
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2, Users } from 'lucide-react'
+import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2, Users, TrendingUp } from 'lucide-react'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -53,6 +53,10 @@ export default function Settings() {
   const [editingIndustryLink, setEditingIndustryLink] = useState<IndustryLink | null>(null)
   const [newIndustryLink, setNewIndustryLink] = useState({ industry: '', link_url: '' })
   const [savingIndustryLink, setSavingIndustryLink] = useState(false)
+
+  // Engagement backfill state
+  const [backfilling, setBackfilling] = useState(false)
+  const [backfillResult, setBackfillResult] = useState<{ updated: number; total: number } | null>(null)
 
   // Fetch Salesforce status and industry links when selected client changes
   useEffect(() => {
@@ -295,6 +299,33 @@ export default function Settings() {
       alert('Campaign sync failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
     } finally {
       setSyncingCampaigns(false)
+    }
+  }
+
+  const backfillEngagement = async () => {
+    if (!selectedClient) return
+    if (!confirm('This will recalculate engagement scores for all contacts based on historical analytics data. This may take a few minutes for large contact lists. Continue?')) return
+
+    setBackfilling(true)
+    setBackfillResult(null)
+    try {
+      const response = await fetch(`${API_URL}/api/contacts/backfill-engagement`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clientId: selectedClient.id }),
+      })
+      const data = await response.json()
+      if (response.ok) {
+        setBackfillResult({ updated: data.updated, total: data.total })
+        alert(data.message)
+      } else {
+        throw new Error(data.error || 'Backfill failed')
+      }
+    } catch (error) {
+      console.error('Error backfilling engagement:', error)
+      alert('Backfill failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
+    } finally {
+      setBackfilling(false)
     }
   }
 
@@ -747,6 +778,57 @@ export default function Settings() {
             <p className="text-xs text-gray-500 mt-4">
               Tip: If a contact's industry doesn't match any entry, the default fallback URL is
               <code className="mx-1 px-1 bg-gray-100 rounded">https://alconox.com/industries/</code>
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Engagement Data Card */}
+      {selectedClient && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5" />
+              Engagement Data
+              <span className="text-sm font-normal text-gray-500">
+                ({selectedClient.name})
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-gray-600 mb-4">
+              Recalculate engagement scores for all contacts based on historical analytics data.
+              This updates opens, clicks, engagement scores, and bounce status from existing events.
+            </p>
+
+            <div className="flex items-center gap-4">
+              <Button
+                onClick={backfillEngagement}
+                disabled={backfilling}
+              >
+                {backfilling ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Recalculating...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="h-4 w-4 mr-2" />
+                    Recalculate Engagement
+                  </>
+                )}
+              </Button>
+
+              {backfillResult && (
+                <div className="flex items-center gap-2 text-sm text-green-600">
+                  <CheckCircle className="h-4 w-4" />
+                  <span>Updated {backfillResult.updated} of {backfillResult.total} contacts</span>
+                </div>
+              )}
+            </div>
+
+            <p className="text-xs text-gray-500 mt-4">
+              Note: This is only needed for historical data. New engagement is tracked automatically via webhooks.
             </p>
           </CardContent>
         </Card>
