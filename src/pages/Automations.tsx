@@ -1504,6 +1504,37 @@ function ViewSequenceModal({
     }
   }
 
+  const removeEnrollment = async (enrollmentId: string, contactEmail: string) => {
+    if (!confirm(`Remove ${contactEmail} from this automation? Any pending emails will be cancelled.`)) {
+      return
+    }
+
+    try {
+      // Cancel the enrollment
+      const { error: enrollmentError } = await supabase
+        .from('sequence_enrollments')
+        .update({ status: 'cancelled' })
+        .eq('id', enrollmentId)
+
+      if (enrollmentError) throw enrollmentError
+
+      // Cancel any pending scheduled emails for this enrollment
+      await supabase
+        .from('scheduled_emails')
+        .update({ status: 'cancelled' })
+        .eq('enrollment_id', enrollmentId)
+        .in('status', ['pending', 'processing'])
+
+      // Update local state
+      setEnrollments(prev => prev.map(e =>
+        e.id === enrollmentId ? { ...e, status: 'cancelled' } : e
+      ))
+    } catch (error) {
+      console.error('Error removing enrollment:', error)
+      alert('Failed to remove contact from automation')
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
       <div className="bg-white rounded-lg w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
@@ -1567,6 +1598,7 @@ function ViewSequenceModal({
                           <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Status</th>
                           <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Step</th>
                           <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Enrolled</th>
+                          <th className="px-4 py-2 text-left text-xs font-medium text-gray-500">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
@@ -1583,6 +1615,16 @@ function ViewSequenceModal({
                             </td>
                             <td className="px-4 py-2 text-sm text-gray-500">
                               {new Date(enrollment.enrolled_at).toLocaleDateString()}
+                            </td>
+                            <td className="px-4 py-2">
+                              {(enrollment.status === 'active' || enrollment.status === 'paused') && (
+                                <button
+                                  onClick={() => removeEnrollment(enrollment.id, enrollment.contact?.email || 'this contact')}
+                                  className="text-red-500 hover:text-red-700 text-sm font-medium"
+                                >
+                                  Remove
+                                </button>
+                              )}
                             </td>
                           </tr>
                         ))}
