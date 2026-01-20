@@ -1755,9 +1755,11 @@ function EnrollContactsModal({
         next_email_scheduled_at: scheduledTime.toISOString(),
       }))
 
-      const { error: enrollError } = await supabase
+      // Create enrollments and get IDs back atomically (prevents race condition)
+      const { data: newEnrollments, error: enrollError } = await supabase
         .from('sequence_enrollments')
         .insert(enrollments)
+        .select('id, contact_id')
 
       if (enrollError) throw enrollError
 
@@ -1767,25 +1769,20 @@ function EnrollContactsModal({
         .update({ total_enrolled: sequence.total_enrolled + selectedContacts.length })
         .eq('id', sequence.id)
 
-      // Schedule the first emails
-      if (firstStep) {
-        const { data: newEnrollments } = await supabase
-          .from('sequence_enrollments')
-          .select('id, contact_id')
-          .eq('sequence_id', sequence.id)
-          .in('contact_id', selectedContacts)
+      // Schedule the first emails (unique constraint prevents duplicates)
+      if (firstStep && newEnrollments && newEnrollments.length > 0) {
+        const scheduledEmails = newEnrollments.map(enrollment => ({
+          enrollment_id: enrollment.id,
+          step_id: firstStep.id,
+          contact_id: enrollment.contact_id,
+          scheduled_for: scheduledTime.toISOString(),
+          status: 'pending',
+        }))
 
-        if (newEnrollments) {
-          const scheduledEmails = newEnrollments.map(enrollment => ({
-            enrollment_id: enrollment.id,
-            step_id: firstStep.id,
-            contact_id: enrollment.contact_id,
-            scheduled_for: scheduledTime.toISOString(),
-            status: 'pending',
-          }))
-
-          await supabase.from('scheduled_emails').insert(scheduledEmails)
-        }
+        await supabase.from('scheduled_emails').upsert(scheduledEmails, {
+          onConflict: 'enrollment_id,step_id',
+          ignoreDuplicates: true
+        })
       }
 
       onSuccess()

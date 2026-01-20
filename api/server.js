@@ -1120,17 +1120,20 @@ app.post('/api/sequences/process', async (req, res) => {
           .single()
 
         if (nextStep) {
-          // Schedule next email
+          // Schedule next email (unique constraint prevents duplicates)
           const nextSendTime = new Date()
           nextSendTime.setDate(nextSendTime.getDate() + (nextStep.delay_days || 0))
           nextSendTime.setHours(nextSendTime.getHours() + (nextStep.delay_hours || 0))
 
-          await supabase.from('scheduled_emails').insert({
+          await supabase.from('scheduled_emails').upsert({
             enrollment_id: enrollment.id,
             step_id: nextStep.id,
             contact_id: contact.id,
             scheduled_for: nextSendTime.toISOString(),
             status: 'pending',
+          }, {
+            onConflict: 'enrollment_id,step_id',
+            ignoreDuplicates: true
           })
 
           await supabase
@@ -2109,7 +2112,7 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
                 continue
               }
 
-              // Batch schedule first emails
+              // Batch schedule first emails (unique constraint prevents duplicates)
               const emailsToSchedule = createdEnrollments.map(enrollment => ({
                 enrollment_id: enrollment.id,
                 step_id: firstStep.id,
@@ -2118,7 +2121,16 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
                 status: 'pending',
               }))
 
-              await supabase.from('scheduled_emails').insert(emailsToSchedule)
+              const { error: scheduleError } = await supabase
+                .from('scheduled_emails')
+                .upsert(emailsToSchedule, {
+                  onConflict: 'enrollment_id,step_id',
+                  ignoreDuplicates: true
+                })
+
+              if (scheduleError) {
+                console.error('Warning: Error scheduling emails (may be duplicates):', scheduleError.message)
+              }
 
               // Update sequence enrolled count
               await supabase
@@ -2220,49 +2232,45 @@ app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) 
 
     const now = new Date().toISOString()
 
-    // Create enrollments
+    // Create enrollments and get IDs back atomically (prevents race condition)
     const enrollmentsToCreate = subscribedContactIds.map(contactId => ({
       sequence_id: sequenceId,
       contact_id: contactId,
       status: 'active',
-      current_step: 1,
+      current_step: 0,
       enrolled_at: now,
       next_email_scheduled_at: now, // Send first email immediately
     }))
 
-    // Batch insert enrollments
-    const { error: enrollError } = await supabase
+    const { data: newEnrollments, error: enrollError } = await supabase
       .from('sequence_enrollments')
       .insert(enrollmentsToCreate)
+      .select('id, contact_id')
 
     if (enrollError) throw enrollError
 
-    // Schedule first emails
-    const scheduledEmailsToCreate = subscribedContactIds.map(contactId => ({
-      enrollment_id: null, // Will be linked later
-      step_id: firstStep.id,
-      contact_id: contactId,
-      scheduled_for: now,
-      status: 'pending',
-      attempts: 0,
-    }))
-
-    // Get the created enrollment IDs
-    const { data: newEnrollments } = await supabase
-      .from('sequence_enrollments')
-      .select('id, contact_id')
-      .eq('sequence_id', sequenceId)
-      .in('contact_id', subscribedContactIds)
-
-    // Create scheduled emails with enrollment IDs
-    if (newEnrollments) {
-      const enrollmentMap = new Map(newEnrollments.map(e => [e.contact_id, e.id]))
-      const emailsWithEnrollmentIds = scheduledEmailsToCreate.map(email => ({
-        ...email,
-        enrollment_id: enrollmentMap.get(email.contact_id),
+    // Schedule first emails with enrollment IDs (unique constraint prevents duplicates)
+    if (newEnrollments && newEnrollments.length > 0) {
+      const scheduledEmailsToCreate = newEnrollments.map(enrollment => ({
+        enrollment_id: enrollment.id,
+        step_id: firstStep.id,
+        contact_id: enrollment.contact_id,
+        scheduled_for: now,
+        status: 'pending',
+        attempts: 0,
       }))
 
-      await supabase.from('scheduled_emails').insert(emailsWithEnrollmentIds)
+      // Use upsert with onConflict to prevent duplicates if constraint exists
+      const { error: scheduleError } = await supabase
+        .from('scheduled_emails')
+        .upsert(scheduledEmailsToCreate, {
+          onConflict: 'enrollment_id,step_id',
+          ignoreDuplicates: true
+        })
+
+      if (scheduleError) {
+        console.error('Warning: Error scheduling emails (may be duplicates):', scheduleError.message)
+      }
     }
 
     // Update sequence total_enrolled count
@@ -2730,7 +2738,7 @@ app.listen(PORT, () => {
 
           const now = new Date()
 
-          // Create enrollments
+          // Create enrollments and get IDs back atomically (prevents race condition)
           const enrollments = newContactIds.map(contactId => ({
             sequence_id: sequence.id,
             contact_id: contactId,
@@ -2739,23 +2747,18 @@ app.listen(PORT, () => {
             next_email_scheduled_at: now.toISOString(),
           }))
 
-          const { error: enrollError } = await supabase
+          const { data: newEnrollments, error: enrollError } = await supabase
             .from('sequence_enrollments')
             .insert(enrollments)
+            .select('id, contact_id')
 
           if (enrollError) {
             console.error('❌ Error auto-enrolling contacts:', enrollError)
             continue
           }
 
-          // Get the new enrollments to schedule emails
-          const { data: newEnrollments } = await supabase
-            .from('sequence_enrollments')
-            .select('id, contact_id')
-            .eq('sequence_id', sequence.id)
-            .in('contact_id', newContactIds)
-
-          if (newEnrollments) {
+          // Schedule first emails (unique constraint prevents duplicates)
+          if (newEnrollments && newEnrollments.length > 0) {
             const scheduledEmails = newEnrollments.map(enrollment => ({
               enrollment_id: enrollment.id,
               step_id: firstStep.id,
@@ -2764,7 +2767,16 @@ app.listen(PORT, () => {
               status: 'pending',
             }))
 
-            await supabase.from('scheduled_emails').insert(scheduledEmails)
+            const { error: scheduleError } = await supabase
+              .from('scheduled_emails')
+              .upsert(scheduledEmails, {
+                onConflict: 'enrollment_id,step_id',
+                ignoreDuplicates: true
+              })
+
+            if (scheduleError) {
+              console.error('Warning: Error scheduling emails (may be duplicates):', scheduleError.message)
+            }
           }
 
           // Update total enrolled count
@@ -2943,17 +2955,20 @@ app.listen(PORT, () => {
             .single()
 
           if (nextStep) {
-            // Schedule next email
+            // Schedule next email (unique constraint prevents duplicates)
             const nextSendTime = new Date()
             nextSendTime.setDate(nextSendTime.getDate() + (nextStep.delay_days || 0))
             nextSendTime.setHours(nextSendTime.getHours() + (nextStep.delay_hours || 0))
 
-            await supabase.from('scheduled_emails').insert({
+            await supabase.from('scheduled_emails').upsert({
               enrollment_id: enrollment.id,
               step_id: nextStep.id,
               contact_id: contact.id,
               scheduled_for: nextSendTime.toISOString(),
               status: 'pending',
+            }, {
+              onConflict: 'enrollment_id,step_id',
+              ignoreDuplicates: true
             })
 
             await supabase
@@ -3286,7 +3301,7 @@ app.listen(PORT, () => {
                       .insert(enrollmentsToCreate)
                       .select('id, contact_id')
 
-                    if (createdEnrollments) {
+                    if (createdEnrollments && createdEnrollments.length > 0) {
                       const emailsToSchedule = createdEnrollments.map(enrollment => ({
                         enrollment_id: enrollment.id,
                         step_id: firstStep.id,
@@ -3295,7 +3310,11 @@ app.listen(PORT, () => {
                         status: 'pending',
                       }))
 
-                      await supabase.from('scheduled_emails').insert(emailsToSchedule)
+                      // Use upsert to prevent duplicates
+                      await supabase.from('scheduled_emails').upsert(emailsToSchedule, {
+                        onConflict: 'enrollment_id,step_id',
+                        ignoreDuplicates: true
+                      })
 
                       await supabase
                         .from('email_sequences')
