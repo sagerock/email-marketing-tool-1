@@ -27,3 +27,13 @@ dist-ssr
 .env
 .env.local
 .env.production
+
+# Python scripts with credentials
+*.py
+
+# Data files
+*.csv
+
+# Supabase temp files
+supabase/.temp/
+supabase/emails/
