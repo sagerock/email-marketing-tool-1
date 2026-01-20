@@ -2824,7 +2824,26 @@ app.listen(PORT, () => {
       // ============ PART 2: Process scheduled emails ============
       // Reuse 'now' from PART 0
 
-      // Get pending scheduled emails that are due
+      // Atomically claim pending scheduled emails by setting status to 'processing'
+      // This prevents multiple replicas from processing the same email
+      const { data: claimedIds, error: claimError } = await supabase
+        .from('scheduled_emails')
+        .update({ status: 'processing' })
+        .eq('status', 'pending')
+        .lte('scheduled_for', now)
+        .limit(50)
+        .select('id')
+
+      if (claimError) {
+        console.error('❌ Error claiming scheduled emails:', claimError)
+        return
+      }
+
+      if (!claimedIds || claimedIds.length === 0) {
+        return // No emails to process
+      }
+
+      // Now fetch full details for the emails we claimed
       const { data: scheduledEmails, error: fetchError } = await supabase
         .from('scheduled_emails')
         .select(`
@@ -2837,12 +2856,15 @@ app.listen(PORT, () => {
           ),
           step:sequence_steps(*)
         `)
-        .eq('status', 'pending')
-        .lte('scheduled_for', now)
-        .limit(50)
+        .in('id', claimedIds.map(e => e.id))
 
       if (fetchError) {
         console.error('❌ Error fetching scheduled emails:', fetchError)
+        // Reset claimed emails back to pending on error
+        await supabase
+          .from('scheduled_emails')
+          .update({ status: 'pending' })
+          .in('id', claimedIds.map(e => e.id))
         return
       }
 
