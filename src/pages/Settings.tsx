@@ -930,6 +930,7 @@ function AddClientModal({
     ip_pool: '',
     mailing_address: '',
     default_utm_params: '',
+    default_reply_to_email: '',
   })
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>([])
   const [newSender, setNewSender] = useState({ email: '', name: '' })
@@ -946,6 +947,7 @@ function AddClientModal({
         ip_pool: formData.ip_pool.trim() || null,
         mailing_address: formData.mailing_address || null,
         default_utm_params: formData.default_utm_params || null,
+        default_reply_to_email: formData.default_reply_to_email || null,
         verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
       })
 
@@ -1032,6 +1034,19 @@ function AddClientModal({
               These UTM parameters will be automatically appended to all links in your emails. Can be customized per campaign.
             </p>
           </div>
+
+          <Input
+            label="Default Reply-To Email (optional)"
+            type="email"
+            placeholder="replies@example.com"
+            value={formData.default_reply_to_email}
+            onChange={(e) =>
+              setFormData({ ...formData, default_reply_to_email: e.target.value })
+            }
+          />
+          <p className="-mt-3 text-xs text-gray-500">
+            This email will be pre-filled as the reply-to address for new campaigns. Can be changed per campaign.
+          </p>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1130,6 +1145,7 @@ function EditClientModal({
     ip_pool: client.ip_pool || '',
     mailing_address: client.mailing_address || '',
     default_utm_params: client.default_utm_params || '',
+    default_reply_to_email: client.default_reply_to_email || '',
   })
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>(
     client.verified_senders || []
@@ -1150,6 +1166,7 @@ function EditClientModal({
           ip_pool: formData.ip_pool.trim() || null,
           mailing_address: formData.mailing_address || null,
           default_utm_params: formData.default_utm_params || null,
+          default_reply_to_email: formData.default_reply_to_email || null,
           verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
         })
         .eq('id', client.id)
@@ -1237,6 +1254,19 @@ function EditClientModal({
               These UTM parameters will be automatically appended to all links in your emails. Can be customized per campaign.
             </p>
           </div>
+
+          <Input
+            label="Default Reply-To Email (optional)"
+            type="email"
+            placeholder="replies@example.com"
+            value={formData.default_reply_to_email}
+            onChange={(e) =>
+              setFormData({ ...formData, default_reply_to_email: e.target.value })
+            }
+          />
+          <p className="-mt-3 text-xs text-gray-500">
+            This email will be pre-filled as the reply-to address for new campaigns. Can be changed per campaign.
+          </p>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">

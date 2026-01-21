@@ -88,6 +88,7 @@ export interface Client {
   ip_pool?: string
   mailing_address?: string
   default_utm_params?: string
+  default_reply_to_email?: string
   verified_senders?: VerifiedSender[]
   created_at: string
   updated_at: string

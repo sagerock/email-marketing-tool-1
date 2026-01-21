@@ -633,7 +633,7 @@ function CreateCampaignModal({
   const fetchVerifiedSenders = async () => {
     const { data } = await supabase
       .from('clients')
-      .select('verified_senders, default_utm_params')
+      .select('verified_senders, default_utm_params, default_reply_to_email')
       .eq('id', clientId)
       .single()
 
@@ -646,6 +646,10 @@ function CreateCampaignModal({
       if (!campaign) {
         setFormData(prev => ({ ...prev, utm_params: data.default_utm_params }))
       }
+    }
+    // Pre-populate reply_to for new campaigns
+    if (data?.default_reply_to_email && !campaign) {
+      setFormData(prev => ({ ...prev, reply_to: data.default_reply_to_email }))
     }
   }
 
