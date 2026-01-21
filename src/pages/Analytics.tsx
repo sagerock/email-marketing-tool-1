@@ -25,6 +25,7 @@ interface EventCounts {
   uniqueOpens: number
   clicks: number
   uniqueClicks: number
+  uniqueUnsubscribeClicks: number
   bounces: number
   spam: number
   unsubscribes: number
@@ -99,8 +100,13 @@ export default function Analytics() {
       if (error) throw error
 
       // Deduplicate by email to get unique contacts
+      // For clicks, exclude unsubscribe link clicks
       const emailMap = new Map<string, AnalyticsEvent>()
       for (const event of (data || [])) {
+        // Skip unsubscribe clicks when showing click contacts
+        if (eventType === 'click' && event.url?.includes('/unsubscribe')) {
+          continue
+        }
         if (!emailMap.has(event.email)) {
           emailMap.set(event.email, event)
         }
@@ -231,18 +237,30 @@ export default function Analytics() {
       // For unique opens/clicks, we need to get distinct emails
       const [uniqueOpensRes, uniqueClicksRes] = await Promise.all([
         supabase.from('analytics_events').select('email').eq('campaign_id', campaignId).eq('event_type', 'open'),
-        supabase.from('analytics_events').select('email').eq('campaign_id', campaignId).eq('event_type', 'click'),
+        supabase.from('analytics_events').select('email, url').eq('campaign_id', campaignId).eq('event_type', 'click'),
       ])
 
       const uniqueOpenEmails = new Set(uniqueOpensRes.data?.map(e => e.email) || [])
-      const uniqueClickEmails = new Set(uniqueClicksRes.data?.map(e => e.email) || [])
+
+      // Separate clicks into engaged vs unsubscribe clicks
+      const engagedClickEmails = new Set<string>()
+      const unsubscribeClickEmails = new Set<string>()
+      for (const event of (uniqueClicksRes.data || [])) {
+        const isUnsubscribeClick = event.url?.includes('/unsubscribe')
+        if (isUnsubscribeClick) {
+          unsubscribeClickEmails.add(event.email)
+        } else {
+          engagedClickEmails.add(event.email)
+        }
+      }
 
       setEventCounts({
         delivered: deliveredRes.count || 0,
         opens: opensRes.count || 0,
         uniqueOpens: uniqueOpenEmails.size,
         clicks: clicksRes.count || 0,
-        uniqueClicks: uniqueClickEmails.size,
+        uniqueClicks: engagedClickEmails.size,
+        uniqueUnsubscribeClicks: unsubscribeClickEmails.size,
         bounces: bouncesRes.count || 0,
         spam: spamRes.count || 0,
         unsubscribes: unsubscribesRes.count || 0,
@@ -293,6 +311,7 @@ export default function Analytics() {
         uniqueOpens: 0,
         clicks: 0,
         uniqueClicks: 0,
+        uniqueUnsubscribeClicks: 0,
         bounces: 0,
         spam: 0,
         unsubscribes: 0,
@@ -306,6 +325,7 @@ export default function Analytics() {
       uniqueOpens: eventCounts.uniqueOpens,
       clicks: eventCounts.clicks,
       uniqueClicks: eventCounts.uniqueClicks,
+      uniqueUnsubscribeClicks: eventCounts.uniqueUnsubscribeClicks,
       bounces: eventCounts.bounces,
       spam: eventCounts.spam,
       unsubscribes: eventCounts.unsubscribes,
@@ -872,7 +892,7 @@ export default function Analytics() {
             <StatsCard
               title="Clicked"
               value={stats.uniqueClicks}
-              subtitle={`${((stats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% click rate`}
+              subtitle={`${((stats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% click rate${stats.uniqueUnsubscribeClicks > 0 ? ` · ${stats.uniqueUnsubscribeClicks} unsub` : ''}`}
               icon={MousePointer}
               color="orange"
               onClick={() => setEventFilter(eventFilter === 'click' ? 'all' : 'click')}
