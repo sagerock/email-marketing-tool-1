@@ -58,6 +58,7 @@ export default function Analytics() {
   const [bouncedContacts, setBouncedContacts] = useState<(Contact & { campaign_name?: string })[]>([])
   const [loadingSubscribers, setLoadingSubscribers] = useState(false)
   const [bounceFilter, setBounceFilter] = useState<'all' | 'hard' | 'soft'>('all')
+  const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'click'>('all')
 
   useEffect(() => {
     fetchCampaigns()
@@ -758,6 +759,8 @@ export default function Analytics() {
               subtitle={`${((stats.uniqueOpens / stats.delivered) * 100 || 0).toFixed(1)}% open rate`}
               icon={Mail}
               color="purple"
+              onClick={() => setEventFilter(eventFilter === 'open' ? 'all' : 'open')}
+              active={eventFilter === 'open'}
             />
             <StatsCard
               title="Clicked"
@@ -765,6 +768,8 @@ export default function Analytics() {
               subtitle={`${((stats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% click rate`}
               icon={MousePointer}
               color="orange"
+              onClick={() => setEventFilter(eventFilter === 'click' ? 'all' : 'click')}
+              active={eventFilter === 'click'}
             />
           </div>
 
@@ -835,16 +840,46 @@ export default function Analytics() {
 
           {/* Recent Events */}
           <Card>
-            <CardHeader>
-              <CardTitle>Recent Events</CardTitle>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>
+                {eventFilter === 'all' ? 'Recent Events' : eventFilter === 'open' ? 'Contacts Who Opened' : 'Contacts Who Clicked'}
+              </CardTitle>
+              {eventFilter !== 'all' && (
+                <Button variant="outline" size="sm" onClick={() => setEventFilter('all')}>
+                  Show All Events
+                </Button>
+              )}
             </CardHeader>
             <CardContent>
-              {events.length === 0 ? (
-                <p className="text-center py-8 text-gray-500">
-                  No events yet. Events will appear here as recipients interact with your
-                  campaign.
-                </p>
-              ) : (
+              {(() => {
+                // Filter events based on eventFilter
+                const filteredEvents = eventFilter === 'all'
+                  ? events
+                  : events.filter(e => e.event_type === eventFilter)
+
+                // For open/click filters, deduplicate by email to show unique contacts
+                const displayEvents = eventFilter === 'all'
+                  ? filteredEvents.slice(0, 50)
+                  : Array.from(
+                      filteredEvents.reduce((map, event) => {
+                        if (!map.has(event.email)) {
+                          map.set(event.email, event)
+                        }
+                        return map
+                      }, new Map<string, typeof filteredEvents[0]>())
+                    ).map(([, event]) => event)
+
+                if (displayEvents.length === 0) {
+                  return (
+                    <p className="text-center py-8 text-gray-500">
+                      {eventFilter === 'all'
+                        ? 'No events yet. Events will appear here as recipients interact with your campaign.'
+                        : `No ${eventFilter} events found.`}
+                    </p>
+                  )
+                }
+
+                return (
                 <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
@@ -864,7 +899,7 @@ export default function Analytics() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200">
-                      {events.slice(0, 50).map((event) => (
+                      {displayEvents.map((event) => (
                         <tr key={event.id} className="hover:bg-gray-50">
                           <td className="py-3 px-4 text-sm text-gray-900">
                             {event.email}
@@ -903,7 +938,8 @@ export default function Analytics() {
                     </tbody>
                   </table>
                 </div>
-              )}
+                )
+              })()}
             </CardContent>
           </Card>
 
@@ -959,12 +995,16 @@ function StatsCard({
   subtitle,
   icon: Icon,
   color,
+  onClick,
+  active,
 }: {
   title: string
   value: number
   subtitle?: string
   icon: any
   color: string
+  onClick?: () => void
+  active?: boolean
 }) {
   const colorClasses = {
     blue: 'bg-blue-100 text-blue-600',
@@ -974,7 +1014,10 @@ function StatsCard({
   }
 
   return (
-    <Card>
+    <Card
+      className={`${onClick ? 'cursor-pointer hover:shadow-md transition-shadow' : ''} ${active ? 'ring-2 ring-blue-500' : ''}`}
+      onClick={onClick}
+    >
       <CardContent className="pt-6">
         <div className="flex items-center justify-between">
           <div>
