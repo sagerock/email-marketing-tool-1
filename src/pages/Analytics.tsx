@@ -60,6 +60,7 @@ export default function Analytics() {
   const [topSubscribers, setTopSubscribers] = useState<Contact[]>([])
   const [bouncedContacts, setBouncedContacts] = useState<(Contact & { campaign_name?: string })[]>([])
   const [unsubscribedContacts, setUnsubscribedContacts] = useState<Contact[]>([])
+  const [showUnknownDateUnsubs, setShowUnknownDateUnsubs] = useState(false)
   const [loadingSubscribers, setLoadingSubscribers] = useState(false)
   const [bounceFilter, setBounceFilter] = useState<'all' | 'hard' | 'soft'>('all')
   const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'click'>('all')
@@ -797,15 +798,15 @@ export default function Analytics() {
             ) : (
               /* Unsubscribed Tab */
               (() => {
-                // Group unsubscribed contacts by month
-                const groupedByMonth = unsubscribedContacts.reduce((groups, contact) => {
-                  const date = contact.unsubscribed_at ? new Date(contact.unsubscribed_at) : null
-                  const key = date
-                    ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
-                    : 'Unknown'
-                  const label = date
-                    ? date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
-                    : 'Unknown Date'
+                // Separate contacts with dates from those without
+                const datedContacts = unsubscribedContacts.filter(c => c.unsubscribed_at)
+                const unknownDateContacts = unsubscribedContacts.filter(c => !c.unsubscribed_at)
+
+                // Group dated contacts by month
+                const groupedByMonth = datedContacts.reduce((groups, contact) => {
+                  const date = new Date(contact.unsubscribed_at!)
+                  const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+                  const label = date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
                   if (!groups[key]) {
                     groups[key] = { label, contacts: [] }
                   }
@@ -824,43 +825,75 @@ export default function Analytics() {
                   )
                 }
 
+                const renderContactTable = (contacts: Contact[]) => (
+                  <div className="overflow-x-auto">
+                    <table className="w-full">
+                      <thead>
+                        <tr className="border-b border-gray-200">
+                          <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Email</th>
+                          <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Name</th>
+                          <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Unsubscribed</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {contacts.map((contact) => (
+                          <tr key={contact.id} className="hover:bg-gray-50">
+                            <td className="py-2 px-4 text-sm text-gray-900">{contact.email}</td>
+                            <td className="py-2 px-4 text-sm text-gray-600">
+                              {contact.first_name || contact.last_name
+                                ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
+                                : '-'}
+                            </td>
+                            <td className="py-2 px-4 text-sm text-gray-600">
+                              {contact.unsubscribed_at
+                                ? new Date(contact.unsubscribed_at).toLocaleDateString()
+                                : '-'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+
                 return (
                   <div className="space-y-6">
+                    {/* Dated unsubscribes grouped by month */}
                     {sortedMonths.map(([key, { label, contacts }]) => (
                       <div key={key}>
                         <h3 className="text-sm font-medium text-gray-700 mb-3">
                           {label} ({contacts.length})
                         </h3>
-                        <div className="overflow-x-auto">
-                          <table className="w-full">
-                            <thead>
-                              <tr className="border-b border-gray-200">
-                                <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Email</th>
-                                <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Name</th>
-                                <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Unsubscribed</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-200">
-                              {contacts.map((contact) => (
-                                <tr key={contact.id} className="hover:bg-gray-50">
-                                  <td className="py-2 px-4 text-sm text-gray-900">{contact.email}</td>
-                                  <td className="py-2 px-4 text-sm text-gray-600">
-                                    {contact.first_name || contact.last_name
-                                      ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
-                                      : '-'}
-                                  </td>
-                                  <td className="py-2 px-4 text-sm text-gray-600">
-                                    {contact.unsubscribed_at
-                                      ? new Date(contact.unsubscribed_at).toLocaleDateString()
-                                      : '-'}
-                                  </td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
+                        {renderContactTable(contacts)}
                       </div>
                     ))}
+
+                    {/* Unknown date unsubscribes - collapsible */}
+                    {unknownDateContacts.length > 0 && (
+                      <div className="border-t pt-4">
+                        <button
+                          onClick={() => setShowUnknownDateUnsubs(!showUnknownDateUnsubs)}
+                          className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-gray-700"
+                        >
+                          <span className={`transform transition-transform ${showUnknownDateUnsubs ? 'rotate-90' : ''}`}>
+                            ▶
+                          </span>
+                          Legacy unsubscribes - no date recorded ({unknownDateContacts.length})
+                        </button>
+                        {showUnknownDateUnsubs && (
+                          <div className="mt-3">
+                            {renderContactTable(unknownDateContacts)}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Show message if only unknown date contacts exist */}
+                    {datedContacts.length === 0 && unknownDateContacts.length > 0 && !showUnknownDateUnsubs && (
+                      <p className="text-sm text-gray-500 text-center py-4">
+                        Click above to view {unknownDateContacts.length} legacy unsubscribes without dates.
+                      </p>
+                    )}
                   </div>
                 )
               })()
