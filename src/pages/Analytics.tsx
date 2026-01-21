@@ -762,7 +762,7 @@ export default function Analytics() {
             <StatsCard
               title="Clicked"
               value={stats.uniqueClicks}
-              subtitle={`${((stats.uniqueClicks / stats.uniqueOpens) * 100 || 0).toFixed(1)}% click rate`}
+              subtitle={`${((stats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% click rate`}
               icon={MousePointer}
               color="orange"
             />
