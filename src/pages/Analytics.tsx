@@ -59,6 +59,8 @@ export default function Analytics() {
   const [loadingSubscribers, setLoadingSubscribers] = useState(false)
   const [bounceFilter, setBounceFilter] = useState<'all' | 'hard' | 'soft'>('all')
   const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'click'>('all')
+  const [filteredEventContacts, setFilteredEventContacts] = useState<AnalyticsEvent[]>([])
+  const [loadingFilteredEvents, setLoadingFilteredEvents] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -69,6 +71,40 @@ export default function Analytics() {
       fetchEvents(selectedCampaign)
     }
   }, [selectedCampaign])
+
+  // Fetch all events of a specific type when filter changes
+  useEffect(() => {
+    if (eventFilter !== 'all' && selectedCampaign) {
+      fetchFilteredEvents(selectedCampaign, eventFilter)
+    }
+  }, [eventFilter, selectedCampaign])
+
+  const fetchFilteredEvents = async (campaignId: string, eventType: 'open' | 'click') => {
+    setLoadingFilteredEvents(true)
+    try {
+      const { data, error } = await supabase
+        .from('analytics_events')
+        .select('*')
+        .eq('campaign_id', campaignId)
+        .eq('event_type', eventType)
+        .order('timestamp', { ascending: false })
+
+      if (error) throw error
+
+      // Deduplicate by email to get unique contacts
+      const emailMap = new Map<string, AnalyticsEvent>()
+      for (const event of (data || [])) {
+        if (!emailMap.has(event.email)) {
+          emailMap.set(event.email, event)
+        }
+      }
+      setFilteredEventContacts(Array.from(emailMap.values()))
+    } catch (error) {
+      console.error('Error fetching filtered events:', error)
+    } finally {
+      setLoadingFilteredEvents(false)
+    }
+  }
 
   const fetchCampaigns = async () => {
     if (!selectedClient) {
@@ -852,22 +888,18 @@ export default function Analytics() {
             </CardHeader>
             <CardContent>
               {(() => {
-                // Filter events based on eventFilter
-                const filteredEvents = eventFilter === 'all'
-                  ? events
-                  : events.filter(e => e.event_type === eventFilter)
-
-                // For open/click filters, deduplicate by email to show unique contacts
+                // Use pre-fetched filtered contacts when filter is active, otherwise show recent events
                 const displayEvents = eventFilter === 'all'
-                  ? filteredEvents.slice(0, 50)
-                  : Array.from(
-                      filteredEvents.reduce((map, event) => {
-                        if (!map.has(event.email)) {
-                          map.set(event.email, event)
-                        }
-                        return map
-                      }, new Map<string, typeof filteredEvents[0]>())
-                    ).map(([, event]) => event)
+                  ? events.slice(0, 50)
+                  : filteredEventContacts
+
+                if (loadingFilteredEvents && eventFilter !== 'all') {
+                  return (
+                    <p className="text-center py-8 text-gray-500">
+                      Loading {eventFilter} events...
+                    </p>
+                  )
+                }
 
                 if (displayEvents.length === 0) {
                   return (
