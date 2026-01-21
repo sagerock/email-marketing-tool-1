@@ -1112,10 +1112,10 @@ export default function Analytics() {
               onClick={() => setShowTagModal(false)}
             >
               <div
-                className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4"
+                className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col"
                 onClick={(e) => e.stopPropagation()}
               >
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
                   <h3 className="text-lg font-semibold text-gray-900">
                     Tag {filteredEventContacts.length} Contacts
                   </h3>
@@ -1126,7 +1126,7 @@ export default function Analytics() {
                     <X className="h-5 w-5 text-gray-500" />
                   </button>
                 </div>
-                <div className="p-6 space-y-4">
+                <div className="p-6 space-y-4 overflow-y-auto flex-1">
                   <p className="text-sm text-gray-600">
                     Add a tag to all contacts who {eventFilter === 'open' ? 'opened' : 'clicked'} this campaign.
                   </p>
@@ -1135,9 +1135,9 @@ export default function Analytics() {
                   {availableTags.length > 0 && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Select existing tag
+                        Select existing tag ({availableTags.length} available)
                       </label>
-                      <div className="flex flex-wrap gap-2">
+                      <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
                         {availableTags.map((tag) => (
                           <Badge
                             key={tag.id}
@@ -1180,7 +1180,7 @@ export default function Analytics() {
                     />
                   </div>
                 </div>
-                <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg shrink-0">
                   <Button variant="outline" onClick={() => setShowTagModal(false)}>
                     Cancel
                   </Button>
