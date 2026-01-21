@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Campaign, AnalyticsEvent } from '../types/index.js'
+import type { Campaign, AnalyticsEvent, Tag } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users } from 'lucide-react'
+import Badge from '../components/ui/Badge'
+import Input from '../components/ui/Input'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon } from 'lucide-react'
 import type { Contact } from '../types/index.js'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -61,6 +63,11 @@ export default function Analytics() {
   const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'click'>('all')
   const [filteredEventContacts, setFilteredEventContacts] = useState<AnalyticsEvent[]>([])
   const [loadingFilteredEvents, setLoadingFilteredEvents] = useState(false)
+  const [showTagModal, setShowTagModal] = useState(false)
+  const [availableTags, setAvailableTags] = useState<Tag[]>([])
+  const [selectedTag, setSelectedTag] = useState('')
+  const [newTagName, setNewTagName] = useState('')
+  const [taggingInProgress, setTaggingInProgress] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -103,6 +110,70 @@ export default function Analytics() {
       console.error('Error fetching filtered events:', error)
     } finally {
       setLoadingFilteredEvents(false)
+    }
+  }
+
+  const fetchAvailableTags = async () => {
+    if (!selectedClient) return
+    try {
+      const { data, error } = await supabase
+        .from('tags')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('name')
+      if (error) throw error
+      setAvailableTags(data || [])
+    } catch (error) {
+      console.error('Error fetching tags:', error)
+    }
+  }
+
+  const applyTagToFilteredContacts = async () => {
+    const tagName = selectedTag || newTagName.trim()
+    if (!tagName || !selectedClient || filteredEventContacts.length === 0) return
+
+    setTaggingInProgress(true)
+    try {
+      const emails = filteredEventContacts.map(e => e.email)
+
+      // Fetch contacts by email for this client
+      const { data: contacts, error: fetchError } = await supabase
+        .from('contacts')
+        .select('id, email, tags')
+        .eq('client_id', selectedClient.id)
+        .in('email', emails)
+
+      if (fetchError) throw fetchError
+
+      // Update each contact to add the tag (if not already present)
+      let updatedCount = 0
+      for (const contact of (contacts || [])) {
+        const currentTags = contact.tags || []
+        if (!currentTags.includes(tagName)) {
+          const { error: updateError } = await supabase
+            .from('contacts')
+            .update({ tags: [...currentTags, tagName] })
+            .eq('id', contact.id)
+          if (updateError) throw updateError
+          updatedCount++
+        }
+      }
+
+      // Upsert the tag to the tags table
+      await supabase.from('tags').upsert(
+        { name: tagName, client_id: selectedClient.id },
+        { onConflict: 'name,client_id' }
+      )
+
+      alert(`Tagged ${updatedCount} contacts with "${tagName}"`)
+      setShowTagModal(false)
+      setSelectedTag('')
+      setNewTagName('')
+    } catch (error) {
+      console.error('Error applying tag:', error)
+      alert('Failed to apply tag. Please try again.')
+    } finally {
+      setTaggingInProgress(false)
     }
   }
 
@@ -879,11 +950,29 @@ export default function Analytics() {
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>
                 {eventFilter === 'all' ? 'Recent Events' : eventFilter === 'open' ? 'Contacts Who Opened' : 'Contacts Who Clicked'}
+                {eventFilter !== 'all' && filteredEventContacts.length > 0 && (
+                  <span className="text-sm font-normal text-gray-500 ml-2">
+                    ({filteredEventContacts.length} contacts)
+                  </span>
+                )}
               </CardTitle>
               {eventFilter !== 'all' && (
-                <Button variant="outline" size="sm" onClick={() => setEventFilter('all')}>
-                  Show All Events
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      fetchAvailableTags()
+                      setShowTagModal(true)
+                    }}
+                  >
+                    <TagIcon className="h-4 w-4 mr-2" />
+                    Tag These Contacts
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => setEventFilter('all')}>
+                    Show All Events
+                  </Button>
+                </div>
               )}
             </CardHeader>
             <CardContent>
@@ -1015,6 +1104,97 @@ export default function Analytics() {
               </div>
             )
           })()}
+
+          {/* Tag Contacts Modal */}
+          {showTagModal && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+              onClick={() => setShowTagModal(false)}
+            >
+              <div
+                className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Tag {filteredEventContacts.length} Contacts
+                  </h3>
+                  <button
+                    onClick={() => setShowTagModal(false)}
+                    className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                  >
+                    <X className="h-5 w-5 text-gray-500" />
+                  </button>
+                </div>
+                <div className="p-6 space-y-4">
+                  <p className="text-sm text-gray-600">
+                    Add a tag to all contacts who {eventFilter === 'open' ? 'opened' : 'clicked'} this campaign.
+                  </p>
+
+                  {/* Existing Tags */}
+                  {availableTags.length > 0 && (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        Select existing tag
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {availableTags.map((tag) => (
+                          <Badge
+                            key={tag.id}
+                            variant={selectedTag === tag.name ? 'info' : 'default'}
+                            className="cursor-pointer"
+                            onClick={() => {
+                              setSelectedTag(selectedTag === tag.name ? '' : tag.name)
+                              setNewTagName('')
+                            }}
+                          >
+                            {tag.name}
+                          </Badge>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Or divider */}
+                  <div className="relative">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-gray-200" />
+                    </div>
+                    <div className="relative flex justify-center text-sm">
+                      <span className="px-2 bg-white text-gray-500">or create new</span>
+                    </div>
+                  </div>
+
+                  {/* New Tag Input */}
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      New tag name
+                    </label>
+                    <Input
+                      placeholder="e.g., Clicked-Jan2026-Tradeshow"
+                      value={newTagName}
+                      onChange={(e) => {
+                        setNewTagName(e.target.value)
+                        setSelectedTag('')
+                      }}
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg">
+                  <Button variant="outline" onClick={() => setShowTagModal(false)}>
+                    Cancel
+                  </Button>
+                  <Button
+                    variant="primary"
+                    onClick={applyTagToFilteredContacts}
+                    disabled={taggingInProgress || (!selectedTag && !newTagName.trim())}
+                  >
+                    {taggingInProgress ? 'Tagging...' : 'Apply Tag'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
