@@ -56,9 +56,10 @@ export default function Analytics() {
   const [viewMode, setViewMode] = useState<'details' | 'table' | 'subscribers'>('details')
   const [allCampaignMetrics, setAllCampaignMetrics] = useState<CampaignMetrics[]>([])
   const [loadingMetrics, setLoadingMetrics] = useState(false)
-  const [subscriberTab, setSubscriberTab] = useState<'top' | 'bounced'>('top')
+  const [subscriberTab, setSubscriberTab] = useState<'top' | 'bounced' | 'unsubscribed'>('top')
   const [topSubscribers, setTopSubscribers] = useState<Contact[]>([])
   const [bouncedContacts, setBouncedContacts] = useState<(Contact & { campaign_name?: string })[]>([])
+  const [unsubscribedContacts, setUnsubscribedContacts] = useState<Contact[]>([])
   const [loadingSubscribers, setLoadingSubscribers] = useState(false)
   const [bounceFilter, setBounceFilter] = useState<'all' | 'hard' | 'soft'>('all')
   const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'click'>('all')
@@ -458,11 +459,30 @@ export default function Analytics() {
     }
   }
 
+  // Fetch unsubscribed contacts
+  const fetchUnsubscribedContacts = async () => {
+    if (!selectedClient) return
+
+    try {
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .eq('unsubscribed', true)
+        .order('unsubscribed_at', { ascending: false })
+
+      if (error) throw error
+      setUnsubscribedContacts(data || [])
+    } catch (error) {
+      console.error('Error fetching unsubscribed contacts:', error)
+    }
+  }
+
   // Load subscriber data when switching to subscribers view
   useEffect(() => {
     if (viewMode === 'subscribers' && selectedClient) {
       setLoadingSubscribers(true)
-      Promise.all([fetchTopSubscribers(), fetchBouncedContacts()])
+      Promise.all([fetchTopSubscribers(), fetchBouncedContacts(), fetchUnsubscribedContacts()])
         .finally(() => setLoadingSubscribers(false))
     }
   }, [viewMode, selectedClient])
@@ -607,6 +627,13 @@ export default function Analytics() {
                 >
                   Bounced ({bouncedContacts.length})
                 </Button>
+                <Button
+                  variant={subscriberTab === 'unsubscribed' ? 'primary' : 'outline'}
+                  size="sm"
+                  onClick={() => setSubscriberTab('unsubscribed')}
+                >
+                  Unsubscribed ({unsubscribedContacts.length})
+                </Button>
               </div>
             </div>
           </CardHeader>
@@ -673,7 +700,7 @@ export default function Analytics() {
                   </table>
                 </div>
               )
-            ) : (
+            ) : subscriberTab === 'bounced' ? (
               (() => {
                 const filteredBounces = bouncedContacts.filter(c =>
                   bounceFilter === 'all' ? true : c.bounce_status === bounceFilter
@@ -764,6 +791,76 @@ export default function Analytics() {
                         </table>
                       </div>
                     )}
+                  </div>
+                )
+              })()
+            ) : (
+              /* Unsubscribed Tab */
+              (() => {
+                // Group unsubscribed contacts by month
+                const groupedByMonth = unsubscribedContacts.reduce((groups, contact) => {
+                  const date = contact.unsubscribed_at ? new Date(contact.unsubscribed_at) : null
+                  const key = date
+                    ? `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`
+                    : 'Unknown'
+                  const label = date
+                    ? date.toLocaleDateString('en-US', { year: 'numeric', month: 'long' })
+                    : 'Unknown Date'
+                  if (!groups[key]) {
+                    groups[key] = { label, contacts: [] }
+                  }
+                  groups[key].contacts.push(contact)
+                  return groups
+                }, {} as Record<string, { label: string; contacts: Contact[] }>)
+
+                const sortedMonths = Object.entries(groupedByMonth).sort((a, b) => b[0].localeCompare(a[0]))
+
+                if (unsubscribedContacts.length === 0) {
+                  return (
+                    <div className="text-center py-12 text-gray-500">
+                      <Mail className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                      <p>No unsubscribed contacts.</p>
+                    </div>
+                  )
+                }
+
+                return (
+                  <div className="space-y-6">
+                    {sortedMonths.map(([key, { label, contacts }]) => (
+                      <div key={key}>
+                        <h3 className="text-sm font-medium text-gray-700 mb-3">
+                          {label} ({contacts.length})
+                        </h3>
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead>
+                              <tr className="border-b border-gray-200">
+                                <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Email</th>
+                                <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Name</th>
+                                <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Unsubscribed</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-200">
+                              {contacts.map((contact) => (
+                                <tr key={contact.id} className="hover:bg-gray-50">
+                                  <td className="py-2 px-4 text-sm text-gray-900">{contact.email}</td>
+                                  <td className="py-2 px-4 text-sm text-gray-600">
+                                    {contact.first_name || contact.last_name
+                                      ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
+                                      : '-'}
+                                  </td>
+                                  <td className="py-2 px-4 text-sm text-gray-600">
+                                    {contact.unsubscribed_at
+                                      ? new Date(contact.unsubscribed_at).toLocaleDateString()
+                                      : '-'}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )
               })()
