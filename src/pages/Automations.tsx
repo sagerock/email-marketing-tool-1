@@ -1896,7 +1896,7 @@ function EnrollContactsModal({
                   <option value="all">All selected tags</option>
                 </select>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
                 {allTags.map((tag) => (
                   <button
                     key={tag}
