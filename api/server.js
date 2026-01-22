@@ -215,64 +215,91 @@ async function sendCampaignById(campaignId) {
     })
   }
 
-  const emailPromises = contacts.map((contact) => {
-    // Generate unsubscribe URL with campaign_id for tracking
-    const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}&campaign_id=${campaignId}`
+  // Process contacts in batches to avoid memory issues with large lists
+  const BATCH_SIZE = 500
+  let sentCount = 0
+  let failedCount = 0
+  const totalContacts = contacts.length
 
-    // Get industry link for this contact
-    const industryLink = contact.industry ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl) : defaultIndustryUrl
+  console.log(`📧 Starting batched send: ${totalContacts} contacts in batches of ${BATCH_SIZE}`)
 
-    // Replace merge tags in HTML
-    let personalizedHtml = htmlContent
-      .replace(/{{email}}/gi, contact.email)
-      .replace(/{{first_name}}/gi, contact.first_name || '')
-      .replace(/{{last_name}}/gi, contact.last_name || '')
-      .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
-      .replace(/{{mailing_address}}/gi, mailingAddress)
-      .replace(/{{campaign_name}}/gi, sfCampaignName)
-      .replace(/{{industry_link}}/gi, industryLink)
+  for (let i = 0; i < totalContacts; i += BATCH_SIZE) {
+    const batch = contacts.slice(i, i + BATCH_SIZE)
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1
+    const totalBatches = Math.ceil(totalContacts / BATCH_SIZE)
 
-    // Append UTM params to all links
-    personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
+    console.log(`📧 Processing batch ${batchNum}/${totalBatches} (${batch.length} contacts)`)
 
-    const msg = {
-      to: contact.email,
-      from: {
-        email: campaign.from_email,
-        name: campaign.from_name,
-      },
-      replyTo: campaign.reply_to || undefined,
-      subject: campaign.subject,
-      html: personalizedHtml,
-      customArgs: {
-        campaign_id: campaignId,
-      },
-      ipPoolName: client.ip_pool || undefined,
-      // Add List-Unsubscribe header for one-click unsubscribe
-      headers: {
-        'List-Unsubscribe': `<${unsubscribeUrl}>`,
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      },
-    }
+    const batchPromises = batch.map((contact) => {
+      // Generate unsubscribe URL with campaign_id for tracking
+      const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}&campaign_id=${campaignId}`
 
-    return sgMail.send(msg).catch((error) => {
-      console.error(`Failed to send to ${contact.email}:`, error)
-      return null
+      // Get industry link for this contact
+      const industryLink = contact.industry ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl) : defaultIndustryUrl
+
+      // Replace merge tags in HTML
+      let personalizedHtml = htmlContent
+        .replace(/{{email}}/gi, contact.email)
+        .replace(/{{first_name}}/gi, contact.first_name || '')
+        .replace(/{{last_name}}/gi, contact.last_name || '')
+        .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
+        .replace(/{{mailing_address}}/gi, mailingAddress)
+        .replace(/{{campaign_name}}/gi, sfCampaignName)
+        .replace(/{{industry_link}}/gi, industryLink)
+
+      // Append UTM params to all links
+      personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
+
+      const msg = {
+        to: contact.email,
+        from: {
+          email: campaign.from_email,
+          name: campaign.from_name,
+        },
+        replyTo: campaign.reply_to || undefined,
+        subject: campaign.subject,
+        html: personalizedHtml,
+        customArgs: {
+          campaign_id: campaignId,
+        },
+        ipPoolName: client.ip_pool || undefined,
+        // Add List-Unsubscribe header for one-click unsubscribe
+        headers: {
+          'List-Unsubscribe': `<${unsubscribeUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        },
+      }
+
+      return sgMail.send(msg)
+        .then(() => ({ success: true }))
+        .catch((error) => {
+          console.error(`Failed to send to ${contact.email}:`, error.message || error)
+          return { success: false }
+        })
     })
-  })
 
-  await Promise.all(emailPromises)
+    const results = await Promise.all(batchPromises)
+    const batchSent = results.filter(r => r.success).length
+    const batchFailed = results.filter(r => !r.success).length
+    sentCount += batchSent
+    failedCount += batchFailed
 
-  // 7. Update campaign to sent
+    console.log(`📧 Batch ${batchNum} complete: ${batchSent} sent, ${batchFailed} failed`)
+  }
+
+  console.log(`📧 Campaign send complete: ${sentCount} sent, ${failedCount} failed`)
+
+  // 7. Update campaign to sent with actual recipient count
   await supabase
     .from('campaigns')
     .update({
       status: 'sent',
       sent_at: new Date().toISOString(),
+      recipient_count: sentCount,
     })
     .eq('id', campaignId)
 
-  return { success: true, sent: contacts.length }
+  return { success: true, sent: sentCount, failed: failedCount }
 }
 
 /**
