@@ -551,6 +551,7 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
         click: 'click',
         bounce: 'bounce',
         dropped: 'bounce',
+        blocked: 'block',
         spamreport: 'spam',
         unsubscribe: 'unsubscribe',
       }
@@ -1396,6 +1397,7 @@ app.post('/api/webhook/sequence', async (req, res) => {
         click: 'click',
         bounce: 'bounce',
         dropped: 'bounce',
+        blocked: 'block',
         spamreport: 'spam',
         unsubscribe: 'unsubscribe',
       }
