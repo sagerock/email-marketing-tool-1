@@ -43,6 +43,24 @@ interface CampaignMetrics {
   unsubscribes: number
 }
 
+interface SendGridStats {
+  requests: number
+  delivered: number
+  opens: number
+  unique_opens: number
+  clicks: number
+  unique_clicks: number
+  bounces: number
+  bounce_drops: number
+  blocks: number
+  spam_reports: number
+  spam_report_drops: number
+  unsubscribes: number
+  unsubscribe_drops: number
+  invalid_emails: number
+  deferred: number
+}
+
 export default function Analytics() {
   const { selectedClient } = useClient()
   const [campaigns, setCampaigns] = useState<CampaignWithTemplate[]>([])
@@ -71,6 +89,9 @@ export default function Analytics() {
   const [selectedTag, setSelectedTag] = useState('')
   const [newTagName, setNewTagName] = useState('')
   const [taggingInProgress, setTaggingInProgress] = useState(false)
+  const [sendgridStats, setSendgridStats] = useState<SendGridStats | null>(null)
+  const [loadingSendgridStats, setLoadingSendgridStats] = useState(false)
+  const [sendgridStatsError, setSendgridStatsError] = useState<string | null>(null)
 
   useEffect(() => {
     fetchCampaigns()
@@ -79,6 +100,7 @@ export default function Analytics() {
   useEffect(() => {
     if (selectedCampaign) {
       fetchEvents(selectedCampaign)
+      fetchSendGridStats(selectedCampaign)
     }
   }, [selectedCampaign])
 
@@ -321,6 +343,37 @@ export default function Analytics() {
     }
   }
 
+  const fetchSendGridStats = async (campaignId: string) => {
+    setLoadingSendgridStats(true)
+    setSendgridStatsError(null)
+    setSendgridStats(null)
+
+    try {
+      const response = await fetch(`${API_URL}/api/campaigns/${campaignId}/sendgrid-stats`)
+      const data = await response.json()
+
+      if (!response.ok) {
+        // Don't show error for campaigns sent before category tracking was added
+        if (data.error?.includes('No stats found') || response.status === 404) {
+          console.log('No SendGrid category stats available for this campaign (likely sent before tracking was added)')
+          setSendgridStatsError('Stats not available - campaign was sent before SendGrid category tracking was enabled')
+        } else {
+          console.error('SendGrid stats error:', data.error)
+          setSendgridStatsError(data.error || 'Failed to fetch SendGrid stats')
+        }
+        return
+      }
+
+      setSendgridStats(data.stats)
+      console.log('SendGrid stats loaded:', data.stats)
+    } catch (error) {
+      console.error('Error fetching SendGrid stats:', error)
+      setSendgridStatsError('Failed to connect to stats API')
+    } finally {
+      setLoadingSendgridStats(false)
+    }
+  }
+
   const syncFromSendGrid = async () => {
     if (!selectedCampaign) return
 
@@ -362,11 +415,38 @@ export default function Analytics() {
         uniqueClicks: 0,
         uniqueUnsubscribeClicks: 0,
         bounces: 0,
+        blocks: 0,
         spam: 0,
         unsubscribes: 0,
+        source: 'none' as const,
       }
     }
 
+    // Use SendGrid stats when available (authoritative), fall back to webhook stats
+    if (sendgridStats) {
+      return {
+        sent: sendgridStats.requests,
+        delivered: sendgridStats.delivered,
+        opens: sendgridStats.opens,
+        uniqueOpens: sendgridStats.unique_opens,
+        clicks: sendgridStats.clicks,
+        uniqueClicks: sendgridStats.unique_clicks,
+        uniqueUnsubscribeClicks: eventCounts.uniqueUnsubscribeClicks, // Not in SendGrid stats
+        bounces: sendgridStats.bounces,
+        blocks: sendgridStats.blocks,
+        spam: sendgridStats.spam_reports,
+        unsubscribes: sendgridStats.unsubscribes,
+        source: 'sendgrid' as const,
+        // Additional SendGrid-only metrics
+        bounceDrops: sendgridStats.bounce_drops,
+        spamDrops: sendgridStats.spam_report_drops,
+        unsubscribeDrops: sendgridStats.unsubscribe_drops,
+        invalidEmails: sendgridStats.invalid_emails,
+        deferred: sendgridStats.deferred,
+      }
+    }
+
+    // Fall back to webhook-derived stats
     return {
       sent: campaign.recipient_count,
       delivered: eventCounts.delivered,
@@ -376,8 +456,10 @@ export default function Analytics() {
       uniqueClicks: eventCounts.uniqueClicks,
       uniqueUnsubscribeClicks: eventCounts.uniqueUnsubscribeClicks,
       bounces: eventCounts.bounces,
+      blocks: 0,
       spam: eventCounts.spam,
       unsubscribes: eventCounts.unsubscribes,
+      source: 'webhook' as const,
     }
   }
 
@@ -1066,6 +1148,21 @@ export default function Analytics() {
             </CardContent>
           </Card>
 
+          {/* Stats Source Indicator */}
+          <div className="flex items-center gap-2 text-sm">
+            {loadingSendgridStats ? (
+              <span className="text-gray-500">Loading SendGrid stats...</span>
+            ) : stats.source === 'sendgrid' ? (
+              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                Stats from SendGrid API (authoritative)
+              </span>
+            ) : stats.source === 'webhook' ? (
+              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+                Stats from webhooks {sendgridStatsError && '- SendGrid stats unavailable'}
+              </span>
+            ) : null}
+          </div>
+
           {/* Stats Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             <StatsCard
@@ -1131,16 +1228,24 @@ export default function Analytics() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Issues</CardTitle>
+                <CardTitle>Delivery Issues</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Bounces</span>
                     <span className="text-sm font-medium text-red-600">
-                      {stats.bounces}
+                      {stats.bounces.toLocaleString()}
                     </span>
                   </div>
+                  {stats.blocks > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Blocks (ISP rejected)</span>
+                      <span className="text-sm font-medium text-red-600">
+                        {stats.blocks.toLocaleString()}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-sm text-gray-600">Spam Reports</span>
                     <span className="text-sm font-medium text-red-600">
@@ -1153,7 +1258,28 @@ export default function Analytics() {
                       {stats.unsubscribes}
                     </span>
                   </div>
-                  {(stats.bounces > 0 || stats.spam > 0 || stats.unsubscribes > 0) && (
+                  {/* Show additional SendGrid metrics when available */}
+                  {stats.source === 'sendgrid' && (
+                    <>
+                      {'invalidEmails' in stats && stats.invalidEmails > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-sm text-gray-600">Invalid Emails</span>
+                          <span className="text-sm font-medium text-red-600">
+                            {stats.invalidEmails}
+                          </span>
+                        </div>
+                      )}
+                      {'deferred' in stats && stats.deferred > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-sm text-gray-600">Deferred</span>
+                          <span className="text-sm font-medium text-yellow-600">
+                            {stats.deferred.toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {(stats.bounces > 0 || stats.spam > 0 || stats.unsubscribes > 0 || stats.blocks > 0) && (
                     <div className="pt-2 border-t border-gray-200">
                       <div className="flex items-start gap-2 text-sm text-amber-600">
                         <AlertCircle className="h-4 w-4 mt-0.5" />

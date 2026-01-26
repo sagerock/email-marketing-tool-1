@@ -284,6 +284,8 @@ async function sendCampaignById(campaignId) {
         customArgs: {
           campaign_id: campaignId,
         },
+        // Add category for SendGrid Stats API tracking
+        categories: [`campaign-${campaignId}`],
         ipPoolName: client.ip_pool || undefined,
         // Add List-Unsubscribe header for one-click unsubscribe
         headers: {
@@ -881,6 +883,123 @@ app.post('/api/campaigns/:id/sync-sendgrid', async (req, res) => {
     })
   } catch (error) {
     console.error('Error syncing SendGrid events:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Get campaign stats from SendGrid Category Stats API
+ * Returns authoritative stats directly from SendGrid
+ */
+app.get('/api/campaigns/:id/sendgrid-stats', async (req, res) => {
+  try {
+    const campaignId = req.params.id
+
+    // 1. Get campaign details
+    const { data: campaign, error: campaignError } = await supabase
+      .from('campaigns')
+      .select('*, client:clients(id, sendgrid_api_key)')
+      .eq('id', campaignId)
+      .single()
+
+    if (campaignError || !campaign) {
+      return res.status(404).json({ error: 'Campaign not found' })
+    }
+
+    if (!campaign.client?.sendgrid_api_key) {
+      return res.status(400).json({ error: 'No SendGrid API key configured for this client' })
+    }
+
+    if (!campaign.sent_at) {
+      return res.status(400).json({ error: 'Campaign has not been sent yet' })
+    }
+
+    // 2. Calculate date range for stats
+    const sentDate = new Date(campaign.sent_at)
+    const startDate = sentDate.toISOString().split('T')[0] // YYYY-MM-DD format
+    const endDate = new Date().toISOString().split('T')[0] // Today
+
+    // 3. Fetch category stats from SendGrid
+    const categoryName = `campaign-${campaignId}`
+    const url = new URL(`https://api.sendgrid.com/v3/categories/stats`)
+    url.searchParams.set('start_date', startDate)
+    url.searchParams.set('end_date', endDate)
+    url.searchParams.set('categories', categoryName)
+    url.searchParams.set('aggregated_by', 'day')
+
+    console.log(`📊 Fetching SendGrid stats for campaign: ${campaign.name}`)
+    console.log(`   Category: ${categoryName}`)
+    console.log(`   Date range: ${startDate} to ${endDate}`)
+
+    const fetchResponse = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${campaign.client.sendgrid_api_key}`,
+      },
+    })
+
+    const response = await fetchResponse.json()
+
+    if (!fetchResponse.ok) {
+      console.error('SendGrid Stats API error:', response)
+      return res.status(fetchResponse.status).json({
+        error: response.errors?.[0]?.message || 'SendGrid Stats API error'
+      })
+    }
+
+    // 4. Aggregate stats across all days
+    const aggregatedStats = {
+      requests: 0,
+      delivered: 0,
+      opens: 0,
+      unique_opens: 0,
+      clicks: 0,
+      unique_clicks: 0,
+      bounces: 0,
+      bounce_drops: 0,
+      blocks: 0,
+      spam_reports: 0,
+      spam_report_drops: 0,
+      unsubscribes: 0,
+      unsubscribe_drops: 0,
+      invalid_emails: 0,
+      deferred: 0,
+    }
+
+    for (const day of response) {
+      for (const stat of day.stats || []) {
+        const m = stat.metrics || {}
+        aggregatedStats.requests += m.requests || 0
+        aggregatedStats.delivered += m.delivered || 0
+        aggregatedStats.opens += m.opens || 0
+        aggregatedStats.unique_opens += m.unique_opens || 0
+        aggregatedStats.clicks += m.clicks || 0
+        aggregatedStats.unique_clicks += m.unique_clicks || 0
+        aggregatedStats.bounces += m.bounces || 0
+        aggregatedStats.bounce_drops += m.bounce_drops || 0
+        aggregatedStats.blocks += m.blocks || 0
+        aggregatedStats.spam_reports += m.spam_reports || 0
+        aggregatedStats.spam_report_drops += m.spam_report_drops || 0
+        aggregatedStats.unsubscribes += m.unsubscribes || 0
+        aggregatedStats.unsubscribe_drops += m.unsubscribe_drops || 0
+        aggregatedStats.invalid_emails += m.invalid_emails || 0
+        aggregatedStats.deferred += m.deferred || 0
+      }
+    }
+
+    console.log(`   Stats retrieved:`, aggregatedStats)
+
+    res.json({
+      success: true,
+      campaign_id: campaignId,
+      category: categoryName,
+      date_range: { start: startDate, end: endDate },
+      stats: aggregatedStats,
+      // Also return daily breakdown for charts
+      daily: response,
+    })
+  } catch (error) {
+    console.error('Error fetching SendGrid stats:', error)
     res.status(500).json({ error: error.message })
   }
 })
