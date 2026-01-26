@@ -70,7 +70,7 @@ export interface AnalyticsEvent {
   id: string
   campaign_id: string
   email: string
-  event_type: 'delivered' | 'open' | 'click' | 'bounce' | 'spam' | 'unsubscribe'
+  event_type: 'delivered' | 'open' | 'click' | 'bounce' | 'block' | 'spam' | 'unsubscribe'
   timestamp: string
   url?: string
   user_agent?: string
