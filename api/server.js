@@ -941,10 +941,19 @@ app.get('/api/campaigns/:id/sendgrid-stats', async (req, res) => {
     const response = await fetchResponse.json()
 
     if (!fetchResponse.ok) {
+      const errorMessage = response.errors?.[0]?.message || 'SendGrid Stats API error'
+
+      // Handle "category does not exist" - this is expected for campaigns sent before tracking was added
+      if (errorMessage.includes('category does not exist')) {
+        console.log(`   Category not found - campaign was sent before category tracking was enabled`)
+        return res.status(404).json({
+          error: 'Category stats not available - campaign was sent before SendGrid category tracking was enabled',
+          reason: 'category_not_found'
+        })
+      }
+
       console.error('SendGrid Stats API error:', response)
-      return res.status(fetchResponse.status).json({
-        error: response.errors?.[0]?.message || 'SendGrid Stats API error'
-      })
+      return res.status(fetchResponse.status).json({ error: errorMessage })
     }
 
     // 4. Aggregate stats across all days

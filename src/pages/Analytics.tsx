@@ -258,10 +258,26 @@ export default function Analytics() {
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'unsubscribe'),
       ])
 
-      // For unique opens/clicks, we need to paginate to get ALL distinct emails
-      // (Supabase default limit is 1000 rows)
-      const fetchOpenEmails = async () => {
-        const emails: string[] = []
+      // Set initial counts immediately so UI shows data right away
+      // Unique counts will start at 0 and update as pagination completes
+      setEventCounts({
+        delivered: deliveredRes.count || 0,
+        opens: opensRes.count || 0,
+        uniqueOpens: 0, // Will be updated after pagination
+        clicks: clicksRes.count || 0,
+        uniqueClicks: 0, // Will be updated after pagination
+        uniqueUnsubscribeClicks: 0,
+        bounces: bouncesRes.count || 0,
+        spam: spamRes.count || 0,
+        unsubscribes: unsubscribesRes.count || 0,
+      })
+
+      console.log(`Event counts - delivered: ${deliveredRes.count}, opens: ${opensRes.count}, clicks: ${clicksRes.count}`)
+
+      // Now fetch unique counts with pagination in the background
+      // This can take a while for large campaigns but UI is already showing data
+      const fetchUniqueOpenCount = async () => {
+        const emails = new Set<string>()
         let page = 0
         const pageSize = 1000
 
@@ -276,15 +292,16 @@ export default function Analytics() {
           if (error) throw error
           if (!data || data.length === 0) break
 
-          emails.push(...data.map(d => d.email))
+          data.forEach(d => emails.add(d.email))
           if (data.length < pageSize) break
           page++
         }
-        return emails
+        return emails.size
       }
 
-      const fetchClickEmails = async () => {
-        const clicks: { email: string; url: string | null }[] = []
+      const fetchUniqueClickCounts = async () => {
+        const engagedEmails = new Set<string>()
+        const unsubEmails = new Set<string>()
         let page = 0
         const pageSize = 1000
 
@@ -299,45 +316,31 @@ export default function Analytics() {
           if (error) throw error
           if (!data || data.length === 0) break
 
-          clicks.push(...data)
+          for (const event of data) {
+            if (event.url?.includes('/unsubscribe')) {
+              unsubEmails.add(event.email)
+            } else {
+              engagedEmails.add(event.email)
+            }
+          }
           if (data.length < pageSize) break
           page++
         }
-        return clicks
+        return { engaged: engagedEmails.size, unsub: unsubEmails.size }
       }
 
-      const [openEmails, clickEmails] = await Promise.all([
-        fetchOpenEmails(),
-        fetchClickEmails(),
-      ])
-
-      const uniqueOpenEmails = new Set(openEmails)
-
-      // Separate clicks into engaged vs unsubscribe clicks
-      const engagedClickEmails = new Set<string>()
-      const unsubscribeClickEmails = new Set<string>()
-      for (const event of clickEmails) {
-        const isUnsubscribeClick = event.url?.includes('/unsubscribe')
-        if (isUnsubscribeClick) {
-          unsubscribeClickEmails.add(event.email)
-        } else {
-          engagedClickEmails.add(event.email)
-        }
-      }
-
-      setEventCounts({
-        delivered: deliveredRes.count || 0,
-        opens: opensRes.count || 0,
-        uniqueOpens: uniqueOpenEmails.size,
-        clicks: clicksRes.count || 0,
-        uniqueClicks: engagedClickEmails.size,
-        uniqueUnsubscribeClicks: unsubscribeClickEmails.size,
-        bounces: bouncesRes.count || 0,
-        spam: spamRes.count || 0,
-        unsubscribes: unsubscribesRes.count || 0,
-      })
-
-      console.log(`Event counts - delivered: ${deliveredRes.count}, opens: ${opensRes.count}, clicks: ${clicksRes.count}`)
+      // Run pagination in parallel and update counts as they complete
+      Promise.all([fetchUniqueOpenCount(), fetchUniqueClickCounts()])
+        .then(([uniqueOpens, clickCounts]) => {
+          setEventCounts(prev => prev ? {
+            ...prev,
+            uniqueOpens,
+            uniqueClicks: clickCounts.engaged,
+            uniqueUnsubscribeClicks: clickCounts.unsub,
+          } : prev)
+          console.log(`Unique counts loaded - opens: ${uniqueOpens}, clicks: ${clickCounts.engaged}`)
+        })
+        .catch(err => console.error('Error fetching unique counts:', err))
     } catch (error) {
       console.error('Error fetching events:', error)
     }
