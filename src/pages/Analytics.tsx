@@ -236,18 +236,65 @@ export default function Analytics() {
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'unsubscribe'),
       ])
 
-      // For unique opens/clicks, we need to get distinct emails
-      const [uniqueOpensRes, uniqueClicksRes] = await Promise.all([
-        supabase.from('analytics_events').select('email').eq('campaign_id', campaignId).eq('event_type', 'open'),
-        supabase.from('analytics_events').select('email, url').eq('campaign_id', campaignId).eq('event_type', 'click'),
+      // For unique opens/clicks, we need to paginate to get ALL distinct emails
+      // (Supabase default limit is 1000 rows)
+      const fetchOpenEmails = async () => {
+        const emails: string[] = []
+        let page = 0
+        const pageSize = 1000
+
+        while (true) {
+          const { data, error } = await supabase
+            .from('analytics_events')
+            .select('email')
+            .eq('campaign_id', campaignId)
+            .eq('event_type', 'open')
+            .range(page * pageSize, (page + 1) * pageSize - 1)
+
+          if (error) throw error
+          if (!data || data.length === 0) break
+
+          emails.push(...data.map(d => d.email))
+          if (data.length < pageSize) break
+          page++
+        }
+        return emails
+      }
+
+      const fetchClickEmails = async () => {
+        const clicks: { email: string; url: string | null }[] = []
+        let page = 0
+        const pageSize = 1000
+
+        while (true) {
+          const { data, error } = await supabase
+            .from('analytics_events')
+            .select('email, url')
+            .eq('campaign_id', campaignId)
+            .eq('event_type', 'click')
+            .range(page * pageSize, (page + 1) * pageSize - 1)
+
+          if (error) throw error
+          if (!data || data.length === 0) break
+
+          clicks.push(...data)
+          if (data.length < pageSize) break
+          page++
+        }
+        return clicks
+      }
+
+      const [openEmails, clickEmails] = await Promise.all([
+        fetchOpenEmails(),
+        fetchClickEmails(),
       ])
 
-      const uniqueOpenEmails = new Set(uniqueOpensRes.data?.map(e => e.email) || [])
+      const uniqueOpenEmails = new Set(openEmails)
 
       // Separate clicks into engaged vs unsubscribe clicks
       const engagedClickEmails = new Set<string>()
       const unsubscribeClickEmails = new Set<string>()
-      for (const event of (uniqueClicksRes.data || [])) {
+      for (const event of clickEmails) {
         const isUnsubscribeClick = event.url?.includes('/unsubscribe')
         if (isUnsubscribeClick) {
           unsubscribeClickEmails.add(event.email)
@@ -336,6 +383,30 @@ export default function Analytics() {
 
   const stats = getStats()
 
+  // Helper to fetch all emails with pagination (Supabase default limit is 1000)
+  const fetchAllEmailsForCampaign = async (campaignId: string, eventType: string) => {
+    const emails: string[] = []
+    let page = 0
+    const pageSize = 1000
+
+    while (true) {
+      const { data, error } = await supabase
+        .from('analytics_events')
+        .select('email')
+        .eq('campaign_id', campaignId)
+        .eq('event_type', eventType)
+        .range(page * pageSize, (page + 1) * pageSize - 1)
+
+      if (error) throw error
+      if (!data || data.length === 0) break
+
+      emails.push(...data.map(e => e.email))
+      if (data.length < pageSize) break
+      page++
+    }
+    return emails
+  }
+
   // Fetch metrics for all campaigns (for table view)
   const fetchAllCampaignMetrics = async () => {
     if (!selectedClient || campaigns.length === 0) return
@@ -343,16 +414,16 @@ export default function Analytics() {
     setLoadingMetrics(true)
     try {
       const metricsPromises = campaigns.map(async (campaign) => {
-        const [deliveredRes, uniqueOpensRes, uniqueClicksRes, bouncesRes, unsubscribesRes] = await Promise.all([
+        const [deliveredRes, openEmails, clickEmails, bouncesRes, unsubscribesRes] = await Promise.all([
           supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaign.id).eq('event_type', 'delivered'),
-          supabase.from('analytics_events').select('email').eq('campaign_id', campaign.id).eq('event_type', 'open'),
-          supabase.from('analytics_events').select('email').eq('campaign_id', campaign.id).eq('event_type', 'click'),
+          fetchAllEmailsForCampaign(campaign.id, 'open'),
+          fetchAllEmailsForCampaign(campaign.id, 'click'),
           supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaign.id).eq('event_type', 'bounce'),
           supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaign.id).eq('event_type', 'unsubscribe'),
         ])
 
-        const uniqueOpenEmails = new Set(uniqueOpensRes.data?.map(e => e.email) || [])
-        const uniqueClickEmails = new Set(uniqueClicksRes.data?.map(e => e.email) || [])
+        const uniqueOpenEmails = new Set(openEmails)
+        const uniqueClickEmails = new Set(clickEmails)
 
         return {
           id: campaign.id,
