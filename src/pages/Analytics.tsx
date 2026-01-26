@@ -93,6 +93,8 @@ export default function Analytics() {
   const [sendgridStats, setSendgridStats] = useState<SendGridStats | null>(null)
   const [loadingSendgridStats, setLoadingSendgridStats] = useState(false)
   const [sendgridStatsError, setSendgridStatsError] = useState<string | null>(null)
+  const [linkClickStats, setLinkClickStats] = useState<{ url: string; totalClicks: number; uniqueClicks: number }[]>([])
+  const [loadingLinkStats, setLoadingLinkStats] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -102,6 +104,7 @@ export default function Analytics() {
     if (selectedCampaign) {
       fetchEvents(selectedCampaign)
       fetchSendGridStats(selectedCampaign)
+      fetchLinkClickStats(selectedCampaign)
     }
   }, [selectedCampaign])
 
@@ -377,6 +380,59 @@ export default function Analytics() {
       setSendgridStatsError('Failed to connect to stats API')
     } finally {
       setLoadingSendgridStats(false)
+    }
+  }
+
+  const fetchLinkClickStats = async (campaignId: string) => {
+    setLoadingLinkStats(true)
+    setLinkClickStats([])
+
+    try {
+      // Fetch all click events with pagination
+      const clicksByUrl = new Map<string, { total: number; emails: Set<string> }>()
+      let page = 0
+      const pageSize = 1000
+
+      while (true) {
+        const { data, error } = await supabase
+          .from('analytics_events')
+          .select('url, email')
+          .eq('campaign_id', campaignId)
+          .eq('event_type', 'click')
+          .not('url', 'is', null)
+          .range(page * pageSize, (page + 1) * pageSize - 1)
+
+        if (error) throw error
+        if (!data || data.length === 0) break
+
+        for (const event of data) {
+          if (!event.url) continue
+
+          if (!clicksByUrl.has(event.url)) {
+            clicksByUrl.set(event.url, { total: 0, emails: new Set() })
+          }
+          const urlStats = clicksByUrl.get(event.url)!
+          urlStats.total++
+          urlStats.emails.add(event.email)
+        }
+
+        if (data.length < pageSize) break
+        page++
+      }
+
+      // Convert to array and sort by total clicks descending
+      const statsArray = Array.from(clicksByUrl.entries()).map(([url, stats]) => ({
+        url,
+        totalClicks: stats.total,
+        uniqueClicks: stats.emails.size,
+      }))
+      statsArray.sort((a, b) => b.totalClicks - a.totalClicks)
+
+      setLinkClickStats(statsArray)
+    } catch (error) {
+      console.error('Error fetching link click stats:', error)
+    } finally {
+      setLoadingLinkStats(false)
     }
   }
 
@@ -1297,6 +1353,84 @@ export default function Analytics() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Link Click Performance */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Link Performance</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {loadingLinkStats ? (
+                <p className="text-center py-8 text-gray-500">Loading link statistics...</p>
+              ) : linkClickStats.length === 0 ? (
+                <p className="text-center py-8 text-gray-500">No link clicks recorded yet.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b border-gray-200">
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">URL</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Total Clicks</th>
+                        <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Unique Clicks</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                      {linkClickStats.map((link, idx) => {
+                        // Clean up URL for display
+                        const isUnsubscribe = link.url.includes('/unsubscribe')
+                        let displayUrl = link.url
+                        try {
+                          const urlObj = new URL(link.url)
+                          displayUrl = urlObj.pathname + urlObj.search
+                          if (displayUrl.length > 60) {
+                            displayUrl = displayUrl.substring(0, 57) + '...'
+                          }
+                        } catch {
+                          if (displayUrl.length > 60) {
+                            displayUrl = displayUrl.substring(0, 57) + '...'
+                          }
+                        }
+
+                        return (
+                          <tr key={idx} className={`hover:bg-gray-50 ${isUnsubscribe ? 'bg-orange-50' : ''}`}>
+                            <td className="py-3 px-4 text-sm text-gray-900">
+                              <a
+                                href={link.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:underline"
+                                title={link.url}
+                              >
+                                {displayUrl}
+                              </a>
+                              {isUnsubscribe && (
+                                <span className="ml-2 text-xs text-orange-600">(unsubscribe)</span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-sm text-gray-900 text-right font-medium">
+                              {link.totalClicks.toLocaleString()}
+                            </td>
+                            <td className="py-3 px-4 text-sm text-gray-900 text-right">
+                              {link.uniqueClicks.toLocaleString()}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                    <tfoot className="border-t-2 border-gray-300">
+                      <tr className="font-medium">
+                        <td className="py-3 px-4 text-sm text-gray-900">Total</td>
+                        <td className="py-3 px-4 text-sm text-gray-900 text-right">
+                          {linkClickStats.reduce((sum, l) => sum + l.totalClicks, 0).toLocaleString()}
+                        </td>
+                        <td className="py-3 px-4 text-sm text-gray-500 text-right">-</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
 
           {/* Recent Events */}
           <Card>
