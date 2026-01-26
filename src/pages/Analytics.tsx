@@ -280,71 +280,22 @@ export default function Analytics() {
 
       console.log(`Event counts - delivered: ${deliveredRes.count}, opens: ${opensRes.count}, clicks: ${clicksRes.count}`)
 
-      // Now fetch unique counts with pagination in the background
-      // This can take a while for large campaigns but UI is already showing data
-      const fetchUniqueOpenCount = async () => {
-        const emails = new Set<string>()
-        let page = 0
-        const pageSize = 1000
+      // Fetch unique counts using database functions (fast even for 600k+ events)
+      Promise.all([
+        supabase.rpc('get_campaign_unique_opens', { p_campaign_id: campaignId }),
+        supabase.rpc('get_campaign_unique_clicks', { p_campaign_id: campaignId })
+      ])
+        .then(([opensResult, clicksResult]) => {
+          const uniqueOpens = opensResult.data || 0
+          const clickData = clicksResult.data?.[0] || { engaged_clicks: 0, unsub_clicks: 0 }
 
-        while (true) {
-          const { data, error } = await supabase
-            .from('analytics_events')
-            .select('email')
-            .eq('campaign_id', campaignId)
-            .eq('event_type', 'open')
-            .range(page * pageSize, (page + 1) * pageSize - 1)
-
-          if (error) throw error
-          if (!data || data.length === 0) break
-
-          data.forEach(d => emails.add(d.email))
-          if (data.length < pageSize) break
-          page++
-        }
-        return emails.size
-      }
-
-      const fetchUniqueClickCounts = async () => {
-        const engagedEmails = new Set<string>()
-        const unsubEmails = new Set<string>()
-        let page = 0
-        const pageSize = 1000
-
-        while (true) {
-          const { data, error } = await supabase
-            .from('analytics_events')
-            .select('email, url')
-            .eq('campaign_id', campaignId)
-            .eq('event_type', 'click')
-            .range(page * pageSize, (page + 1) * pageSize - 1)
-
-          if (error) throw error
-          if (!data || data.length === 0) break
-
-          for (const event of data) {
-            if (event.url?.includes('/unsubscribe')) {
-              unsubEmails.add(event.email)
-            } else {
-              engagedEmails.add(event.email)
-            }
-          }
-          if (data.length < pageSize) break
-          page++
-        }
-        return { engaged: engagedEmails.size, unsub: unsubEmails.size }
-      }
-
-      // Run pagination in parallel and update counts as they complete
-      Promise.all([fetchUniqueOpenCount(), fetchUniqueClickCounts()])
-        .then(([uniqueOpens, clickCounts]) => {
           setEventCounts(prev => prev ? {
             ...prev,
             uniqueOpens,
-            uniqueClicks: clickCounts.engaged,
-            uniqueUnsubscribeClicks: clickCounts.unsub,
+            uniqueClicks: clickData.engaged_clicks,
+            uniqueUnsubscribeClicks: clickData.unsub_clicks,
           } : prev)
-          console.log(`Unique counts loaded - opens: ${uniqueOpens}, clicks: ${clickCounts.engaged}`)
+          console.log(`Unique counts loaded - opens: ${uniqueOpens}, clicks: ${clickData.engaged_clicks}`)
         })
         .catch(err => console.error('Error fetching unique counts:', err))
     } catch (error) {

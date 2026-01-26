@@ -21,3 +21,33 @@ BEGIN
   ORDER BY total_clicks DESC;
 END;
 $$ LANGUAGE plpgsql;
+
+-- Function to get unique open count for a campaign
+CREATE OR REPLACE FUNCTION get_campaign_unique_opens(p_campaign_id UUID)
+RETURNS BIGINT AS $$
+BEGIN
+  RETURN (
+    SELECT COUNT(DISTINCT email)
+    FROM analytics_events
+    WHERE campaign_id = p_campaign_id
+      AND event_type = 'open'
+  );
+END;
+$$ LANGUAGE plpgsql;
+
+-- Function to get unique click counts for a campaign (engaged vs unsubscribe clicks)
+CREATE OR REPLACE FUNCTION get_campaign_unique_clicks(p_campaign_id UUID)
+RETURNS TABLE (
+  engaged_clicks BIGINT,
+  unsub_clicks BIGINT
+) AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    COUNT(DISTINCT CASE WHEN url NOT LIKE '%/unsubscribe%' THEN email END)::BIGINT as engaged_clicks,
+    COUNT(DISTINCT CASE WHEN url LIKE '%/unsubscribe%' THEN email END)::BIGINT as unsub_clicks
+  FROM analytics_events
+  WHERE campaign_id = p_campaign_id
+    AND event_type = 'click';
+END;
+$$ LANGUAGE plpgsql;
