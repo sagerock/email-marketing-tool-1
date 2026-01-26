@@ -388,45 +388,18 @@ export default function Analytics() {
     setLinkClickStats([])
 
     try {
-      // Fetch all click events with pagination
-      const clicksByUrl = new Map<string, { total: number; emails: Set<string> }>()
-      let page = 0
-      const pageSize = 1000
+      // Use database function for fast aggregation (handles 600k+ rows efficiently)
+      const { data, error } = await supabase.rpc('get_campaign_link_stats', {
+        p_campaign_id: campaignId
+      })
 
-      while (true) {
-        const { data, error } = await supabase
-          .from('analytics_events')
-          .select('url, email')
-          .eq('campaign_id', campaignId)
-          .eq('event_type', 'click')
-          .not('url', 'is', null)
-          .range(page * pageSize, (page + 1) * pageSize - 1)
+      if (error) throw error
 
-        if (error) throw error
-        if (!data || data.length === 0) break
-
-        for (const event of data) {
-          if (!event.url) continue
-
-          if (!clicksByUrl.has(event.url)) {
-            clicksByUrl.set(event.url, { total: 0, emails: new Set() })
-          }
-          const urlStats = clicksByUrl.get(event.url)!
-          urlStats.total++
-          urlStats.emails.add(event.email)
-        }
-
-        if (data.length < pageSize) break
-        page++
-      }
-
-      // Convert to array and sort by total clicks descending
-      const statsArray = Array.from(clicksByUrl.entries()).map(([url, stats]) => ({
-        url,
-        totalClicks: stats.total,
-        uniqueClicks: stats.emails.size,
+      const statsArray = (data || []).map((row: { url: string; total_clicks: number; unique_clicks: number }) => ({
+        url: row.url,
+        totalClicks: row.total_clicks,
+        uniqueClicks: row.unique_clicks,
       }))
-      statsArray.sort((a, b) => b.totalClicks - a.totalClicks)
 
       setLinkClickStats(statsArray)
     } catch (error) {
