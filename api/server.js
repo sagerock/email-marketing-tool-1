@@ -71,6 +71,29 @@ async function sendCampaignById(campaignId) {
 
   if (campaignError) throw campaignError
 
+  // Guard against double-sending with atomic status update
+  // Only proceed if status is 'draft' or 'scheduled'
+  if (campaign.status === 'sending') {
+    throw new Error('Campaign is already being sent')
+  }
+  if (campaign.status === 'sent') {
+    throw new Error('Campaign has already been sent')
+  }
+
+  // Atomically claim the campaign by setting status to 'sending'
+  // This prevents race conditions if send is triggered twice
+  const { data: claimResult, error: claimError } = await supabase
+    .from('campaigns')
+    .update({ status: 'sending' })
+    .eq('id', campaignId)
+    .in('status', ['draft', 'scheduled'])
+    .select('id')
+
+  if (claimError) throw claimError
+  if (!claimResult || claimResult.length === 0) {
+    throw new Error('Campaign is already being sent or has been sent')
+  }
+
   // 2. Fetch client to get API key
   const { data: client, error: clientError } = await supabase
     .from('clients')
@@ -169,11 +192,10 @@ async function sendCampaignById(campaignId) {
     console.log(`📧 Excluded ${beforeBounceFilter - contacts.length} hard-bounced contacts, ${contacts.length} remaining`)
   }
 
-  // 6. Update campaign status
+  // 6. Update recipient count (status already set to 'sending' at start)
   await supabase
     .from('campaigns')
     .update({
-      status: 'sending',
       recipient_count: contacts.length,
     })
     .eq('id', campaignId)
