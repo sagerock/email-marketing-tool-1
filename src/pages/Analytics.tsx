@@ -27,6 +27,7 @@ interface EventCounts {
   uniqueClicks: number
   uniqueUnsubscribeClicks: number
   bounces: number
+  blocks: number
   spam: number
   unsubscribes: number
 }
@@ -249,11 +250,12 @@ export default function Analytics() {
       setEvents(data || [])
 
       // Fetch counts separately using count queries (more efficient than fetching all rows)
-      const [deliveredRes, opensRes, clicksRes, bouncesRes, spamRes, unsubscribesRes] = await Promise.all([
+      const [deliveredRes, opensRes, clicksRes, bouncesRes, blocksRes, spamRes, unsubscribesRes] = await Promise.all([
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'delivered'),
         supabase.from('analytics_events').select('email', { count: 'exact' }).eq('campaign_id', campaignId).eq('event_type', 'open'),
         supabase.from('analytics_events').select('email', { count: 'exact' }).eq('campaign_id', campaignId).eq('event_type', 'click'),
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'bounce'),
+        supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'block'),
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'spam'),
         supabase.from('analytics_events').select('*', { count: 'exact', head: true }).eq('campaign_id', campaignId).eq('event_type', 'unsubscribe'),
       ])
@@ -268,6 +270,7 @@ export default function Analytics() {
         uniqueClicks: 0, // Will be updated after pagination
         uniqueUnsubscribeClicks: 0,
         bounces: bouncesRes.count || 0,
+        blocks: blocksRes.count || 0,
         spam: spamRes.count || 0,
         unsubscribes: unsubscribesRes.count || 0,
       })
@@ -459,7 +462,7 @@ export default function Analytics() {
       uniqueClicks: eventCounts.uniqueClicks,
       uniqueUnsubscribeClicks: eventCounts.uniqueUnsubscribeClicks,
       bounces: eventCounts.bounces,
-      blocks: 0,
+      blocks: eventCounts.blocks,
       spam: eventCounts.spam,
       unsubscribes: eventCounts.unsubscribes,
       source: 'webhook' as const,
@@ -1386,6 +1389,8 @@ export default function Analytics() {
                                   ? 'bg-purple-100 text-purple-800'
                                   : event.event_type === 'bounce'
                                   ? 'bg-red-100 text-red-800'
+                                  : event.event_type === 'block'
+                                  ? 'bg-orange-100 text-orange-800'
                                   : 'bg-gray-100 text-gray-800'
                               }`}
                             >
