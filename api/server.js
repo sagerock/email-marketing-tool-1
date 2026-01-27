@@ -1054,37 +1054,47 @@ function identifyBotEmails(clickData) {
  * Helper function to fetch all rows with pagination
  * Supabase has a default limit of 1000 rows per query
  */
-async function fetchAllClickEvents(campaignId, includeUrl = true) {
+async function fetchAllClickEvents(campaignId) {
   const allData = []
-  const pageSize = 10000
-  let offset = 0
+  const pageSize = 1000 // Supabase max per request
+  let page = 0
   let hasMore = true
 
+  console.log(`   Starting paginated fetch for campaign ${campaignId}`)
+
   while (hasMore) {
-    const query = supabase
+    const from = page * pageSize
+    const to = from + pageSize - 1
+
+    const { data, error, count } = await supabase
       .from('analytics_events')
-      .select(includeUrl ? 'url, email, timestamp' : 'email, url, timestamp')
+      .select('url, email, timestamp', { count: 'exact' })
       .eq('campaign_id', campaignId)
       .eq('event_type', 'click')
-      .range(offset, offset + pageSize - 1)
+      .not('url', 'is', null)
+      .order('timestamp', { ascending: true })
+      .range(from, to)
 
-    if (includeUrl) {
-      query.not('url', 'is', null)
+    if (error) {
+      console.error(`   Error on page ${page}:`, error)
+      throw error
     }
 
-    const { data, error } = await query
-
-    if (error) throw error
+    if (page === 0) {
+      console.log(`   Total click events in database: ${count}`)
+    }
 
     if (data && data.length > 0) {
       allData.push(...data)
-      offset += pageSize
+      console.log(`   Page ${page}: fetched ${data.length} rows (total so far: ${allData.length})`)
+      page++
       hasMore = data.length === pageSize
     } else {
       hasMore = false
     }
   }
 
+  console.log(`   Pagination complete: ${allData.length} total rows fetched`)
   return allData
 }
 
@@ -1099,8 +1109,7 @@ app.get('/api/campaigns/:id/link-stats', async (req, res) => {
     console.log(`📊 Fetching link stats for campaign: ${campaignId}`)
 
     // Fetch all click events with pagination
-    const data = await fetchAllClickEvents(campaignId, true)
-    console.log(`   Fetched ${data.length} total click events`)
+    const data = await fetchAllClickEvents(campaignId)
 
     // Identify bot emails
     const botEmails = identifyBotEmails(data)
@@ -1150,9 +1159,8 @@ app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
     const campaignId = req.params.id
     console.log(`📊 Fetching unique clicks for campaign: ${campaignId}`)
 
-    // Fetch all click events with pagination
-    const data = await fetchAllClickEvents(campaignId, false)
-    console.log(`   Fetched ${data.length} total click events`)
+    // Fetch all click events with pagination (reuses same function as link-stats)
+    const data = await fetchAllClickEvents(campaignId)
 
     // Identify bot emails
     const botEmails = identifyBotEmails(data || [])
