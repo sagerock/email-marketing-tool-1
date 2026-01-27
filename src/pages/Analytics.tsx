@@ -283,19 +283,22 @@ export default function Analytics() {
       // Fetch unique counts - opens via Supabase RPC, clicks via backend API (for large datasets)
       Promise.all([
         supabase.rpc('get_campaign_unique_opens', { p_campaign_id: campaignId }),
-        fetch(`${API_URL}/api/campaigns/${campaignId}/unique-clicks`).then(r => r.json())
+        fetch(`${API_URL}/api/campaigns/${campaignId}/unique-clicks`)
+          .then(r => r.ok ? r.json() : null)
+          .catch(() => null)
       ])
         .then(([opensResult, clickData]) => {
           const uniqueOpens = opensResult.data || 0
-          const clicks = clickData || { engaged_clicks: 0, unsub_clicks: 0 }
+          const engagedClicks = clickData?.engaged_clicks ?? 0
+          const unsubClicks = clickData?.unsub_clicks ?? 0
 
           setEventCounts(prev => prev ? {
             ...prev,
             uniqueOpens,
-            uniqueClicks: clicks.engaged_clicks,
-            uniqueUnsubscribeClicks: clicks.unsub_clicks,
+            uniqueClicks: engagedClicks,
+            uniqueUnsubscribeClicks: unsubClicks,
           } : prev)
-          console.log(`Unique counts loaded - opens: ${uniqueOpens}, clicks: ${clicks.engaged_clicks}`)
+          console.log(`Unique counts loaded - opens: ${uniqueOpens}, clicks: ${engagedClicks}`)
         })
         .catch(err => console.error('Error fetching unique counts:', err))
     } catch (error) {
