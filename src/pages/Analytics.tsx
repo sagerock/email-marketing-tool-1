@@ -1793,110 +1793,110 @@ export default function Analytics() {
               </div>
             )
           })()}
+        </>
+      )}
 
-          {/* Tag Contacts Modal */}
-          {showTagModal && (
-            <div
-              className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-              onClick={() => {
-                setShowTagModal(false)
-                setSubscriberTagMode(false)
-              }}
-            >
-              <div
-                className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col"
-                onClick={(e) => e.stopPropagation()}
+      {/* Tag Contacts Modal - rendered outside view mode conditionals */}
+      {showTagModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => {
+            setShowTagModal(false)
+            setSubscriberTagMode(false)
+          }}
+        >
+          <div
+            className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Tag {subscriberTagMode ? selectedSubscriberIds.size : filteredEventContacts.length} Contacts
+              </h3>
+              <button
+                onClick={() => {
+                  setShowTagModal(false)
+                  setSubscriberTagMode(false)
+                }}
+                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
               >
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
-                  <h3 className="text-lg font-semibold text-gray-900">
-                    Tag {subscriberTagMode ? selectedSubscriberIds.size : filteredEventContacts.length} Contacts
-                  </h3>
-                  <button
-                    onClick={() => {
-                      setShowTagModal(false)
-                      setSubscriberTagMode(false)
-                    }}
-                    className="p-2 hover:bg-gray-100 rounded-full transition-colors"
-                  >
-                    <X className="h-5 w-5 text-gray-500" />
-                  </button>
-                </div>
-                <div className="p-6 space-y-4 overflow-y-auto flex-1">
-                  <p className="text-sm text-gray-600">
-                    {subscriberTagMode
-                      ? `Add a tag to the ${selectedSubscriberIds.size} selected subscriber${selectedSubscriberIds.size === 1 ? '' : 's'}.`
-                      : `Add a tag to all contacts who ${eventFilter === 'open' ? 'opened' : 'clicked'} this campaign.`
-                    }
-                  </p>
+                <X className="h-5 w-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4 overflow-y-auto flex-1">
+              <p className="text-sm text-gray-600">
+                {subscriberTagMode
+                  ? `Add a tag to the ${selectedSubscriberIds.size} selected subscriber${selectedSubscriberIds.size === 1 ? '' : 's'}.`
+                  : `Add a tag to all contacts who ${eventFilter === 'open' ? 'opened' : 'clicked'} this campaign.`
+                }
+              </p>
 
-                  {/* Existing Tags */}
-                  {availableTags.length > 0 && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        Select existing tag ({availableTags.length} available)
-                      </label>
-                      <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
-                        {availableTags.map((tag) => (
-                          <Badge
-                            key={tag.id}
-                            variant={selectedTag === tag.name ? 'info' : 'default'}
-                            className="cursor-pointer"
-                            onClick={() => {
-                              setSelectedTag(selectedTag === tag.name ? '' : tag.name)
-                              setNewTagName('')
-                            }}
-                          >
-                            {tag.name}
-                          </Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Or divider */}
-                  <div className="relative">
-                    <div className="absolute inset-0 flex items-center">
-                      <div className="w-full border-t border-gray-200" />
-                    </div>
-                    <div className="relative flex justify-center text-sm">
-                      <span className="px-2 bg-white text-gray-500">or create new</span>
-                    </div>
-                  </div>
-
-                  {/* New Tag Input */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      New tag name
-                    </label>
-                    <Input
-                      placeholder="e.g., Clicked-Jan2026-Tradeshow"
-                      value={newTagName}
-                      onChange={(e) => {
-                        setNewTagName(e.target.value)
-                        setSelectedTag('')
-                      }}
-                    />
+              {/* Existing Tags */}
+              {availableTags.length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select existing tag ({availableTags.length} available)
+                  </label>
+                  <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
+                    {availableTags.map((tag) => (
+                      <Badge
+                        key={tag.id}
+                        variant={selectedTag === tag.name ? 'info' : 'default'}
+                        className="cursor-pointer"
+                        onClick={() => {
+                          setSelectedTag(selectedTag === tag.name ? '' : tag.name)
+                          setNewTagName('')
+                        }}
+                      >
+                        {tag.name}
+                      </Badge>
+                    ))}
                   </div>
                 </div>
-                <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg shrink-0">
-                  <Button variant="outline" onClick={() => {
-                    setShowTagModal(false)
-                    setSubscriberTagMode(false)
-                  }}>
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="primary"
-                    onClick={subscriberTagMode ? applyTagToSelectedSubscribers : applyTagToFilteredContacts}
-                    disabled={taggingInProgress || (!selectedTag && !newTagName.trim())}
-                  >
-                    {taggingInProgress ? 'Tagging...' : 'Apply Tag'}
-                  </Button>
+              )}
+
+              {/* Or divider */}
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-gray-200" />
+                </div>
+                <div className="relative flex justify-center text-sm">
+                  <span className="px-2 bg-white text-gray-500">or create new</span>
                 </div>
               </div>
+
+              {/* New Tag Input */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  New tag name
+                </label>
+                <Input
+                  placeholder="e.g., Clicked-Jan2026-Tradeshow"
+                  value={newTagName}
+                  onChange={(e) => {
+                    setNewTagName(e.target.value)
+                    setSelectedTag('')
+                  }}
+                />
+              </div>
             </div>
-          )}
-        </>
+            <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg shrink-0">
+              <Button variant="outline" onClick={() => {
+                setShowTagModal(false)
+                setSubscriberTagMode(false)
+              }}>
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={subscriberTagMode ? applyTagToSelectedSubscribers : applyTagToFilteredContacts}
+                disabled={taggingInProgress || (!selectedTag && !newTagName.trim())}
+              >
+                {taggingInProgress ? 'Tagging...' : 'Apply Tag'}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Subscriber Activity Modal - rendered outside view mode conditionals */}
