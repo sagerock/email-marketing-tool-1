@@ -599,6 +599,9 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
     let skipped = 0
     let errors = 0
 
+    // Cache campaign lookups to avoid repeated queries
+    const campaignCache = new Map()
+
     // Process each event
     for (const event of events) {
       // Extract campaign_id from custom args
@@ -608,6 +611,21 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
         console.warn('Event missing campaign_id:', JSON.stringify(event))
         skipped++
         continue
+      }
+
+      // Get client_id from campaign (with caching)
+      let clientId = campaignCache.get(campaignId)
+      if (!clientId) {
+        const { data: campaign } = await supabase
+          .from('campaigns')
+          .select('client_id')
+          .eq('id', campaignId)
+          .single()
+
+        if (campaign?.client_id) {
+          clientId = campaign.client_id
+          campaignCache.set(campaignId, clientId)
+        }
       }
 
       // Map SendGrid event types to our event types
@@ -688,7 +706,7 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
       processed++
 
       // If unsubscribe event, update contact status
-      if (eventType === 'unsubscribe' && event.email) {
+      if (eventType === 'unsubscribe' && event.email && clientId) {
         await supabase
           .from('contacts')
           .update({
@@ -696,10 +714,11 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
             unsubscribed_at: new Date(event.timestamp * 1000).toISOString(),
           })
           .eq('email', event.email)
+          .eq('client_id', clientId)
       }
 
       // If bounce event, flag contact as bounced
-      if (eventType === 'bounce' && event.email) {
+      if (eventType === 'bounce' && event.email && clientId) {
         // Determine bounce type from SendGrid event data
         // Hard bounces: invalid, bounce, blocked - permanent delivery failures
         // Soft bounces: deferred - temporary issues
@@ -715,12 +734,13 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
             last_bounce_campaign_id: campaignId,
           })
           .eq('email', event.email)
+          .eq('client_id', clientId)
 
         console.log(`Bounce recorded for ${event.email}: ${isHardBounce ? 'hard' : 'soft'} bounce`)
       }
 
       // If open or click event, update engagement metrics
-      if ((eventType === 'open' || eventType === 'click') && event.email) {
+      if ((eventType === 'open' || eventType === 'click') && event.email && clientId) {
         const eventTimestamp = new Date(event.timestamp * 1000).toISOString()
 
         // Fetch current engagement values
@@ -728,6 +748,7 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
           .from('contacts')
           .select('total_opens, total_clicks, engagement_score')
           .eq('email', event.email)
+          .eq('client_id', clientId)
           .single()
 
         if (contact) {
@@ -746,6 +767,7 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
               last_engaged_at: eventTimestamp,
             })
             .eq('email', event.email)
+            .eq('client_id', clientId)
         }
       }
     }
