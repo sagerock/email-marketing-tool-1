@@ -98,6 +98,7 @@ export default function Analytics() {
   const [selectedSubscriber, setSelectedSubscriber] = useState<Contact | null>(null)
   const [selectedSubscriberIds, setSelectedSubscriberIds] = useState<Set<string>>(new Set())
   const [subscriberTagMode, setSubscriberTagMode] = useState(false)
+  const [engagementFilter, setEngagementFilter] = useState<'top100' | 'opened_and_clicked'>('top100')
   const [subscriberActivity, setSubscriberActivity] = useState<{
     event_type: string
     timestamp: string
@@ -628,21 +629,36 @@ export default function Analytics() {
   }
 
   // Fetch top engaged subscribers
-  const fetchTopSubscribers = async () => {
+  const fetchTopSubscribers = async (filter: 'top100' | 'opened_and_clicked' = engagementFilter) => {
     if (!selectedClient) return
 
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('contacts')
         .select('*')
         .eq('client_id', selectedClient.id)
-        .gt('engagement_score', 0)
-        .order('total_clicks', { ascending: false })
-        .order('engagement_score', { ascending: false })
-        .limit(100)
+
+      if (filter === 'opened_and_clicked') {
+        // Show all contacts who have both opened AND clicked at least once
+        query = query
+          .gt('total_opens', 0)
+          .gt('total_clicks', 0)
+          .order('total_clicks', { ascending: false })
+          .order('engagement_score', { ascending: false })
+      } else {
+        // Top 100 by engagement score
+        query = query
+          .gt('engagement_score', 0)
+          .order('total_clicks', { ascending: false })
+          .order('engagement_score', { ascending: false })
+          .limit(100)
+      }
+
+      const { data, error } = await query
 
       if (error) throw error
       setTopSubscribers(data || [])
+      setSelectedSubscriberIds(new Set()) // Clear selection when filter changes
     } catch (error) {
       console.error('Error fetching top subscribers:', error)
     }
@@ -904,13 +920,48 @@ export default function Analytics() {
             {loadingSubscribers ? (
               <div className="text-center py-12 text-gray-500">Loading subscriber data...</div>
             ) : subscriberTab === 'top' ? (
-              topSubscribers.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">
-                  <Users className="h-12 w-12 mx-auto mb-4 text-gray-400" />
-                  <p>No engagement data yet. Open and click events will populate this list.</p>
+              <>
+                {/* Engagement Filter */}
+                <div className="flex gap-2 mb-4">
+                  <button
+                    onClick={() => {
+                      setEngagementFilter('top100')
+                      fetchTopSubscribers('top100')
+                    }}
+                    className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                      engagementFilter === 'top100'
+                        ? 'bg-gray-900 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Top 100
+                  </button>
+                  <button
+                    onClick={() => {
+                      setEngagementFilter('opened_and_clicked')
+                      fetchTopSubscribers('opened_and_clicked')
+                    }}
+                    className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
+                      engagementFilter === 'opened_and_clicked'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-green-50 text-green-700 hover:bg-green-100'
+                    }`}
+                  >
+                    Opened & Clicked
+                  </button>
                 </div>
-              ) : (
-                <div className="overflow-x-auto">
+
+                {topSubscribers.length === 0 ? (
+                  <div className="text-center py-12 text-gray-500">
+                    <Users className="h-12 w-12 mx-auto mb-4 text-gray-400" />
+                    <p>
+                      {engagementFilter === 'opened_and_clicked'
+                        ? 'No contacts have both opened and clicked yet.'
+                        : 'No engagement data yet. Open and click events will populate this list.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-200">
@@ -996,7 +1047,8 @@ export default function Analytics() {
                     </tbody>
                   </table>
                 </div>
-              )
+                )}
+              </>
             ) : subscriberTab === 'bounced' ? (
               (() => {
                 const filteredBounces = bouncedContacts.filter(c =>
