@@ -636,6 +636,32 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
           skipped++
           continue
         }
+
+        // Check click-to-open ratio - bots click without opening or have very high ratios
+        const { data: emailStats } = await supabase
+          .from('analytics_events')
+          .select('event_type')
+          .eq('email', event.email)
+          .in('event_type', ['open', 'click'])
+
+        if (emailStats) {
+          const opens = emailStats.filter(e => e.event_type === 'open').length
+          const clicks = emailStats.filter(e => e.event_type === 'click').length
+
+          // No opens = bot (can't click without opening)
+          if (opens === 0) {
+            console.log(`Bot detected: ${event.email} clicked without any opens`)
+            skipped++
+            continue
+          }
+
+          // High ratio = bot (more than 10 clicks per open)
+          if (clicks >= opens * 10) {
+            console.log(`Bot detected: ${event.email} has ${clicks} clicks vs ${opens} opens (ratio ${(clicks/opens).toFixed(1)}:1)`)
+            skipped++
+            continue
+          }
+        }
       }
 
       // Insert event into database
