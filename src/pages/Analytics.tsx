@@ -1794,119 +1794,119 @@ export default function Analytics() {
               </div>
             </div>
           )}
+        </>
+      )}
 
-          {/* Subscriber Activity Modal */}
-          {selectedSubscriber && (
-            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-              <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900">Subscriber Activity</h2>
-                    <p className="text-sm text-gray-600">{selectedSubscriber.email}</p>
-                    {(selectedSubscriber.first_name || selectedSubscriber.last_name) && (
-                      <p className="text-sm text-gray-500">
-                        {`${selectedSubscriber.first_name || ''} ${selectedSubscriber.last_name || ''}`.trim()}
-                      </p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => setSelectedSubscriber(null)}
-                    className="text-gray-400 hover:text-gray-600"
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
+      {/* Subscriber Activity Modal - rendered outside view mode conditionals */}
+      {selectedSubscriber && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Subscriber Activity</h2>
+                <p className="text-sm text-gray-600">{selectedSubscriber.email}</p>
+                {(selectedSubscriber.first_name || selectedSubscriber.last_name) && (
+                  <p className="text-sm text-gray-500">
+                    {`${selectedSubscriber.first_name || ''} ${selectedSubscriber.last_name || ''}`.trim()}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setSelectedSubscriber(null)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Engagement Summary */}
+            <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 shrink-0">
+              <div className="flex gap-6">
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Opens</p>
+                  <p className="text-lg font-semibold text-gray-900">{selectedSubscriber.total_opens || 0}</p>
                 </div>
-
-                {/* Engagement Summary */}
-                <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 shrink-0">
-                  <div className="flex gap-6">
-                    <div>
-                      <p className="text-xs text-gray-500 uppercase">Opens</p>
-                      <p className="text-lg font-semibold text-gray-900">{selectedSubscriber.total_opens || 0}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500 uppercase">Clicks</p>
-                      <p className="text-lg font-semibold text-gray-900">{selectedSubscriber.total_clicks || 0}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500 uppercase">Score</p>
-                      <p className="text-lg font-semibold text-blue-600">{selectedSubscriber.engagement_score || 0}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500 uppercase">Last Engaged</p>
-                      <p className="text-sm font-medium text-gray-900">
-                        {selectedSubscriber.last_engaged_at
-                          ? new Date(selectedSubscriber.last_engaged_at).toLocaleDateString()
-                          : '-'}
-                      </p>
-                    </div>
-                  </div>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Clicks</p>
+                  <p className="text-lg font-semibold text-gray-900">{selectedSubscriber.total_clicks || 0}</p>
                 </div>
-
-                {/* Activity List */}
-                <div className="flex-1 overflow-y-auto px-6 py-4">
-                  {loadingSubscriberActivity ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                      <span className="ml-2 text-gray-600">Loading activity...</span>
-                    </div>
-                  ) : subscriberActivity.length === 0 ? (
-                    <div className="text-center py-8 text-gray-500">
-                      <p>No activity recorded for this subscriber.</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {subscriberActivity.map((event, index) => (
-                        <div
-                          key={`${event.campaign_id}-${event.timestamp}-${index}`}
-                          className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50"
-                        >
-                          <div className={`p-2 rounded-full shrink-0 ${
-                            event.event_type === 'click' ? 'bg-green-100' : 'bg-blue-100'
-                          }`}>
-                            {event.event_type === 'click' ? (
-                              <MousePointer className="h-4 w-4 text-green-600" />
-                            ) : (
-                              <Eye className="h-4 w-4 text-blue-600" />
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2">
-                              <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                                event.event_type === 'click'
-                                  ? 'bg-green-100 text-green-700'
-                                  : 'bg-blue-100 text-blue-700'
-                              }`}>
-                                {event.event_type === 'click' ? 'Click' : 'Open'}
-                              </span>
-                              <span className="text-xs text-gray-500">
-                                {new Date(event.timestamp).toLocaleString()}
-                              </span>
-                            </div>
-                            <p className="text-sm font-medium text-gray-900 mt-1">
-                              {event.campaign_name}
-                            </p>
-                            {event.url && (
-                              <p className="text-xs text-gray-500 mt-1 truncate" title={event.url}>
-                                {event.url}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Score</p>
+                  <p className="text-lg font-semibold text-blue-600">{selectedSubscriber.engagement_score || 0}</p>
                 </div>
-
-                <div className="flex justify-end px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg shrink-0">
-                  <Button variant="outline" onClick={() => setSelectedSubscriber(null)}>
-                    Close
-                  </Button>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Last Engaged</p>
+                  <p className="text-sm font-medium text-gray-900">
+                    {selectedSubscriber.last_engaged_at
+                      ? new Date(selectedSubscriber.last_engaged_at).toLocaleDateString()
+                      : '-'}
+                  </p>
                 </div>
               </div>
             </div>
-          )}
-        </>
+
+            {/* Activity List */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {loadingSubscriberActivity ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                  <span className="ml-2 text-gray-600">Loading activity...</span>
+                </div>
+              ) : subscriberActivity.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <p>No activity recorded for this subscriber.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {subscriberActivity.map((event, index) => (
+                    <div
+                      key={`${event.campaign_id}-${event.timestamp}-${index}`}
+                      className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    >
+                      <div className={`p-2 rounded-full shrink-0 ${
+                        event.event_type === 'click' ? 'bg-green-100' : 'bg-blue-100'
+                      }`}>
+                        {event.event_type === 'click' ? (
+                          <MousePointer className="h-4 w-4 text-green-600" />
+                        ) : (
+                          <Eye className="h-4 w-4 text-blue-600" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                            event.event_type === 'click'
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {event.event_type === 'click' ? 'Click' : 'Open'}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {new Date(event.timestamp).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium text-gray-900 mt-1">
+                          {event.campaign_name}
+                        </p>
+                        {event.url && (
+                          <p className="text-xs text-gray-500 mt-1 truncate" title={event.url}>
+                            {event.url}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg shrink-0">
+              <Button variant="outline" onClick={() => setSelectedSubscriber(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
