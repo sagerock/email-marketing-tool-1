@@ -1019,14 +1019,20 @@ export default function Analytics() {
                 return (
                   <div className="space-y-6">
                     {/* Dated unsubscribes grouped by month */}
-                    {sortedMonths.map(([key, { label, contacts }]) => (
-                      <div key={key}>
-                        <h3 className="text-sm font-medium text-gray-700 mb-3">
-                          {label} ({contacts.length})
-                        </h3>
-                        {renderContactTable(contacts)}
-                      </div>
-                    ))}
+                    {sortedMonths.map(([key, { label, contacts }]) => {
+                      // Sort contacts within each month by date (newest first)
+                      const sortedContacts = [...contacts].sort((a, b) =>
+                        new Date(b.unsubscribed_at!).getTime() - new Date(a.unsubscribed_at!).getTime()
+                      )
+                      return (
+                        <div key={key}>
+                          <h3 className="text-sm font-medium text-gray-700 mb-3">
+                            {label} ({contacts.length})
+                          </h3>
+                          {renderContactTable(sortedContacts)}
+                        </div>
+                      )
+                    })}
 
                     {/* Unknown date unsubscribes - collapsible */}
                     {unknownDateContacts.length > 0 && (
