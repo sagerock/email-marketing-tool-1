@@ -96,6 +96,8 @@ export default function Analytics() {
   const [linkClickStats, setLinkClickStats] = useState<{ url: string; totalClicks: number; uniqueClicks: number }[]>([])
   const [loadingLinkStats, setLoadingLinkStats] = useState(false)
   const [selectedSubscriber, setSelectedSubscriber] = useState<Contact | null>(null)
+  const [selectedSubscriberIds, setSelectedSubscriberIds] = useState<Set<string>>(new Set())
+  const [subscriberTagMode, setSubscriberTagMode] = useState(false)
   const [subscriberActivity, setSubscriberActivity] = useState<{
     event_type: string
     timestamp: string
@@ -212,6 +214,49 @@ export default function Analytics() {
       setShowTagModal(false)
       setSelectedTag('')
       setNewTagName('')
+    } catch (error) {
+      console.error('Error applying tag:', error)
+      alert('Failed to apply tag. Please try again.')
+    } finally {
+      setTaggingInProgress(false)
+    }
+  }
+
+  const applyTagToSelectedSubscribers = async () => {
+    const tagName = selectedTag || newTagName.trim()
+    if (!tagName || !selectedClient || selectedSubscriberIds.size === 0) return
+
+    setTaggingInProgress(true)
+    try {
+      // Get the selected contacts from topSubscribers
+      const selectedContacts = topSubscribers.filter(c => selectedSubscriberIds.has(c.id))
+
+      // Update each contact to add the tag (if not already present)
+      let updatedCount = 0
+      for (const contact of selectedContacts) {
+        const currentTags = contact.tags || []
+        if (!currentTags.includes(tagName)) {
+          const { error: updateError } = await supabase
+            .from('contacts')
+            .update({ tags: [...currentTags, tagName] })
+            .eq('id', contact.id)
+          if (updateError) throw updateError
+          updatedCount++
+        }
+      }
+
+      // Upsert the tag to the tags table
+      await supabase.from('tags').upsert(
+        { name: tagName, client_id: selectedClient.id },
+        { onConflict: 'name,client_id' }
+      )
+
+      alert(`Tagged ${updatedCount} contacts with "${tagName}"`)
+      setShowTagModal(false)
+      setSelectedTag('')
+      setNewTagName('')
+      setSelectedSubscriberIds(new Set())
+      setSubscriberTagMode(false)
     } catch (error) {
       console.error('Error applying tag:', error)
       alert('Failed to apply tag. Please try again.')
@@ -814,7 +859,22 @@ export default function Analytics() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <CardTitle>Subscriber Engagement</CardTitle>
+              <div className="flex items-center gap-3">
+                <CardTitle>Subscriber Engagement</CardTitle>
+                {subscriberTab === 'top' && selectedSubscriberIds.size > 0 && (
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      setSubscriberTagMode(true)
+                      fetchAvailableTags()
+                      setShowTagModal(true)
+                    }}
+                  >
+                    <TagIcon className="h-4 w-4 mr-1" />
+                    Tag {selectedSubscriberIds.size} Selected
+                  </Button>
+                )}
+              </div>
               <div className="flex gap-2">
                 <Button
                   variant={subscriberTab === 'top' ? 'primary' : 'outline'}
@@ -854,6 +914,20 @@ export default function Analytics() {
                   <table className="w-full">
                     <thead>
                       <tr className="border-b border-gray-200">
+                        <th className="py-3 px-4 w-10">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            checked={selectedSubscriberIds.size === topSubscribers.length && topSubscribers.length > 0}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedSubscriberIds(new Set(topSubscribers.map(c => c.id)))
+                              } else {
+                                setSelectedSubscriberIds(new Set())
+                              }
+                            }}
+                          />
+                        </th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Email</th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Name</th>
                         <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Opens</th>
@@ -867,9 +941,25 @@ export default function Analytics() {
                       {topSubscribers.map((contact) => (
                         <tr
                           key={contact.id}
-                          className="hover:bg-gray-50 cursor-pointer"
+                          className={`hover:bg-gray-50 cursor-pointer ${selectedSubscriberIds.has(contact.id) ? 'bg-blue-50' : ''}`}
                           onClick={() => fetchSubscriberActivity(contact)}
                         >
+                          <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              checked={selectedSubscriberIds.has(contact.id)}
+                              onChange={(e) => {
+                                const newSelected = new Set(selectedSubscriberIds)
+                                if (e.target.checked) {
+                                  newSelected.add(contact.id)
+                                } else {
+                                  newSelected.delete(contact.id)
+                                }
+                                setSelectedSubscriberIds(newSelected)
+                              }}
+                            />
+                          </td>
                           <td className="py-3 px-4 text-sm text-blue-600 hover:text-blue-800">{contact.email}</td>
                           <td className="py-3 px-4 text-sm text-gray-600">
                             {contact.first_name || contact.last_name
@@ -1708,7 +1798,10 @@ export default function Analytics() {
           {showTagModal && (
             <div
               className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-              onClick={() => setShowTagModal(false)}
+              onClick={() => {
+                setShowTagModal(false)
+                setSubscriberTagMode(false)
+              }}
             >
               <div
                 className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 max-h-[80vh] flex flex-col"
@@ -1716,10 +1809,13 @@ export default function Analytics() {
               >
                 <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
                   <h3 className="text-lg font-semibold text-gray-900">
-                    Tag {filteredEventContacts.length} Contacts
+                    Tag {subscriberTagMode ? selectedSubscriberIds.size : filteredEventContacts.length} Contacts
                   </h3>
                   <button
-                    onClick={() => setShowTagModal(false)}
+                    onClick={() => {
+                      setShowTagModal(false)
+                      setSubscriberTagMode(false)
+                    }}
                     className="p-2 hover:bg-gray-100 rounded-full transition-colors"
                   >
                     <X className="h-5 w-5 text-gray-500" />
@@ -1727,7 +1823,10 @@ export default function Analytics() {
                 </div>
                 <div className="p-6 space-y-4 overflow-y-auto flex-1">
                   <p className="text-sm text-gray-600">
-                    Add a tag to all contacts who {eventFilter === 'open' ? 'opened' : 'clicked'} this campaign.
+                    {subscriberTagMode
+                      ? `Add a tag to the ${selectedSubscriberIds.size} selected subscriber${selectedSubscriberIds.size === 1 ? '' : 's'}.`
+                      : `Add a tag to all contacts who ${eventFilter === 'open' ? 'opened' : 'clicked'} this campaign.`
+                    }
                   </p>
 
                   {/* Existing Tags */}
@@ -1780,12 +1879,15 @@ export default function Analytics() {
                   </div>
                 </div>
                 <div className="flex justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg shrink-0">
-                  <Button variant="outline" onClick={() => setShowTagModal(false)}>
+                  <Button variant="outline" onClick={() => {
+                    setShowTagModal(false)
+                    setSubscriberTagMode(false)
+                  }}>
                     Cancel
                   </Button>
                   <Button
                     variant="primary"
-                    onClick={applyTagToFilteredContacts}
+                    onClick={subscriberTagMode ? applyTagToSelectedSubscribers : applyTagToFilteredContacts}
                     disabled={taggingInProgress || (!selectedTag && !newTagName.trim())}
                   >
                     {taggingInProgress ? 'Tagging...' : 'Apply Tag'}
