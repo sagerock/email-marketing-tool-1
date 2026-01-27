@@ -58,6 +58,72 @@ const supabase = createClient(
 )
 
 /**
+ * Bot Click Detection
+ * Tracks recent clicks to detect security scanner bots.
+ * Rule: 3+ unique URLs clicked within 10 seconds = bot
+ */
+const clickTracker = new Map() // Key: "campaignId:email", Value: [{ url, timestamp }]
+const knownBots = new Set() // Key: "campaignId:email" - emails already flagged as bots
+
+// Clean up old click tracking data every 30 seconds
+setInterval(() => {
+  const now = Date.now()
+  const TTL = 60000 // 60 seconds - keep data a bit longer than detection window
+
+  for (const [key, clicks] of clickTracker.entries()) {
+    // Remove clicks older than TTL
+    const recentClicks = clicks.filter(c => now - c.timestamp < TTL)
+    if (recentClicks.length === 0) {
+      clickTracker.delete(key)
+    } else {
+      clickTracker.set(key, recentClicks)
+    }
+  }
+
+  // Clean up known bots after 5 minutes (they won't click again anyway)
+  // This is handled separately to avoid memory growth
+}, 30000)
+
+// Clean up known bots every 5 minutes
+setInterval(() => {
+  knownBots.clear()
+}, 300000)
+
+/**
+ * Check if a click is from a bot based on click patterns.
+ * Returns true if this click should be filtered out.
+ */
+function isClickFromBot(campaignId, email, url, timestampMs) {
+  const key = `${campaignId}:${email}`
+
+  // Already flagged as bot - skip all their clicks
+  if (knownBots.has(key)) {
+    return true
+  }
+
+  // Get or create click history
+  let clicks = clickTracker.get(key) || []
+
+  // Add current click
+  clicks.push({ url, timestamp: timestampMs })
+  clickTracker.set(key, clicks)
+
+  // Check for bot pattern: 3+ unique URLs within 10 seconds
+  const tenSecondsAgo = timestampMs - 10000
+  const recentClicks = clicks.filter(c => c.timestamp >= tenSecondsAgo)
+  const uniqueUrls = new Set(recentClicks.map(c => c.url))
+
+  if (uniqueUrls.size >= 3) {
+    // This is a bot - flag for future clicks
+    knownBots.add(key)
+    console.log(`Bot detected: ${email} clicked ${uniqueUrls.size} unique URLs in 10s for campaign ${campaignId}`)
+    return true
+  }
+
+  return false
+}
+
+/**
  * Helper function to send a campaign by ID
  * Used by both the API endpoint and the scheduled campaign cron job
  */
@@ -563,6 +629,15 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
         continue
       }
 
+      // Bot detection for click events - filter before storing
+      if (eventType === 'click' && event.email && event.url) {
+        const clickTimestamp = event.timestamp * 1000 // Convert to milliseconds
+        if (isClickFromBot(campaignId, event.email, event.url, clickTimestamp)) {
+          skipped++
+          continue
+        }
+      }
+
       // Insert event into database
       const { error: insertError } = await supabase.from('analytics_events').insert({
         campaign_id: campaignId,
@@ -621,7 +696,6 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
       // If open or click event, update engagement metrics
       if ((eventType === 'open' || eventType === 'click') && event.email) {
         const eventTimestamp = new Date(event.timestamp * 1000).toISOString()
-        const eventUnixTime = event.timestamp
 
         // Fetch current engagement values
         const { data: contact } = await supabase
@@ -631,44 +705,10 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
           .single()
 
         if (contact) {
-          let shouldCountClick = true
-
-          // Bot detection for clicks
-          if (eventType === 'click' && campaignId) {
-            // Get ALL clicks from this email for this campaign (for unique URL check)
-            const { data: allCampaignClicks } = await supabase
-              .from('analytics_events')
-              .select('url, timestamp')
-              .eq('email', event.email)
-              .eq('campaign_id', campaignId)
-              .eq('event_type', 'click')
-
-            if (allCampaignClicks) {
-              // Check for recent burst (5+ clicks in last 60 seconds)
-              const oneMinuteAgo = eventUnixTime - 60
-              const recentClicks = allCampaignClicks.filter(c => c.timestamp >= oneMinuteAgo)
-
-              if (recentClicks.length >= 5) {
-                // 5+ clicks in the last minute = likely bot burst
-                shouldCountClick = false
-              } else {
-                // Check total unique URLs - more than 5 = bot (humans click 1-3)
-                const uniqueUrls = new Set(allCampaignClicks.map(c => c.url).filter(Boolean))
-                if (event.url) uniqueUrls.add(event.url) // Include current click
-
-                if (uniqueUrls.size > 5) {
-                  // Too many unique URLs = bot clicking all links
-                  shouldCountClick = false
-                } else if (allCampaignClicks.some(c => c.url === event.url)) {
-                  // This exact URL was already clicked - don't count duplicates
-                  shouldCountClick = false
-                }
-              }
-            }
-          }
-
+          // Bot clicks are already filtered at ingestion, so all clicks here are human
+          // Just increment engagement score for opens and clicks
           const newOpens = (contact.total_opens || 0) + (eventType === 'open' ? 1 : 0)
-          const newClicks = (contact.total_clicks || 0) + (eventType === 'click' && shouldCountClick ? 1 : 0)
+          const newClicks = (contact.total_clicks || 0) + (eventType === 'click' ? 1 : 0)
           const newScore = newOpens + (newClicks * 2) // clicks worth 2 points
 
           await supabase
