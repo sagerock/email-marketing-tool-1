@@ -1015,8 +1015,45 @@ app.get('/api/campaigns/:id/sendgrid-stats', async (req, res) => {
 })
 
 /**
+ * Helper function to identify bot emails
+ * Bot heuristic: 3+ unique URLs clicked within 10 seconds = bot (security scanner)
+ */
+function identifyBotEmails(clickData) {
+  // Group clicks by email
+  const emailClicks = {}
+  for (const row of clickData) {
+    if (!emailClicks[row.email]) {
+      emailClicks[row.email] = []
+    }
+    emailClicks[row.email].push({
+      url: row.url,
+      timestamp: new Date(row.timestamp).getTime()
+    })
+  }
+
+  // Identify bots: 3+ unique URLs within 10 seconds
+  const botEmails = new Set()
+  for (const [email, clicks] of Object.entries(emailClicks)) {
+    if (clicks.length < 3) continue
+
+    const uniqueUrls = new Set(clicks.map(c => c.url))
+    if (uniqueUrls.size < 3) continue
+
+    const timestamps = clicks.map(c => c.timestamp).sort((a, b) => a - b)
+    const timeSpan = (timestamps[timestamps.length - 1] - timestamps[0]) / 1000 // seconds
+
+    if (timeSpan <= 10) {
+      botEmails.add(email)
+    }
+  }
+
+  return botEmails
+}
+
+/**
  * Get link click statistics for a campaign
  * Uses direct SQL query with longer timeout for large datasets
+ * Filters out bot clicks (security scanners)
  */
 app.get('/api/campaigns/:id/link-stats', async (req, res) => {
   try {
@@ -1026,7 +1063,7 @@ app.get('/api/campaigns/:id/link-stats', async (req, res) => {
     // Query directly with service key - no RLS restrictions
     const { data, error } = await supabase
       .from('analytics_events')
-      .select('url, email')
+      .select('url, email, timestamp')
       .eq('campaign_id', campaignId)
       .eq('event_type', 'click')
       .not('url', 'is', null)
@@ -1036,11 +1073,17 @@ app.get('/api/campaigns/:id/link-stats', async (req, res) => {
       return res.status(500).json({ error: error.message })
     }
 
-    // Aggregate in JavaScript to avoid database timeout
+    // Identify bot emails
+    const botEmails = identifyBotEmails(data || [])
+    console.log(`   Identified ${botEmails.size} bot emails out of ${new Set((data || []).map(r => r.email)).size} total`)
+
+    // Aggregate in JavaScript, excluding bots
     const urlStats = {}
     const urlEmails = {}
 
     for (const row of data || []) {
+      if (botEmails.has(row.email)) continue // Skip bot clicks
+
       if (!urlStats[row.url]) {
         urlStats[row.url] = 0
         urlEmails[row.url] = new Set()
@@ -1059,7 +1102,7 @@ app.get('/api/campaigns/:id/link-stats', async (req, res) => {
       .sort((a, b) => b.total_clicks - a.total_clicks)
       .slice(0, 50) // Top 50 URLs
 
-    console.log(`   Found ${stats.length} unique URLs from ${data?.length || 0} click events`)
+    console.log(`   Found ${stats.length} unique URLs from human clicks (filtered ${botEmails.size} bot emails)`)
 
     res.json(stats)
   } catch (error) {
@@ -1071,6 +1114,7 @@ app.get('/api/campaigns/:id/link-stats', async (req, res) => {
 /**
  * Get unique click counts for a campaign
  * Uses direct SQL query with longer timeout for large datasets
+ * Filters out bot clicks (security scanners)
  */
 app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
   try {
@@ -1080,7 +1124,7 @@ app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
     // Query directly with service key
     const { data, error } = await supabase
       .from('analytics_events')
-      .select('email, url')
+      .select('email, url, timestamp')
       .eq('campaign_id', campaignId)
       .eq('event_type', 'click')
 
@@ -1089,11 +1133,16 @@ app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
       return res.status(500).json({ error: error.message })
     }
 
-    // Count unique emails for engaged clicks (non-unsubscribe) and unsub clicks
+    // Identify bot emails
+    const botEmails = identifyBotEmails(data || [])
+
+    // Count unique emails for engaged clicks (non-unsubscribe) and unsub clicks, excluding bots
     const engagedEmails = new Set()
     const unsubEmails = new Set()
 
     for (const row of data || []) {
+      if (botEmails.has(row.email)) continue // Skip bot clicks
+
       if (row.url?.includes('/unsubscribe')) {
         unsubEmails.add(row.email)
       } else {
@@ -1106,7 +1155,7 @@ app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
       unsub_clicks: unsubEmails.size,
     }
 
-    console.log(`   Unique clicks - engaged: ${result.engaged_clicks}, unsub: ${result.unsub_clicks}`)
+    console.log(`   Unique clicks - engaged: ${result.engaged_clicks}, unsub: ${result.unsub_clicks} (filtered ${botEmails.size} bot emails)`)
 
     res.json(result)
   } catch (error) {
