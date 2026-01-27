@@ -568,6 +568,7 @@ export default function Analytics() {
         .select('*')
         .eq('client_id', selectedClient.id)
         .gt('engagement_score', 0)
+        .order('total_clicks', { ascending: false })
         .order('engagement_score', { ascending: false })
         .limit(100)
 
