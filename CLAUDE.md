@@ -207,6 +207,30 @@ Regular campaigns can filter recipients by:
 
 Both filters can be combined (AND logic) - e.g., "contacts in Tradeshow X who also have tag Y"
 
+### Bot Click Filtering
+
+Email security scanners (Barracuda, Proofpoint, Mimecast, etc.) automatically click all links in emails to check for malware. This creates inflated click stats that don't represent real human engagement.
+
+**Bot Detection Rules (applied at webhook ingestion in `api/server.js`):**
+1. **Rapid multi-click**: 3+ unique URLs clicked within 10 seconds = bot
+2. **No prior open**: Click events with no corresponding open event = bot
+3. **High click-to-open ratio**: 10+ clicks per open = bot
+
+**How it works:**
+- Webhook handler tracks recent clicks per email in memory (with TTL cleanup)
+- Bot clicks are silently discarded, not stored in `analytics_events`
+- Known bot emails are cached to skip future clicks from same sender
+
+**Analytics Display:**
+- **SendGrid Reported**: Raw stats from SendGrid API (includes bot activity)
+- **Verified Human**: Filtered webhook stats (bot activity removed)
+- When both are available, Analytics page shows side-by-side comparison
+- Older campaigns (sent before category tracking) show only filtered stats
+
+**Cleanup Scripts (in `api/` directory):**
+- `cleanup-bot-clicks.js` - One-time cleanup of historical bot clicks
+- `recalculate-engagement.js` - Recalculate contact engagement scores from events
+
 ## Key Files
 
 - `src/contexts/AuthContext.tsx` - Authentication state management
