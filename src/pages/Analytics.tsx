@@ -985,6 +985,7 @@ export default function Analytics() {
                         <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Clicks</th>
                         <th className="text-right py-3 px-4 text-sm font-medium text-gray-700">Score</th>
                         <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Last Engaged</th>
+                        <th className="text-left py-3 px-4 text-sm font-medium text-gray-700">Tags</th>
                         <th className="text-center py-3 px-4 text-sm font-medium text-gray-700">Status</th>
                       </tr>
                     </thead>
@@ -1030,6 +1031,22 @@ export default function Analytics() {
                             {contact.last_engaged_at
                               ? new Date(contact.last_engaged_at).toLocaleDateString()
                               : '-'}
+                          </td>
+                          <td className="py-3 px-4 text-sm">
+                            {contact.tags && contact.tags.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {contact.tags.slice(0, 3).map((tag: string) => (
+                                  <Badge key={tag} variant="default" className="text-xs">
+                                    {tag}
+                                  </Badge>
+                                ))}
+                                {contact.tags.length > 3 && (
+                                  <span className="text-xs text-gray-500">+{contact.tags.length - 3}</span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-gray-400">-</span>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-sm text-center">
                             {contact.unsubscribed ? (
