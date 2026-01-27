@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users } from 'lucide-react'
+import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users, Eye, MousePointer } from 'lucide-react'
 
 export default function Contacts() {
   const { selectedClient } = useClient()
@@ -22,6 +22,15 @@ export default function Contacts() {
   const [showContacts, setShowContacts] = useState(false)
   const [filteredTagCount, setFilteredTagCount] = useState<number | null>(null)
   const countRequestVersion = useRef(0)
+  const [selectedSubscriber, setSelectedSubscriber] = useState<Contact | null>(null)
+  const [subscriberActivity, setSubscriberActivity] = useState<{
+    event_type: string
+    timestamp: string
+    url: string | null
+    campaign_name: string
+    campaign_id: string
+  }[]>([])
+  const [loadingSubscriberActivity, setLoadingSubscriberActivity] = useState(false)
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -176,6 +185,39 @@ export default function Contacts() {
       console.error('Error searching contacts:', error)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Fetch subscriber activity (opens and clicks with campaign info)
+  const fetchSubscriberActivity = async (contact: Contact) => {
+    setSelectedSubscriber(contact)
+    setLoadingSubscriberActivity(true)
+    setSubscriberActivity([])
+
+    try {
+      const { data, error } = await supabase
+        .from('analytics_events')
+        .select('event_type, timestamp, url, campaign_id, campaign:campaigns(name)')
+        .eq('email', contact.email)
+        .in('event_type', ['open', 'click'])
+        .order('timestamp', { ascending: false })
+        .limit(100)
+
+      if (error) throw error
+
+      setSubscriberActivity(
+        (data || []).map((event: any) => ({
+          event_type: event.event_type,
+          timestamp: event.timestamp,
+          url: event.url,
+          campaign_name: event.campaign?.name || 'Unknown Campaign',
+          campaign_id: event.campaign_id,
+        }))
+      )
+    } catch (error) {
+      console.error('Error fetching subscriber activity:', error)
+    } finally {
+      setLoadingSubscriberActivity(false)
     }
   }
 
@@ -339,6 +381,7 @@ export default function Contacts() {
                       contact={contact}
                       onUpdate={refreshData}
                       onEdit={setEditingContact}
+                      onViewActivity={fetchSubscriberActivity}
                     />
                   ))}
                 </tbody>
@@ -412,6 +455,118 @@ export default function Contacts() {
           }}
         />
       )}
+
+      {/* Subscriber Activity Modal */}
+      {selectedSubscriber && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Subscriber Activity</h2>
+                <p className="text-sm text-gray-600">{selectedSubscriber.email}</p>
+                {(selectedSubscriber.first_name || selectedSubscriber.last_name) && (
+                  <p className="text-sm text-gray-500">
+                    {`${selectedSubscriber.first_name || ''} ${selectedSubscriber.last_name || ''}`.trim()}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setSelectedSubscriber(null)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Engagement Summary */}
+            <div className="px-6 py-4 bg-gray-50 border-b border-gray-200 shrink-0">
+              <div className="flex gap-6">
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Opens</p>
+                  <p className="text-lg font-semibold text-gray-900">{selectedSubscriber.total_opens || 0}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Clicks</p>
+                  <p className="text-lg font-semibold text-gray-900">{selectedSubscriber.total_clicks || 0}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Score</p>
+                  <p className="text-lg font-semibold text-blue-600">{selectedSubscriber.engagement_score || 0}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase">Last Engaged</p>
+                  <p className="text-sm font-medium text-gray-900">
+                    {selectedSubscriber.last_engaged_at
+                      ? new Date(selectedSubscriber.last_engaged_at).toLocaleDateString()
+                      : '-'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Activity List */}
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              {loadingSubscriberActivity ? (
+                <div className="flex items-center justify-center py-8">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                  <span className="ml-2 text-gray-600">Loading activity...</span>
+                </div>
+              ) : subscriberActivity.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <p>No activity recorded for this subscriber.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {subscriberActivity.map((event, index) => (
+                    <div
+                      key={`${event.campaign_id}-${event.timestamp}-${index}`}
+                      className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50"
+                    >
+                      <div className={`p-2 rounded-full shrink-0 ${
+                        event.event_type === 'click' ? 'bg-green-100' : 'bg-blue-100'
+                      }`}>
+                        {event.event_type === 'click' ? (
+                          <MousePointer className="h-4 w-4 text-green-600" />
+                        ) : (
+                          <Eye className="h-4 w-4 text-blue-600" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                            event.event_type === 'click'
+                              ? 'bg-green-100 text-green-700'
+                              : 'bg-blue-100 text-blue-700'
+                          }`}>
+                            {event.event_type === 'click' ? 'Click' : 'Open'}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            {new Date(event.timestamp).toLocaleString()}
+                          </span>
+                        </div>
+                        <p className="text-sm font-medium text-gray-900 mt-1">
+                          {event.campaign_name}
+                        </p>
+                        {event.url && (
+                          <p className="text-xs text-gray-500 mt-1 truncate" title={event.url}>
+                            {event.url}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end px-6 py-4 border-t border-gray-200 bg-gray-50 rounded-b-lg shrink-0">
+              <Button variant="outline" onClick={() => setSelectedSubscriber(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -421,10 +576,12 @@ function ContactRow({
   contact,
   onUpdate,
   onEdit,
+  onViewActivity,
 }: {
   contact: Contact
   onUpdate: () => void
   onEdit: (contact: Contact) => void
+  onViewActivity: (contact: Contact) => void
 }) {
   const handleDelete = async () => {
     if (!confirm('Are you sure you want to delete this contact?')) return
@@ -501,7 +658,14 @@ function ContactRow({
 
   return (
     <tr className="hover:bg-gray-50">
-      <td className="py-3 px-4 text-sm text-gray-900">{contact.email}</td>
+      <td className="py-3 px-4 text-sm">
+        <button
+          onClick={() => onViewActivity(contact)}
+          className="text-blue-600 hover:text-blue-800 hover:underline text-left"
+        >
+          {contact.email}
+        </button>
+      </td>
       <td className="py-3 px-4 text-sm text-gray-900">
         {contact.first_name || contact.last_name
           ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
