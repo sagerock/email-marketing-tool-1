@@ -280,22 +280,22 @@ export default function Analytics() {
 
       console.log(`Event counts - delivered: ${deliveredRes.count}, opens: ${opensRes.count}, clicks: ${clicksRes.count}`)
 
-      // Fetch unique counts using database functions (fast even for 600k+ events)
+      // Fetch unique counts - opens via Supabase RPC, clicks via backend API (for large datasets)
       Promise.all([
         supabase.rpc('get_campaign_unique_opens', { p_campaign_id: campaignId }),
-        supabase.rpc('get_campaign_unique_clicks', { p_campaign_id: campaignId })
+        fetch(`${API_URL}/api/campaigns/${campaignId}/unique-clicks`).then(r => r.json())
       ])
-        .then(([opensResult, clicksResult]) => {
+        .then(([opensResult, clickData]) => {
           const uniqueOpens = opensResult.data || 0
-          const clickData = clicksResult.data?.[0] || { engaged_clicks: 0, unsub_clicks: 0 }
+          const clicks = clickData || { engaged_clicks: 0, unsub_clicks: 0 }
 
           setEventCounts(prev => prev ? {
             ...prev,
             uniqueOpens,
-            uniqueClicks: clickData.engaged_clicks,
-            uniqueUnsubscribeClicks: clickData.unsub_clicks,
+            uniqueClicks: clicks.engaged_clicks,
+            uniqueUnsubscribeClicks: clicks.unsub_clicks,
           } : prev)
-          console.log(`Unique counts loaded - opens: ${uniqueOpens}, clicks: ${clickData.engaged_clicks}`)
+          console.log(`Unique counts loaded - opens: ${uniqueOpens}, clicks: ${clicks.engaged_clicks}`)
         })
         .catch(err => console.error('Error fetching unique counts:', err))
     } catch (error) {
@@ -339,12 +339,14 @@ export default function Analytics() {
     setLinkClickStats([])
 
     try {
-      // Use database function for fast aggregation (handles 600k+ rows efficiently)
-      const { data, error } = await supabase.rpc('get_campaign_link_stats', {
-        p_campaign_id: campaignId
-      })
+      // Use backend API for large datasets (avoids Supabase RPC timeout)
+      const response = await fetch(`${API_URL}/api/campaigns/${campaignId}/link-stats`)
 
-      if (error) throw error
+      if (!response.ok) {
+        throw new Error('Failed to fetch link stats')
+      }
+
+      const data = await response.json()
 
       const statsArray = (data || []).map((row: { url: string; total_clicks: number; unique_clicks: number }) => ({
         url: row.url,

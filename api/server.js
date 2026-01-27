@@ -1015,6 +1015,107 @@ app.get('/api/campaigns/:id/sendgrid-stats', async (req, res) => {
 })
 
 /**
+ * Get link click statistics for a campaign
+ * Uses direct SQL query with longer timeout for large datasets
+ */
+app.get('/api/campaigns/:id/link-stats', async (req, res) => {
+  try {
+    const campaignId = req.params.id
+    console.log(`📊 Fetching link stats for campaign: ${campaignId}`)
+
+    // Query directly with service key - no RLS restrictions
+    const { data, error } = await supabase
+      .from('analytics_events')
+      .select('url, email')
+      .eq('campaign_id', campaignId)
+      .eq('event_type', 'click')
+      .not('url', 'is', null)
+
+    if (error) {
+      console.error('Error fetching link stats:', error)
+      return res.status(500).json({ error: error.message })
+    }
+
+    // Aggregate in JavaScript to avoid database timeout
+    const urlStats = {}
+    const urlEmails = {}
+
+    for (const row of data || []) {
+      if (!urlStats[row.url]) {
+        urlStats[row.url] = 0
+        urlEmails[row.url] = new Set()
+      }
+      urlStats[row.url]++
+      urlEmails[row.url].add(row.email)
+    }
+
+    // Convert to array and sort
+    const stats = Object.entries(urlStats)
+      .map(([url, total_clicks]) => ({
+        url,
+        total_clicks,
+        unique_clicks: urlEmails[url].size,
+      }))
+      .sort((a, b) => b.total_clicks - a.total_clicks)
+      .slice(0, 50) // Top 50 URLs
+
+    console.log(`   Found ${stats.length} unique URLs from ${data?.length || 0} click events`)
+
+    res.json(stats)
+  } catch (error) {
+    console.error('Error fetching link stats:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Get unique click counts for a campaign
+ * Uses direct SQL query with longer timeout for large datasets
+ */
+app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
+  try {
+    const campaignId = req.params.id
+    console.log(`📊 Fetching unique clicks for campaign: ${campaignId}`)
+
+    // Query directly with service key
+    const { data, error } = await supabase
+      .from('analytics_events')
+      .select('email, url')
+      .eq('campaign_id', campaignId)
+      .eq('event_type', 'click')
+
+    if (error) {
+      console.error('Error fetching unique clicks:', error)
+      return res.status(500).json({ error: error.message })
+    }
+
+    // Count unique emails for engaged clicks (non-unsubscribe) and unsub clicks
+    const engagedEmails = new Set()
+    const unsubEmails = new Set()
+
+    for (const row of data || []) {
+      if (row.url?.includes('/unsubscribe')) {
+        unsubEmails.add(row.email)
+      } else {
+        engagedEmails.add(row.email)
+      }
+    }
+
+    const result = {
+      engaged_clicks: engagedEmails.size,
+      unsub_clicks: unsubEmails.size,
+    }
+
+    console.log(`   Unique clicks - engaged: ${result.engaged_clicks}, unsub: ${result.unsub_clicks}`)
+
+    res.json(result)
+  } catch (error) {
+    console.error('Error fetching unique clicks:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Health check endpoint
  */
 app.get('/api/health', (req, res) => {
