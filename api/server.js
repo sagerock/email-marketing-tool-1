@@ -1051,6 +1051,44 @@ function identifyBotEmails(clickData) {
 }
 
 /**
+ * Helper function to fetch all rows with pagination
+ * Supabase has a default limit of 1000 rows per query
+ */
+async function fetchAllClickEvents(campaignId, includeUrl = true) {
+  const allData = []
+  const pageSize = 10000
+  let offset = 0
+  let hasMore = true
+
+  while (hasMore) {
+    const query = supabase
+      .from('analytics_events')
+      .select(includeUrl ? 'url, email, timestamp' : 'email, url, timestamp')
+      .eq('campaign_id', campaignId)
+      .eq('event_type', 'click')
+      .range(offset, offset + pageSize - 1)
+
+    if (includeUrl) {
+      query.not('url', 'is', null)
+    }
+
+    const { data, error } = await query
+
+    if (error) throw error
+
+    if (data && data.length > 0) {
+      allData.push(...data)
+      offset += pageSize
+      hasMore = data.length === pageSize
+    } else {
+      hasMore = false
+    }
+  }
+
+  return allData
+}
+
+/**
  * Get link click statistics for a campaign
  * Uses direct SQL query with longer timeout for large datasets
  * Filters out bot clicks (security scanners)
@@ -1060,22 +1098,13 @@ app.get('/api/campaigns/:id/link-stats', async (req, res) => {
     const campaignId = req.params.id
     console.log(`📊 Fetching link stats for campaign: ${campaignId}`)
 
-    // Query directly with service key - no RLS restrictions
-    const { data, error } = await supabase
-      .from('analytics_events')
-      .select('url, email, timestamp')
-      .eq('campaign_id', campaignId)
-      .eq('event_type', 'click')
-      .not('url', 'is', null)
-
-    if (error) {
-      console.error('Error fetching link stats:', error)
-      return res.status(500).json({ error: error.message })
-    }
+    // Fetch all click events with pagination
+    const data = await fetchAllClickEvents(campaignId, true)
+    console.log(`   Fetched ${data.length} total click events`)
 
     // Identify bot emails
-    const botEmails = identifyBotEmails(data || [])
-    console.log(`   Identified ${botEmails.size} bot emails out of ${new Set((data || []).map(r => r.email)).size} total`)
+    const botEmails = identifyBotEmails(data)
+    console.log(`   Identified ${botEmails.size} bot emails out of ${new Set(data.map(r => r.email)).size} total`)
 
     // Aggregate in JavaScript, excluding bots
     const urlStats = {}
@@ -1121,17 +1150,9 @@ app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
     const campaignId = req.params.id
     console.log(`📊 Fetching unique clicks for campaign: ${campaignId}`)
 
-    // Query directly with service key
-    const { data, error } = await supabase
-      .from('analytics_events')
-      .select('email, url, timestamp')
-      .eq('campaign_id', campaignId)
-      .eq('event_type', 'click')
-
-    if (error) {
-      console.error('Error fetching unique clicks:', error)
-      return res.status(500).json({ error: error.message })
-    }
+    // Fetch all click events with pagination
+    const data = await fetchAllClickEvents(campaignId, false)
+    console.log(`   Fetched ${data.length} total click events`)
 
     // Identify bot emails
     const botEmails = identifyBotEmails(data || [])
