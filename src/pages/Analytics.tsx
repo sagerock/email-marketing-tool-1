@@ -396,49 +396,29 @@ export default function Analytics() {
 
   const getStats = () => {
     const campaign = campaigns.find((c) => c.id === selectedCampaign)
+    const emptyStats = {
+      sent: 0,
+      delivered: 0,
+      opens: 0,
+      uniqueOpens: 0,
+      clicks: 0,
+      uniqueClicks: 0,
+      uniqueUnsubscribeClicks: 0,
+      bounces: 0,
+      blocks: 0,
+      spam: 0,
+      unsubscribes: 0,
+    }
+
     if (!campaign || !eventCounts) {
       return {
-        sent: 0,
-        delivered: 0,
-        opens: 0,
-        uniqueOpens: 0,
-        clicks: 0,
-        uniqueClicks: 0,
-        uniqueUnsubscribeClicks: 0,
-        bounces: 0,
-        blocks: 0,
-        spam: 0,
-        unsubscribes: 0,
+        ...emptyStats,
         source: 'none' as const,
       }
     }
 
-    // Use SendGrid stats when available (authoritative), fall back to webhook stats
-    if (sendgridStats) {
-      return {
-        sent: sendgridStats.requests,
-        delivered: sendgridStats.delivered,
-        opens: sendgridStats.opens,
-        uniqueOpens: sendgridStats.unique_opens,
-        clicks: sendgridStats.clicks,
-        uniqueClicks: sendgridStats.unique_clicks,
-        uniqueUnsubscribeClicks: eventCounts.uniqueUnsubscribeClicks, // Not in SendGrid stats
-        bounces: sendgridStats.bounces,
-        blocks: sendgridStats.blocks,
-        spam: sendgridStats.spam_reports,
-        unsubscribes: sendgridStats.unsubscribes,
-        source: 'sendgrid' as const,
-        // Additional SendGrid-only metrics
-        bounceDrops: sendgridStats.bounce_drops,
-        spamDrops: sendgridStats.spam_report_drops,
-        unsubscribeDrops: sendgridStats.unsubscribe_drops,
-        invalidEmails: sendgridStats.invalid_emails,
-        deferred: sendgridStats.deferred,
-      }
-    }
-
-    // Fall back to webhook-derived stats
-    return {
+    // Webhook stats (filtered - human engagement only)
+    const webhookStats = {
       sent: campaign.recipient_count,
       delivered: eventCounts.delivered,
       opens: eventCounts.opens,
@@ -450,11 +430,46 @@ export default function Analytics() {
       blocks: eventCounts.blocks,
       spam: eventCounts.spam,
       unsubscribes: eventCounts.unsubscribes,
+    }
+
+    // Use SendGrid stats when available (authoritative for delivery metrics)
+    if (sendgridStats) {
+      return {
+        sent: sendgridStats.requests,
+        delivered: sendgridStats.delivered,
+        opens: sendgridStats.opens,
+        uniqueOpens: sendgridStats.unique_opens,
+        clicks: sendgridStats.clicks,
+        uniqueClicks: sendgridStats.unique_clicks,
+        uniqueUnsubscribeClicks: eventCounts.uniqueUnsubscribeClicks,
+        bounces: sendgridStats.bounces,
+        blocks: sendgridStats.blocks,
+        spam: sendgridStats.spam_reports,
+        unsubscribes: sendgridStats.unsubscribes,
+        source: 'sendgrid' as const,
+        // Additional SendGrid-only metrics
+        bounceDrops: sendgridStats.bounce_drops,
+        spamDrops: sendgridStats.spam_report_drops,
+        unsubscribeDrops: sendgridStats.unsubscribe_drops,
+        invalidEmails: sendgridStats.invalid_emails,
+        deferred: sendgridStats.deferred,
+        // Include filtered stats for comparison
+        filtered: webhookStats,
+      }
+    }
+
+    // Fall back to webhook-derived stats
+    return {
+      ...webhookStats,
       source: 'webhook' as const,
     }
   }
 
   const stats = getStats()
+
+  // Check if we have both SendGrid and filtered stats for comparison view
+  const hasDualStats = 'filtered' in stats
+  const filteredStats = hasDualStats ? (stats as unknown as { filtered: EventCounts }).filtered : null
 
   // Helper to fetch all emails with pagination (Supabase default limit is 1000)
   const fetchAllEmailsForCampaign = async (campaignId: string, eventType: string) => {
@@ -1144,9 +1159,9 @@ export default function Analytics() {
           <div className="flex items-center gap-2 text-sm">
             {loadingSendgridStats ? (
               <span className="text-gray-500">Loading SendGrid stats...</span>
-            ) : stats.source === 'sendgrid' ? (
-              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                Stats from SendGrid API (authoritative)
+            ) : hasDualStats ? (
+              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                Showing SendGrid reported stats vs verified human engagement
               </span>
             ) : stats.source === 'webhook' ? (
               <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
@@ -1155,68 +1170,181 @@ export default function Analytics() {
             ) : null}
           </div>
 
-          {/* Stats Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            <StatsCard
-              title="Sent"
-              value={stats.sent}
-              icon={Mail}
-              color="blue"
-            />
-            <StatsCard
-              title="Delivered"
-              value={stats.delivered}
-              subtitle={`${((stats.delivered / stats.sent) * 100 || 0).toFixed(1)}% delivery rate`}
-              icon={TrendingUp}
-              color="green"
-            />
-            <StatsCard
-              title="Opened"
-              value={stats.uniqueOpens}
-              subtitle={`${((stats.uniqueOpens / stats.delivered) * 100 || 0).toFixed(1)}% open rate`}
-              icon={Mail}
-              color="purple"
-              onClick={() => setEventFilter(eventFilter === 'open' ? 'all' : 'open')}
-              active={eventFilter === 'open'}
-            />
-            <StatsCard
-              title="Clicked"
-              value={stats.uniqueClicks}
-              subtitle={`${((stats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% click rate`}
-              icon={MousePointer}
-              color="orange"
-              onClick={() => setEventFilter(eventFilter === 'click' ? 'all' : 'click')}
-              active={eventFilter === 'click'}
-            />
-          </div>
+          {/* Stats Grid - Dual view when both SendGrid and filtered stats available */}
+          {hasDualStats && filteredStats ? (
+            <>
+              {/* Delivery Stats (same for both) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <StatsCard
+                  title="Sent"
+                  value={stats.sent}
+                  icon={Mail}
+                  color="blue"
+                />
+                <StatsCard
+                  title="Delivered"
+                  value={stats.delivered}
+                  subtitle={`${((stats.delivered / stats.sent) * 100 || 0).toFixed(1)}% delivery rate`}
+                  icon={TrendingUp}
+                  color="green"
+                />
+                <StatsCard
+                  title="Bounces"
+                  value={stats.bounces}
+                  subtitle={`${((stats.bounces / stats.sent) * 100 || 0).toFixed(1)}% bounce rate`}
+                  icon={AlertCircle}
+                  color="red"
+                />
+                <StatsCard
+                  title="Unsubscribes"
+                  value={stats.unsubscribes}
+                  icon={X}
+                  color="gray"
+                />
+              </div>
+
+              {/* Engagement Comparison - SendGrid vs Filtered */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* SendGrid Reported Stats */}
+                <Card className="border-gray-200">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700">
+                        SendGrid Reported
+                      </span>
+                      <span className="text-xs font-normal text-gray-500">Includes bot/scanner activity</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="text-center p-4 bg-purple-50 rounded-lg">
+                        <div className="text-2xl font-bold text-purple-700">{stats.uniqueOpens.toLocaleString()}</div>
+                        <div className="text-sm text-purple-600">Unique Opens</div>
+                        <div className="text-xs text-purple-500 mt-1">
+                          {((stats.uniqueOpens / stats.delivered) * 100 || 0).toFixed(1)}% open rate
+                        </div>
+                      </div>
+                      <div className="text-center p-4 bg-orange-50 rounded-lg">
+                        <div className="text-2xl font-bold text-orange-700">{stats.uniqueClicks.toLocaleString()}</div>
+                        <div className="text-sm text-orange-600">Unique Clicks</div>
+                        <div className="text-xs text-orange-500 mt-1">
+                          {((stats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% CTR
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-xs text-gray-500 text-center">
+                      Total: {stats.opens.toLocaleString()} opens, {stats.clicks.toLocaleString()} clicks
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Verified Human Engagement */}
+                <Card className="border-green-200 bg-green-50/30">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700">
+                        Verified Human
+                      </span>
+                      <span className="text-xs font-normal text-gray-500">Bot/scanner activity filtered out</span>
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div
+                        className={`text-center p-4 rounded-lg cursor-pointer transition-all ${eventFilter === 'open' ? 'bg-purple-200 ring-2 ring-purple-400' : 'bg-purple-100 hover:bg-purple-150'}`}
+                        onClick={() => setEventFilter(eventFilter === 'open' ? 'all' : 'open')}
+                      >
+                        <div className="text-2xl font-bold text-purple-700">{filteredStats.uniqueOpens.toLocaleString()}</div>
+                        <div className="text-sm text-purple-600">Unique Opens</div>
+                        <div className="text-xs text-purple-500 mt-1">
+                          {((filteredStats.uniqueOpens / stats.delivered) * 100 || 0).toFixed(1)}% open rate
+                        </div>
+                      </div>
+                      <div
+                        className={`text-center p-4 rounded-lg cursor-pointer transition-all ${eventFilter === 'click' ? 'bg-orange-200 ring-2 ring-orange-400' : 'bg-orange-100 hover:bg-orange-150'}`}
+                        onClick={() => setEventFilter(eventFilter === 'click' ? 'all' : 'click')}
+                      >
+                        <div className="text-2xl font-bold text-orange-700">{filteredStats.uniqueClicks.toLocaleString()}</div>
+                        <div className="text-sm text-orange-600">Unique Clicks</div>
+                        <div className="text-xs text-orange-500 mt-1">
+                          {((filteredStats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% CTR
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-xs text-gray-500 text-center">
+                      Total: {filteredStats.opens.toLocaleString()} opens, {filteredStats.clicks.toLocaleString()} clicks
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </>
+          ) : (
+            /* Standard Stats Grid (no comparison available) */
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              <StatsCard
+                title="Sent"
+                value={stats.sent}
+                icon={Mail}
+                color="blue"
+              />
+              <StatsCard
+                title="Delivered"
+                value={stats.delivered}
+                subtitle={`${((stats.delivered / stats.sent) * 100 || 0).toFixed(1)}% delivery rate`}
+                icon={TrendingUp}
+                color="green"
+              />
+              <StatsCard
+                title="Opened"
+                value={stats.uniqueOpens}
+                subtitle={`${((stats.uniqueOpens / stats.delivered) * 100 || 0).toFixed(1)}% open rate`}
+                icon={Mail}
+                color="purple"
+                onClick={() => setEventFilter(eventFilter === 'open' ? 'all' : 'open')}
+                active={eventFilter === 'open'}
+              />
+              <StatsCard
+                title="Clicked"
+                value={stats.uniqueClicks}
+                subtitle={`${((stats.uniqueClicks / stats.delivered) * 100 || 0).toFixed(1)}% click rate`}
+                icon={MousePointer}
+                color="orange"
+                onClick={() => setEventFilter(eventFilter === 'click' ? 'all' : 'click')}
+                active={eventFilter === 'click'}
+              />
+            </div>
+          )}
 
           {/* Additional Stats */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Engagement Details</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Total Opens</span>
-                    <span className="text-sm font-medium">{stats.opens}</span>
+          <div className={`grid grid-cols-1 ${hasDualStats ? '' : 'md:grid-cols-2'} gap-6`}>
+            {/* Engagement Details - only show when NOT in dual-stats mode (already shown above) */}
+            {!hasDualStats && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Engagement Details</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Total Opens</span>
+                      <span className="text-sm font-medium">{stats.opens}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Unique Opens</span>
+                      <span className="text-sm font-medium">{stats.uniqueOpens}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Total Clicks</span>
+                      <span className="text-sm font-medium">{stats.clicks}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-sm text-gray-600">Unique Clicks</span>
+                      <span className="text-sm font-medium">{stats.uniqueClicks}</span>
+                    </div>
                   </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Unique Opens</span>
-                    <span className="text-sm font-medium">{stats.uniqueOpens}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Total Clicks</span>
-                    <span className="text-sm font-medium">{stats.clicks}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-sm text-gray-600">Unique Clicks</span>
-                    <span className="text-sm font-medium">{stats.uniqueClicks}</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
 
             <Card>
               <CardHeader>
