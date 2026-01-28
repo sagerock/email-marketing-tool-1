@@ -241,7 +241,7 @@ export default function Contacts() {
   const refreshData = () => {
     fetchTotalCount()
     fetchTags()
-    if (selectedTags.length > 0 && showContacts) {
+    if (showContacts) {
       fetchFilteredContacts()
     }
   }
