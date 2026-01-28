@@ -78,7 +78,7 @@ export default function Analytics() {
   const [subscriberTab, setSubscriberTab] = useState<'top' | 'bounced' | 'unsubscribed'>('top')
   const [topSubscribers, setTopSubscribers] = useState<Contact[]>([])
   const [bouncedContacts, setBouncedContacts] = useState<(Contact & { campaign_name?: string })[]>([])
-  const [unsubscribedContacts, setUnsubscribedContacts] = useState<Contact[]>([])
+  const [unsubscribedContacts, setUnsubscribedContacts] = useState<(Contact & { campaign_name?: string })[]>([])
   const [showUnknownDateUnsubs, setShowUnknownDateUnsubs] = useState(false)
   const [loadingSubscribers, setLoadingSubscribers] = useState(false)
   const [bounceFilter, setBounceFilter] = useState<'all' | 'hard' | 'soft'>('all')
@@ -703,7 +703,53 @@ export default function Analytics() {
         .order('unsubscribed_at', { ascending: false })
 
       if (error) throw error
-      setUnsubscribedContacts(data || [])
+
+      // For contacts unsubscribed on/after 1/22/2026, fetch campaign info from analytics_events
+      const cutoffDate = '2026-01-22T00:00:00.000Z'
+      const recentContacts = (data || []).filter(c => c.unsubscribed_at && c.unsubscribed_at >= cutoffDate)
+      const recentEmails = recentContacts.map(c => c.email)
+
+      let campaignMap: Record<string, string> = {}
+
+      if (recentEmails.length > 0) {
+        // Get unsubscribe events with campaign info
+        const { data: events } = await supabase
+          .from('analytics_events')
+          .select('email, campaign_id')
+          .eq('event_type', 'unsubscribe')
+          .in('email', recentEmails)
+
+        if (events && events.length > 0) {
+          // Get unique campaign IDs
+          const campaignIds = [...new Set(events.map(e => e.campaign_id).filter(Boolean))]
+
+          if (campaignIds.length > 0) {
+            // Fetch campaign names
+            const { data: campaigns } = await supabase
+              .from('campaigns')
+              .select('id, name')
+              .in('id', campaignIds)
+
+            const campaignNameMap: Record<string, string> = {}
+            campaigns?.forEach(c => { campaignNameMap[c.id] = c.name })
+
+            // Map email -> campaign name
+            events.forEach(e => {
+              if (e.campaign_id && campaignNameMap[e.campaign_id]) {
+                campaignMap[e.email] = campaignNameMap[e.campaign_id]
+              }
+            })
+          }
+        }
+      }
+
+      // Merge campaign names into contacts
+      const contactsWithCampaigns = (data || []).map(contact => ({
+        ...contact,
+        campaign_name: campaignMap[contact.email]
+      }))
+
+      setUnsubscribedContacts(contactsWithCampaigns)
     } catch (error) {
       console.error('Error fetching unsubscribed contacts:', error)
     }
@@ -1190,7 +1236,7 @@ export default function Analytics() {
                   )
                 }
 
-                const renderContactTable = (contacts: Contact[]) => (
+                const renderContactTable = (contacts: (Contact & { campaign_name?: string })[]) => (
                   <div className="overflow-x-auto">
                     <table className="w-full">
                       <thead>
@@ -1198,6 +1244,7 @@ export default function Analytics() {
                           <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Email</th>
                           <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Name</th>
                           <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Unsubscribed</th>
+                          <th className="text-left py-2 px-4 text-sm font-medium text-gray-700">Campaign</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-200">
@@ -1213,6 +1260,9 @@ export default function Analytics() {
                               {contact.unsubscribed_at
                                 ? new Date(contact.unsubscribed_at).toLocaleDateString()
                                 : '-'}
+                            </td>
+                            <td className="py-2 px-4 text-sm text-gray-600">
+                              {contact.campaign_name || '-'}
                             </td>
                           </tr>
                         ))}
