@@ -6,7 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Input from '../components/ui/Input'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame } from 'lucide-react'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame, FileDown, Loader2 } from 'lucide-react'
+import html2canvas from 'html2canvas'
+import { jsPDF } from 'jspdf'
 import type { Contact } from '../types/index.js'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -108,6 +110,7 @@ export default function Analytics() {
     campaign_id: string
   }[]>([])
   const [loadingSubscriberActivity, setLoadingSubscriberActivity] = useState(false)
+  const [downloadingPdf, setDownloadingPdf] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -663,6 +666,76 @@ export default function Analytics() {
     doc.head.appendChild(style)
 
     return doc.documentElement.outerHTML
+  }
+
+  const downloadHeatmapPdf = async (campaignName: string) => {
+    setDownloadingPdf(true)
+    try {
+      const iframe = document.getElementById('heatmap-iframe') as HTMLIFrameElement
+      if (!iframe || !iframe.contentDocument) {
+        throw new Error('Could not access heatmap content')
+      }
+
+      const iframeBody = iframe.contentDocument.body
+
+      // Use html2canvas to capture the iframe content
+      const canvas = await html2canvas(iframeBody, {
+        scale: 2, // Higher resolution
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        width: iframeBody.scrollWidth,
+        height: iframeBody.scrollHeight,
+      })
+
+      // Create PDF with appropriate dimensions
+      const imgWidth = 210 // A4 width in mm
+      const pageHeight = 297 // A4 height in mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width
+
+      const pdf = new jsPDF({
+        orientation: imgHeight > pageHeight ? 'portrait' : 'portrait',
+        unit: 'mm',
+        format: 'a4',
+      })
+
+      // Add title
+      pdf.setFontSize(16)
+      pdf.text('Link Click Heatmap', 14, 15)
+      pdf.setFontSize(11)
+      pdf.setTextColor(100)
+      pdf.text(campaignName, 14, 22)
+      pdf.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28)
+
+      // Add legend
+      pdf.setFontSize(9)
+      pdf.setTextColor(60)
+      pdf.text('Click Volume: Low (Blue) → Medium (Yellow) → High (Red)', 14, 35)
+
+      // Add the heatmap image
+      const imgData = canvas.toDataURL('image/png')
+      const startY = 42
+      const availableHeight = pageHeight - startY - 10
+
+      if (imgHeight <= availableHeight) {
+        // Fits on one page
+        pdf.addImage(imgData, 'PNG', 14, startY, imgWidth - 28, imgHeight)
+      } else {
+        // Scale to fit available height
+        const scaledWidth = (availableHeight * canvas.width) / canvas.height
+        const xOffset = (imgWidth - scaledWidth) / 2
+        pdf.addImage(imgData, 'PNG', xOffset, startY, scaledWidth, availableHeight)
+      }
+
+      // Save the PDF
+      const filename = `heatmap-${campaignName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.pdf`
+      pdf.save(filename)
+    } catch (error) {
+      console.error('Error generating PDF:', error)
+      alert('Failed to generate PDF. Please try again.')
+    } finally {
+      setDownloadingPdf(false)
+    }
   }
 
   // Check if we have both SendGrid and filtered stats for comparison view
@@ -2136,6 +2209,7 @@ export default function Analytics() {
                   {/* Heatmap Preview */}
                   <div className="flex-1 overflow-auto p-4">
                     <iframe
+                      id="heatmap-iframe"
                       srcDoc={heatmapHtml}
                       title="Click Heatmap"
                       className="w-full border border-gray-200 rounded-lg"
@@ -2144,8 +2218,28 @@ export default function Analytics() {
                   </div>
 
                   {/* Footer */}
-                  <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
-                    Hover over links to see click counts. Badges show unique clicks per link.
+                  <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+                    <span className="text-xs text-gray-500">
+                      Hover over links to see click counts. Badges show unique clicks per link.
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => downloadHeatmapPdf(campaign?.name || 'campaign')}
+                      disabled={downloadingPdf}
+                    >
+                      {downloadingPdf ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Generating...
+                        </>
+                      ) : (
+                        <>
+                          <FileDown className="h-4 w-4 mr-2" />
+                          Download PDF
+                        </>
+                      )}
+                    </Button>
                   </div>
                 </div>
               </div>
