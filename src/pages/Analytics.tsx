@@ -7,7 +7,6 @@ import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Input from '../components/ui/Input'
 import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame, FileDown, Loader2 } from 'lucide-react'
-import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import type { Contact } from '../types/index.js'
 
@@ -668,33 +667,30 @@ export default function Analytics() {
     return doc.documentElement.outerHTML
   }
 
-  const downloadHeatmapPdf = async (campaignName: string) => {
+  const downloadHeatmapPdf = async (campaignName: string, heatmapHtml: string) => {
     setDownloadingPdf(true)
     try {
-      const iframe = document.getElementById('heatmap-iframe') as HTMLIFrameElement
-      if (!iframe || !iframe.contentDocument) {
-        throw new Error('Could not access heatmap content')
+      // Use server-side Puppeteer to capture screenshot with images
+      const response = await fetch(`${API_URL}/api/screenshot`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: heatmapHtml, width: 800 }),
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to generate screenshot')
       }
 
-      const iframeBody = iframe.contentDocument.body
-
-      // Use html2canvas to capture the iframe content
-      const canvas = await html2canvas(iframeBody, {
-        scale: 2, // Higher resolution
-        useCORS: true,
-        allowTaint: true,
-        backgroundColor: '#ffffff',
-        width: iframeBody.scrollWidth,
-        height: iframeBody.scrollHeight,
-      })
+      const { image, height } = await response.json()
 
       // Create PDF with appropriate dimensions
       const imgWidth = 210 // A4 width in mm
       const pageHeight = 297 // A4 height in mm
-      const imgHeight = (canvas.height * imgWidth) / canvas.width
+      const imgHeight = (height * (imgWidth - 28)) / 800 // Scale based on actual image dimensions
 
       const pdf = new jsPDF({
-        orientation: imgHeight > pageHeight ? 'portrait' : 'portrait',
+        orientation: 'portrait',
         unit: 'mm',
         format: 'a4',
       })
@@ -713,18 +709,17 @@ export default function Analytics() {
       pdf.text('Click Volume: Low (Blue) → Medium (Yellow) → High (Red)', 14, 35)
 
       // Add the heatmap image
-      const imgData = canvas.toDataURL('image/png')
       const startY = 42
       const availableHeight = pageHeight - startY - 10
 
       if (imgHeight <= availableHeight) {
         // Fits on one page
-        pdf.addImage(imgData, 'PNG', 14, startY, imgWidth - 28, imgHeight)
+        pdf.addImage(image, 'PNG', 14, startY, imgWidth - 28, imgHeight)
       } else {
         // Scale to fit available height
-        const scaledWidth = (availableHeight * canvas.width) / canvas.height
+        const scaledWidth = (availableHeight * 800) / height
         const xOffset = (imgWidth - scaledWidth) / 2
-        pdf.addImage(imgData, 'PNG', xOffset, startY, scaledWidth, availableHeight)
+        pdf.addImage(image, 'PNG', xOffset, startY, scaledWidth, availableHeight)
       }
 
       // Save the PDF
@@ -2225,7 +2220,7 @@ export default function Analytics() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => downloadHeatmapPdf(campaign?.name || 'campaign')}
+                      onClick={() => downloadHeatmapPdf(campaign?.name || 'campaign', heatmapHtml)}
                       disabled={downloadingPdf}
                     >
                       {downloadingPdf ? (

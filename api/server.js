@@ -20,6 +20,7 @@ const sgMail = require('@sendgrid/mail')
 const sgClient = require('@sendgrid/client')
 const { createClient } = require('@supabase/supabase-js')
 const jsforce = require('jsforce')
+const puppeteer = require('puppeteer')
 require('dotenv').config()
 
 const app = express()
@@ -1155,6 +1156,74 @@ app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
   } catch (error) {
     console.error('Error fetching unique clicks:', error)
     res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Generate a screenshot of HTML content (for heatmap PDF export)
+ * Uses Puppeteer to render HTML with all images and styles
+ */
+app.post('/api/screenshot', async (req, res) => {
+  let browser = null
+  try {
+    const { html, width = 800 } = req.body
+
+    if (!html) {
+      return res.status(400).json({ error: 'HTML content is required' })
+    }
+
+    console.log('📸 Generating screenshot...')
+
+    // Launch Puppeteer
+    browser = await puppeteer.launch({
+      headless: true,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+      ],
+    })
+
+    const page = await browser.newPage()
+
+    // Set viewport
+    await page.setViewport({ width: parseInt(width), height: 800 })
+
+    // Set content and wait for images to load
+    await page.setContent(html, {
+      waitUntil: ['load', 'networkidle0'],
+      timeout: 30000,
+    })
+
+    // Wait a bit more for any lazy-loaded content
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    // Get the full page height
+    const bodyHeight = await page.evaluate(() => document.body.scrollHeight)
+    await page.setViewport({ width: parseInt(width), height: bodyHeight })
+
+    // Take screenshot
+    const screenshot = await page.screenshot({
+      type: 'png',
+      fullPage: true,
+      encoding: 'base64',
+    })
+
+    console.log('   Screenshot generated successfully')
+
+    res.json({
+      image: `data:image/png;base64,${screenshot}`,
+      width: parseInt(width),
+      height: bodyHeight,
+    })
+  } catch (error) {
+    console.error('Error generating screenshot:', error)
+    res.status(500).json({ error: error.message })
+  } finally {
+    if (browser) {
+      await browser.close()
+    }
   }
 })
 
