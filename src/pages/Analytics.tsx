@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Input from '../components/ui/Input'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon } from 'lucide-react'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame } from 'lucide-react'
 import type { Contact } from '../types/index.js'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -70,6 +70,7 @@ export default function Analytics() {
   const [eventCounts, setEventCounts] = useState<EventCounts | null>(null)
   const [loading, setLoading] = useState(true)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
+  const [showHeatmapModal, setShowHeatmapModal] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [syncResult, setSyncResult] = useState<{ inserted: number; messagesFound: number } | null>(null)
   const [viewMode, setViewMode] = useState<'details' | 'table' | 'subscribers'>('details')
@@ -521,6 +522,148 @@ export default function Analytics() {
   }
 
   const stats = getStats()
+
+  // Heatmap helper functions
+  const getHeatmapColor = (intensity: number): string => {
+    // Color gradient from blue (cold) to red (hot)
+    // 0 clicks: light blue
+    // Low (1-33%): green
+    // Medium (34-66%): yellow/orange
+    // High (67-100%): red
+    if (intensity === 0) return 'rgba(59, 130, 246, 0.3)' // blue-500 with transparency
+    if (intensity <= 0.33) return `rgba(34, 197, 94, ${0.3 + intensity * 0.7})` // green-500
+    if (intensity <= 0.66) return `rgba(234, 179, 8, ${0.4 + (intensity - 0.33) * 0.6})` // yellow-500
+    return `rgba(239, 68, 68, ${0.5 + (intensity - 0.66) * 0.5})` // red-500
+  }
+
+  const normalizeUrl = (url: string): string => {
+    try {
+      const urlObj = new URL(url)
+      // Strip UTM and tracking params
+      urlObj.searchParams.delete('utm_source')
+      urlObj.searchParams.delete('utm_medium')
+      urlObj.searchParams.delete('utm_campaign')
+      urlObj.searchParams.delete('utm_term')
+      urlObj.searchParams.delete('utm_content')
+      return urlObj.origin + urlObj.pathname
+    } catch {
+      return url
+    }
+  }
+
+  const generateHeatmapHtml = (html: string, linkStats: typeof linkClickStats): string => {
+    if (!html || linkStats.length === 0) return html
+
+    const parser = new DOMParser()
+    const doc = parser.parseFromString(html, 'text/html')
+    const links = doc.querySelectorAll('a')
+
+    // Find max clicks for intensity calculation
+    const maxClicks = Math.max(...linkStats.map(s => s.uniqueClicks), 1)
+
+    // Create a map for quick URL lookup
+    const statsMap = new Map<string, { totalClicks: number; uniqueClicks: number }>()
+    linkStats.forEach(stat => {
+      const normalized = normalizeUrl(stat.url)
+      // Accumulate clicks for normalized URLs
+      const existing = statsMap.get(normalized)
+      if (existing) {
+        existing.totalClicks += stat.totalClicks
+        existing.uniqueClicks += stat.uniqueClicks
+      } else {
+        statsMap.set(normalized, { totalClicks: stat.totalClicks, uniqueClicks: stat.uniqueClicks })
+      }
+      // Also store with original URL for exact matches
+      if (!statsMap.has(stat.url)) {
+        statsMap.set(stat.url, { totalClicks: stat.totalClicks, uniqueClicks: stat.uniqueClicks })
+      }
+    })
+
+    links.forEach(link => {
+      const href = link.getAttribute('href')
+      if (!href || href.startsWith('#') || href.startsWith('mailto:')) return
+
+      // Try to find matching stats
+      let stats = statsMap.get(href)
+      if (!stats) {
+        const normalized = normalizeUrl(href)
+        stats = statsMap.get(normalized)
+      }
+      // Also check if any tracked URL starts with this href (for shortened template URLs)
+      if (!stats) {
+        for (const [trackedUrl, s] of statsMap) {
+          if (trackedUrl.includes(href) || href.includes(normalizeUrl(trackedUrl))) {
+            stats = s
+            break
+          }
+        }
+      }
+
+      const clicks = stats?.uniqueClicks || 0
+      const totalClicks = stats?.totalClicks || 0
+      const intensity = clicks / maxClicks
+      const color = getHeatmapColor(intensity)
+
+      // Apply styling to the link
+      const existingStyle = link.getAttribute('style') || ''
+      const heatmapStyle = `
+        background-color: ${color} !important;
+        outline: 3px solid ${color.replace(/[\d.]+\)$/, '1)')} !important;
+        outline-offset: 2px !important;
+        position: relative !important;
+        border-radius: 3px !important;
+      `.replace(/\s+/g, ' ').trim()
+      link.setAttribute('style', existingStyle + '; ' + heatmapStyle)
+      link.setAttribute('data-clicks', clicks.toString())
+      link.setAttribute('data-total-clicks', totalClicks.toString())
+
+      // Add click count badge for links with clicks
+      if (clicks > 0) {
+        const badge = doc.createElement('span')
+        badge.className = 'heatmap-badge'
+        badge.textContent = clicks.toString()
+        badge.setAttribute('style', `
+          position: absolute !important;
+          top: -8px !important;
+          right: -8px !important;
+          background: #1f2937 !important;
+          color: white !important;
+          font-size: 10px !important;
+          padding: 2px 6px !important;
+          border-radius: 10px !important;
+          font-weight: bold !important;
+          line-height: 1 !important;
+          z-index: 1000 !important;
+        `.replace(/\s+/g, ' ').trim())
+        link.style.position = 'relative'
+        link.appendChild(badge)
+      }
+    })
+
+    // Inject hover tooltip styles
+    const style = doc.createElement('style')
+    style.textContent = `
+      a[data-clicks]:hover::after {
+        content: attr(data-clicks) ' unique (' attr(data-total-clicks) ' total)' !important;
+        position: absolute !important;
+        bottom: 100% !important;
+        left: 50% !important;
+        transform: translateX(-50%) !important;
+        background: #1f2937 !important;
+        color: white !important;
+        padding: 4px 8px !important;
+        border-radius: 4px !important;
+        font-size: 11px !important;
+        white-space: nowrap !important;
+        z-index: 1001 !important;
+        margin-bottom: 4px !important;
+      }
+      a { position: relative !important; }
+    `
+    doc.head.appendChild(style)
+
+    return doc.documentElement.outerHTML
+  }
 
   // Check if we have both SendGrid and filtered stats for comparison view
   const hasDualStats = 'filtered' in stats
@@ -1369,14 +1512,26 @@ export default function Analytics() {
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Email Preview</CardTitle>
               {campaigns.find((c) => c.id === selectedCampaign)?.template?.html_content && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setShowPreviewModal(true)}
-                >
-                  <Eye className="h-4 w-4 mr-2" />
-                  View Full
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowHeatmapModal(true)}
+                    disabled={linkClickStats.length === 0}
+                    title={linkClickStats.length === 0 ? 'No click data available' : 'View link click heatmap'}
+                  >
+                    <Flame className="h-4 w-4 mr-2" />
+                    Click Heatmap
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowPreviewModal(true)}
+                  >
+                    <Eye className="h-4 w-4 mr-2" />
+                    View Full
+                  </Button>
+                </div>
               )}
             </CardHeader>
             <CardContent>
@@ -1907,6 +2062,90 @@ export default function Analytics() {
                       className="w-full border border-gray-200 rounded-lg"
                       style={{ height: '600px' }}
                     />
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
+          {/* Heatmap Modal */}
+          {showHeatmapModal && (() => {
+            const campaign = campaigns.find((c) => c.id === selectedCampaign)
+            const htmlContent = campaign?.template?.html_content
+            if (!htmlContent) return null
+
+            const heatmapHtml = generateHeatmapHtml(htmlContent, linkClickStats)
+            const totalLinks = (() => {
+              const parser = new DOMParser()
+              const doc = parser.parseFromString(htmlContent, 'text/html')
+              return doc.querySelectorAll('a[href]').length
+            })()
+            const linksWithClicks = linkClickStats.filter(s => s.uniqueClicks > 0).length
+            const topLink = linkClickStats.length > 0
+              ? linkClickStats.reduce((a, b) => a.uniqueClicks > b.uniqueClicks ? a : b)
+              : null
+
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+                onClick={() => setShowHeatmapModal(false)}
+              >
+                <div
+                  className="bg-white rounded-lg shadow-xl max-w-5xl w-full mx-4 max-h-[90vh] overflow-hidden flex flex-col"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                    <div>
+                      <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                        <Flame className="h-5 w-5 text-orange-500" />
+                        Link Click Heatmap
+                      </h3>
+                      <p className="text-sm text-gray-500">{campaign?.name}</p>
+                    </div>
+                    <button
+                      onClick={() => setShowHeatmapModal(false)}
+                      className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+                    >
+                      <X className="h-5 w-5 text-gray-500" />
+                    </button>
+                  </div>
+
+                  {/* Color Legend */}
+                  <div className="px-6 py-3 bg-gray-50 border-b border-gray-200">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <span className="text-xs font-medium text-gray-600">Click Volume:</span>
+                        <div className="flex items-center gap-1">
+                          <div className="w-16 h-4 rounded" style={{ background: 'linear-gradient(to right, rgba(59, 130, 246, 0.3), rgba(34, 197, 94, 0.7), rgba(234, 179, 8, 0.8), rgba(239, 68, 68, 0.9))' }} />
+                          <div className="flex justify-between w-16 text-xs text-gray-500">
+                            <span>Low</span>
+                            <span>High</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs text-gray-600">
+                        <span>Links: <strong>{totalLinks}</strong></span>
+                        <span>Clicked: <strong>{linksWithClicks}</strong></span>
+                        {topLink && (
+                          <span>Top: <strong>{topLink.uniqueClicks} clicks</strong></span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Heatmap Preview */}
+                  <div className="flex-1 overflow-auto p-4">
+                    <iframe
+                      srcDoc={heatmapHtml}
+                      title="Click Heatmap"
+                      className="w-full border border-gray-200 rounded-lg"
+                      style={{ height: '600px' }}
+                    />
+                  </div>
+
+                  {/* Footer */}
+                  <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 text-xs text-gray-500">
+                    Hover over links to see click counts. Badges show unique clicks per link.
                   </div>
                 </div>
               </div>
