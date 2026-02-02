@@ -657,9 +657,11 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
         }
 
         // Check click-to-open ratio - bots click without opening or have very high ratios
+        // Only check within the current campaign to avoid filtering first-time clickers
         const { data: emailStats } = await supabase
           .from('analytics_events')
           .select('event_type')
+          .eq('campaign_id', campaignId)
           .eq('email', event.email)
           .in('event_type', ['open', 'click'])
 
