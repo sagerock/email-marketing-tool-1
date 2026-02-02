@@ -59,7 +59,6 @@ interface SendGridStats {
   unsubscribes: number
   unsubscribe_drops: number
   invalid_emails: number
-  deferred: number
 }
 
 export default function Analytics() {
@@ -509,7 +508,6 @@ export default function Analytics() {
         spamDrops: sendgridStats.spam_report_drops,
         unsubscribeDrops: sendgridStats.unsubscribe_drops,
         invalidEmails: sendgridStats.invalid_emails,
-        deferred: sendgridStats.deferred,
         // Include filtered stats for comparison
         filtered: webhookStats,
       }
@@ -1835,14 +1833,6 @@ export default function Analytics() {
                           <span className="text-sm text-gray-600">Invalid Emails</span>
                           <span className="text-sm font-medium text-red-600">
                             {stats.invalidEmails}
-                          </span>
-                        </div>
-                      )}
-                      {'deferred' in stats && stats.deferred > 0 && (
-                        <div className="flex justify-between">
-                          <span className="text-sm text-gray-600">Deferred</span>
-                          <span className="text-sm font-medium text-yellow-600">
-                            {stats.deferred.toLocaleString()}
                           </span>
                         </div>
                       )}
