@@ -7,7 +7,6 @@ import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Input from '../components/ui/Input'
 import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame, FileDown, Loader2 } from 'lucide-react'
-import { jsPDF } from 'jspdf'
 import type { Contact } from '../types/index.js'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -109,7 +108,7 @@ export default function Analytics() {
     campaign_id: string
   }[]>([])
   const [loadingSubscriberActivity, setLoadingSubscriberActivity] = useState(false)
-  const [downloadingPdf, setDownloadingPdf] = useState(false)
+  const [downloadingImage, setDownloadingImage] = useState(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -667,10 +666,10 @@ export default function Analytics() {
     return doc.documentElement.outerHTML
   }
 
-  const downloadHeatmapPdf = async (campaignName: string, heatmapHtml: string) => {
-    setDownloadingPdf(true)
+  const downloadHeatmapImage = async (campaignName: string, heatmapHtml: string) => {
+    setDownloadingImage(true)
     try {
-      // Use server-side Puppeteer to capture screenshot with images
+      // Use server-side Puppeteer to capture full-size screenshot
       const response = await fetch(`${API_URL}/api/screenshot`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -682,54 +681,20 @@ export default function Analytics() {
         throw new Error(error.error || 'Failed to generate screenshot')
       }
 
-      const { image, height } = await response.json()
+      const { image } = await response.json()
 
-      // Create PDF with appropriate dimensions
-      const imgWidth = 210 // A4 width in mm
-      const pageHeight = 297 // A4 height in mm
-      const imgHeight = (height * (imgWidth - 28)) / 800 // Scale based on actual image dimensions
-
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-      })
-
-      // Add title
-      pdf.setFontSize(16)
-      pdf.text('Link Click Heatmap', 14, 15)
-      pdf.setFontSize(11)
-      pdf.setTextColor(100)
-      pdf.text(campaignName, 14, 22)
-      pdf.text(`Generated: ${new Date().toLocaleDateString()}`, 14, 28)
-
-      // Add legend
-      pdf.setFontSize(9)
-      pdf.setTextColor(60)
-      pdf.text('Click Volume: Low (Blue) → Medium (Yellow) → High (Red)', 14, 35)
-
-      // Add the heatmap image
-      const startY = 42
-      const availableHeight = pageHeight - startY - 10
-
-      if (imgHeight <= availableHeight) {
-        // Fits on one page
-        pdf.addImage(image, 'PNG', 14, startY, imgWidth - 28, imgHeight)
-      } else {
-        // Scale to fit available height
-        const scaledWidth = (availableHeight * 800) / height
-        const xOffset = (imgWidth - scaledWidth) / 2
-        pdf.addImage(image, 'PNG', xOffset, startY, scaledWidth, availableHeight)
-      }
-
-      // Save the PDF
-      const filename = `heatmap-${campaignName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.pdf`
-      pdf.save(filename)
+      // Download the image directly as PNG (full size, no scaling)
+      const link = document.createElement('a')
+      link.href = image
+      link.download = `heatmap-${campaignName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.png`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
     } catch (error) {
-      console.error('Error generating PDF:', error)
-      alert('Failed to generate PDF. Please try again.')
+      console.error('Error generating image:', error)
+      alert('Failed to generate image. Please try again.')
     } finally {
-      setDownloadingPdf(false)
+      setDownloadingImage(false)
     }
   }
 
@@ -2220,10 +2185,10 @@ export default function Analytics() {
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => downloadHeatmapPdf(campaign?.name || 'campaign', heatmapHtml)}
-                      disabled={downloadingPdf}
+                      onClick={() => downloadHeatmapImage(campaign?.name || 'campaign', heatmapHtml)}
+                      disabled={downloadingImage}
                     >
-                      {downloadingPdf ? (
+                      {downloadingImage ? (
                         <>
                           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
                           Generating...
@@ -2231,7 +2196,7 @@ export default function Analytics() {
                       ) : (
                         <>
                           <FileDown className="h-4 w-4 mr-2" />
-                          Download PDF
+                          Download Image
                         </>
                       )}
                     </Button>
