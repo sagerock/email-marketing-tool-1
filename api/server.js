@@ -1176,9 +1176,10 @@ app.post('/api/screenshot', async (req, res) => {
 
     console.log('📸 Generating screenshot...')
 
-    // Launch Puppeteer
+    // Launch Puppeteer (use system Chromium in production)
     browser = await puppeteer.launch({
       headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
