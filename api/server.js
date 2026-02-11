@@ -1238,6 +1238,86 @@ app.get('/api/health', (req, res) => {
 })
 
 /**
+ * Gravity Forms webhook endpoint
+ * Receives form submissions and adds email to contacts for Alconox client
+ * Configure in Gravity Forms: Settings → Webhooks → Add New
+ * URL: https://mail.sagerock.com/api/webhook/gravity-forms?key=YOUR_API_SECRET_KEY
+ * Method: POST, Format: JSON
+ * Map your email field to the key "email"
+ */
+app.post('/api/webhook/gravity-forms', async (req, res) => {
+  try {
+    // Validate API key from query parameter
+    const apiKey = process.env.API_SECRET_KEY
+    if (!apiKey) {
+      console.error('❌ API_SECRET_KEY not configured')
+      return res.status(500).json({ error: 'API key not configured on server' })
+    }
+
+    const providedKey = req.query.key
+    if (!providedKey || providedKey !== apiKey) {
+      return res.status(401).json({ error: 'Invalid or missing API key' })
+    }
+
+    // Extract email from payload
+    const email = req.body.email
+    if (!email) {
+      console.error('❌ Gravity Forms webhook: no email field in payload', req.body)
+      return res.status(400).json({ error: 'No email field in request body' })
+    }
+
+    const normalizedEmail = email.toLowerCase().trim()
+
+    // Look up Alconox client
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('id')
+      .ilike('name', '%alconox%')
+      .single()
+
+    if (clientError || !client) {
+      console.error('❌ Could not find Alconox client:', clientError)
+      return res.status(500).json({ error: 'Could not find Alconox client' })
+    }
+
+    // Check if contact already exists
+    const { data: existing } = await supabase
+      .from('contacts')
+      .select('id, email')
+      .eq('client_id', client.id)
+      .eq('email', normalizedEmail)
+      .single()
+
+    if (existing) {
+      console.log(`ℹ️ Gravity Forms: contact ${normalizedEmail} already exists, skipping`)
+      return res.json({ success: true, action: 'exists', email: normalizedEmail })
+    }
+
+    // Create new contact
+    const { data: created, error: createError } = await supabase
+      .from('contacts')
+      .insert({
+        client_id: client.id,
+        email: normalizedEmail,
+        first_name: null,
+        last_name: null,
+        tags: [],
+        unsubscribed: false,
+      })
+      .select()
+      .single()
+
+    if (createError) throw createError
+
+    console.log(`✅ Gravity Forms: created contact ${normalizedEmail}`)
+    res.json({ success: true, action: 'created', email: normalizedEmail, contact_id: created.id })
+  } catch (error) {
+    console.error('❌ Gravity Forms webhook error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Upsert contact endpoint
  * Creates or updates a contact and merges tags
  * Used by external integrations (Make.com, Zapier, etc.)
