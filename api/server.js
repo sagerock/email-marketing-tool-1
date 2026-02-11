@@ -1283,13 +1283,23 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
     // Check if contact already exists
     const { data: existing } = await supabase
       .from('contacts')
-      .select('id, email')
+      .select('id, email, tags')
       .eq('client_id', client.id)
       .eq('email', normalizedEmail)
       .single()
 
     if (existing) {
-      console.log(`ℹ️ Gravity Forms: contact ${normalizedEmail} already exists, skipping`)
+      // Add discountform tag if not already present
+      const existingTags = existing.tags || []
+      if (!existingTags.includes('discountform')) {
+        await supabase
+          .from('contacts')
+          .update({ tags: [...existingTags, 'discountform'] })
+          .eq('id', existing.id)
+        console.log(`📝 Gravity Forms: added discountform tag to existing contact ${normalizedEmail}`)
+        return res.json({ success: true, action: 'tagged', email: normalizedEmail })
+      }
+      console.log(`ℹ️ Gravity Forms: contact ${normalizedEmail} already exists with tag, skipping`)
       return res.json({ success: true, action: 'exists', email: normalizedEmail })
     }
 
@@ -1301,7 +1311,7 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
         email: normalizedEmail,
         first_name: null,
         last_name: null,
-        tags: [],
+        tags: ['discountform'],
         unsubscribed: false,
       })
       .select()
@@ -1309,7 +1319,7 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
 
     if (createError) throw createError
 
-    console.log(`✅ Gravity Forms: created contact ${normalizedEmail}`)
+    console.log(`✅ Gravity Forms: created contact ${normalizedEmail} with tag: discountform`)
     res.json({ success: true, action: 'created', email: normalizedEmail, contact_id: created.id })
   } catch (error) {
     console.error('❌ Gravity Forms webhook error:', error)
