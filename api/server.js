@@ -1319,6 +1319,12 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
 
     if (createError) throw createError
 
+    // Ensure discountform tag exists in tags table
+    await supabase.from('tags').upsert(
+      { name: 'discountform', client_id: client.id },
+      { onConflict: 'name,client_id' }
+    )
+
     console.log(`✅ Gravity Forms: created contact ${normalizedEmail} with tag: discountform`)
     res.json({ success: true, action: 'created', email: normalizedEmail, contact_id: created.id })
   } catch (error) {
