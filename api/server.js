@@ -65,7 +65,7 @@ const supabase = createClient(
  */
 async function addSourceCodeTags(batchRecords, clientId, recordType) {
   try {
-    const prefix = recordType === 'lead' ? 'LSC:' : 'CSC:'
+    const suffix = recordType === 'lead' ? ':LSC' : ':CSC'
     // Group emails by source_code value (current + history)
     const sourceCodeMap = {}
     for (const record of batchRecords) {
@@ -82,7 +82,7 @@ async function addSourceCodeTags(batchRecords, clientId, recordType) {
       }
 
       for (const code of codes) {
-        const tag = prefix + code
+        const tag = code + suffix
         if (!sourceCodeMap[tag]) sourceCodeMap[tag] = []
         sourceCodeMap[tag].push(record.email)
       }
