@@ -111,7 +111,7 @@ export default function Contacts() {
         .from('contacts')
         .select('*', { count: 'exact', head: true })
         .eq('client_id', selectedClient.id)
-        .overlaps('tags', tags)
+        .filter('tags', 'ov', `{${tags.map(t => `"${t}"`).join(',')}}`)
 
       if (error) throw error
 
@@ -136,7 +136,7 @@ export default function Contacts() {
         .from('contacts')
         .select('*')
         .eq('client_id', selectedClient.id)
-        .overlaps('tags', selectedTags)
+        .filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
         .order('created_at', { ascending: false })
 
       if (error) throw error
@@ -261,7 +261,7 @@ export default function Contacts() {
         .from('contacts')
         .select('email')
         .eq('client_id', selectedClient.id)
-        .overlaps('tags', selectedTags)
+        .filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
 
       if (fetchError) throw fetchError
       if (!matchingContacts || matchingContacts.length === 0) return

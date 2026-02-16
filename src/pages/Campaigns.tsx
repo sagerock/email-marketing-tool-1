@@ -732,7 +732,7 @@ function CreateCampaignModal({
 
       // Filter by tags if applicable
       if (tags.length > 0) {
-        query = query.overlaps('tags', tags)
+        query = query.filter('tags', 'ov', `{${tags.map(t => `"${t}"`).join(',')}}`)
       }
 
       const { count, error } = await query
