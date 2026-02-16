@@ -59,6 +59,71 @@ const supabase = createClient(
 )
 
 /**
+ * Add source code tags to contacts during Salesforce sync.
+ * Groups records by source_code and source_code_history, prefixes with LSC: (leads) or CSC: (contacts),
+ * appends the tag to each contact's tags array, and upserts the tag to the tags table.
+ */
+async function addSourceCodeTags(batchRecords, clientId, recordType) {
+  try {
+    const prefix = recordType === 'lead' ? 'LSC:' : 'CSC:'
+    // Group emails by source_code value (current + history)
+    const sourceCodeMap = {}
+    for (const record of batchRecords) {
+      if (!record.email) continue
+
+      // Collect all source codes: current + history entries
+      const codes = new Set()
+      if (record.source_code) codes.add(record.source_code)
+      if (record.source_code_history) {
+        for (const line of record.source_code_history.split('\n')) {
+          const code = line.split(' @ ')[0].trim()
+          if (code) codes.add(code)
+        }
+      }
+
+      for (const code of codes) {
+        const tag = prefix + code
+        if (!sourceCodeMap[tag]) sourceCodeMap[tag] = []
+        sourceCodeMap[tag].push(record.email)
+      }
+    }
+
+    for (const [tagName, emails] of Object.entries(sourceCodeMap)) {
+      // Append tag to contacts that don't already have it
+      const { data: affected, error: rpcError } = await supabase.rpc('append_tag_to_contacts', {
+        p_client_id: clientId,
+        p_tag_name: tagName,
+        p_emails: emails,
+      })
+
+      if (rpcError) {
+        console.error(`Error appending tag "${tagName}":`, rpcError.message)
+        continue
+      }
+
+      // Upsert tag to tags table with accurate contact_count
+      const { count } = await supabase
+        .from('contacts')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', clientId)
+        .contains('tags', [tagName])
+
+      await supabase
+        .from('tags')
+        .upsert(
+          { name: tagName, client_id: clientId, contact_count: count ?? 0 },
+          { onConflict: 'name,client_id' }
+        )
+
+      console.log(`🏷️  Tag "${tagName}": ${affected ?? 0} contacts updated, ${count ?? 0} total`)
+    }
+  } catch (err) {
+    console.error('Error adding source code tags:', err.message)
+    // Don't throw - tag failures should not break the sync
+  }
+}
+
+/**
  * Bot Click Detection
  * Tracks recent clicks to detect security scanner bots.
  * Rule: 3+ unique URLs clicked within 10 seconds = bot
@@ -2103,6 +2168,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
         }
 
         totalSynced += batchRecords.length
+        await addSourceCodeTags(batchRecords, clientId, 'lead')
 
         // Check if there are more records to fetch
         if (!leads.done && leads.nextRecordsUrl) {
@@ -2175,6 +2241,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
         }
 
         totalSynced += batchRecords.length
+        await addSourceCodeTags(batchRecords, clientId, 'contact')
 
         // Check if there are more records to fetch
         if (!contacts.done && contacts.nextRecordsUrl) {
@@ -3655,6 +3722,7 @@ app.listen(PORT, () => {
               }
             }
             totalSynced += batchRecords.length
+            await addSourceCodeTags(batchRecords, client.id, 'lead')
 
             if (!leads.done && leads.nextRecordsUrl) {
               leads = await conn.queryMore(leads.nextRecordsUrl)
@@ -3699,6 +3767,7 @@ app.listen(PORT, () => {
               }
             }
             totalSynced += batchRecords.length
+            await addSourceCodeTags(batchRecords, client.id, 'contact')
 
             if (!contacts.done && contacts.nextRecordsUrl) {
               contacts = await conn.queryMore(contacts.nextRecordsUrl)
