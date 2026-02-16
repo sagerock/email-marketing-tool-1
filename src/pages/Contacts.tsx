@@ -278,18 +278,21 @@ export default function Contacts() {
       if (rpcError) throw rpcError
 
       // Count contacts with the new tag and upsert to tags table
-      const { count } = await supabase
+      const { count, error: countError } = await supabase
         .from('contacts')
         .select('*', { count: 'exact', head: true })
         .eq('client_id', selectedClient.id)
         .contains('tags', [bulkTagName.trim()])
 
-      await supabase
-        .from('tags')
-        .upsert(
-          { name: bulkTagName.trim(), client_id: selectedClient.id, contact_count: count ?? 0 },
-          { onConflict: 'name,client_id' }
-        )
+      // Only update tag count if we got a valid count — never overwrite with 0/null
+      if (!countError && count !== null) {
+        await supabase
+          .from('tags')
+          .upsert(
+            { name: bulkTagName.trim(), client_id: selectedClient.id, contact_count: count },
+            { onConflict: 'name,client_id' }
+          )
+      }
 
       // Reset and refresh
       setShowBulkTagInput(false)
