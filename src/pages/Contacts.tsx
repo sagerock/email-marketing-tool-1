@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users, Eye, MousePointer } from 'lucide-react'
+import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users, Eye, MousePointer, Tag as TagIcon, Loader2 } from 'lucide-react'
 
 export default function Contacts() {
   const { selectedClient } = useClient()
@@ -31,6 +31,9 @@ export default function Contacts() {
     campaign_id: string
   }[]>([])
   const [loadingSubscriberActivity, setLoadingSubscriberActivity] = useState(false)
+  const [showBulkTagInput, setShowBulkTagInput] = useState(false)
+  const [bulkTagName, setBulkTagName] = useState('')
+  const [bulkTagLoading, setBulkTagLoading] = useState(false)
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -49,6 +52,8 @@ export default function Contacts() {
   useEffect(() => {
     setContacts([])
     setShowContacts(false)
+    setShowBulkTagInput(false)
+    setBulkTagName('')
     if (selectedTags.length > 0 && selectedClient) {
       fetchFilteredTagCount(selectedTags)
     } else {
@@ -246,6 +251,64 @@ export default function Contacts() {
     }
   }
 
+  const applyBulkTag = async () => {
+    if (!selectedClient || !bulkTagName.trim() || selectedTags.length === 0) return
+
+    setBulkTagLoading(true)
+    try {
+      // Fetch all emails matching the current tag filter
+      const { data: matchingContacts, error: fetchError } = await supabase
+        .from('contacts')
+        .select('email')
+        .eq('client_id', selectedClient.id)
+        .overlaps('tags', selectedTags)
+
+      if (fetchError) throw fetchError
+      if (!matchingContacts || matchingContacts.length === 0) return
+
+      const emails = matchingContacts.map(c => c.email)
+
+      // Append the tag to all matching contacts
+      const { error: rpcError } = await supabase.rpc('append_tag_to_contacts', {
+        p_client_id: selectedClient.id,
+        p_tag_name: bulkTagName.trim(),
+        p_emails: emails,
+      })
+
+      if (rpcError) throw rpcError
+
+      // Count contacts with the new tag and upsert to tags table
+      const { count } = await supabase
+        .from('contacts')
+        .select('*', { count: 'exact', head: true })
+        .eq('client_id', selectedClient.id)
+        .contains('tags', [bulkTagName.trim()])
+
+      await supabase
+        .from('tags')
+        .upsert(
+          { name: bulkTagName.trim(), client_id: selectedClient.id, contact_count: count ?? 0 },
+          { onConflict: 'name,client_id' }
+        )
+
+      // Reset and refresh
+      setShowBulkTagInput(false)
+      setBulkTagName('')
+      refreshData()
+    } catch (error) {
+      console.error('Error applying bulk tag:', error)
+      alert('Failed to apply tag. Please try again.')
+    } finally {
+      setBulkTagLoading(false)
+    }
+  }
+
+  const bulkTagSuggestions = bulkTagName.trim()
+    ? allTags.filter(tag =>
+        tag.toLowerCase().includes(bulkTagName.toLowerCase())
+      ).slice(0, 5)
+    : []
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -410,9 +473,72 @@ export default function Contacts() {
               <p className="text-gray-500 mb-4">
                 {selectedTags.join(', ')}
               </p>
-              <Button onClick={() => { setShowContacts(true); fetchFilteredContacts(); }}>
-                View Contacts
-              </Button>
+              <div className="flex gap-3 justify-center">
+                <Button onClick={() => { setShowContacts(true); fetchFilteredContacts(); }}>
+                  View Contacts
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setShowBulkTagInput(true)}
+                  disabled={showBulkTagInput}
+                >
+                  <TagIcon className="h-4 w-4 mr-2" />
+                  Add Tag
+                </Button>
+              </div>
+              {showBulkTagInput && (
+                <div className="mt-4 flex items-center gap-2 justify-center">
+                  <div className="relative">
+                    <Input
+                      placeholder="Enter tag name..."
+                      value={bulkTagName}
+                      onChange={(e) => setBulkTagName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          applyBulkTag()
+                        }
+                        if (e.key === 'Escape') {
+                          setShowBulkTagInput(false)
+                          setBulkTagName('')
+                        }
+                      }}
+                      className="w-64"
+                      autoFocus
+                      disabled={bulkTagLoading}
+                    />
+                    {bulkTagSuggestions.length > 0 && !bulkTagLoading && (
+                      <div className="absolute z-10 w-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg">
+                        {bulkTagSuggestions.map((tag) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            className="w-full px-3 py-2 text-left text-sm hover:bg-gray-100 first:rounded-t-md last:rounded-b-md"
+                            onClick={() => { setBulkTagName(tag) }}
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    onClick={applyBulkTag}
+                    disabled={!bulkTagName.trim() || bulkTagLoading}
+                    size="sm"
+                  >
+                    {bulkTagLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Apply'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => { setShowBulkTagInput(false); setBulkTagName('') }}
+                    disabled={bulkTagLoading}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
             </div>
           ) : null}
         </CardContent>
