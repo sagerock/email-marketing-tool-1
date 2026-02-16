@@ -106,7 +106,7 @@ async function addSourceCodeTags(batchRecords, clientId, recordType) {
         .from('contacts')
         .select('*', { count: 'exact', head: true })
         .eq('client_id', clientId)
-        .contains('tags', [tagName])
+        .filter('tags', 'cs', `{"${tagName}"}`)
 
       await supabase
         .from('tags')
@@ -3283,7 +3283,7 @@ app.listen(PORT, () => {
             .select('id')
             .eq('client_id', sequence.client_id)
             .eq('unsubscribed', false)
-            .contains('tags', [triggerTag])
+            .filter('tags', 'cs', `{"${triggerTag}"}`)
 
           if (!contacts || contacts.length === 0) continue
 

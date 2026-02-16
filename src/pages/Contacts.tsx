@@ -278,11 +278,13 @@ export default function Contacts() {
       if (rpcError) throw rpcError
 
       // Count contacts with the new tag and upsert to tags table
+      // Use .filter() with explicit array quoting to handle commas in tag names
+      const tagName = bulkTagName.trim()
       const { count, error: countError } = await supabase
         .from('contacts')
         .select('*', { count: 'exact', head: true })
         .eq('client_id', selectedClient.id)
-        .contains('tags', [bulkTagName.trim()])
+        .filter('tags', 'cs', `{"${tagName}"}`)
 
       // Only update tag count if we got a valid count — never overwrite with 0/null
       if (!countError && count !== null) {
