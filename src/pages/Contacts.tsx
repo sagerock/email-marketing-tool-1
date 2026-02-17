@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users, Eye, MousePointer, Tag as TagIcon, Loader2 } from 'lucide-react'
+import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users, Eye, MousePointer, Tag as TagIcon, Loader2, Download } from 'lucide-react'
 
 export default function Contacts() {
   const { selectedClient } = useClient()
@@ -34,6 +34,7 @@ export default function Contacts() {
   const [showBulkTagInput, setShowBulkTagInput] = useState(false)
   const [bulkTagName, setBulkTagName] = useState('')
   const [bulkTagLoading, setBulkTagLoading] = useState(false)
+  const [exportingCSV, setExportingCSV] = useState(false)
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -308,6 +309,66 @@ export default function Contacts() {
     }
   }
 
+  const exportContactsCSV = async () => {
+    if (!selectedClient || selectedTags.length === 0) return
+
+    setExportingCSV(true)
+    try {
+      // Use already-loaded contacts if available, otherwise fetch them
+      let exportData = showContacts && contacts.length > 0 ? contacts : null
+
+      if (!exportData) {
+        const { data, error } = await supabase
+          .from('contacts')
+          .select('*')
+          .eq('client_id', selectedClient.id)
+          .filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
+          .order('created_at', { ascending: false })
+
+        if (error) throw error
+        exportData = data || []
+      }
+
+      if (exportData.length === 0) return
+
+      const escapeCSV = (value: string) => {
+        if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+          return `"${value.replace(/"/g, '""')}"`
+        }
+        return value
+      }
+
+      const headers = ['Email', 'First Name', 'Last Name', 'Company', 'Tags', 'Status', 'Engagement Score', 'Total Opens', 'Total Clicks']
+      const rows = exportData.map(c => [
+        escapeCSV(c.email || ''),
+        escapeCSV(c.first_name || ''),
+        escapeCSV(c.last_name || ''),
+        escapeCSV(c.company || ''),
+        escapeCSV((c.tags || []).join('; ')),
+        c.unsubscribed ? 'Unsubscribed' : c.bounce_status === 'hard' ? 'Hard Bounce' : c.bounce_status === 'soft' ? 'Soft Bounce' : 'Subscribed',
+        String(c.engagement_score || 0),
+        String(c.total_opens || 0),
+        String(c.total_clicks || 0),
+      ])
+
+      const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const tagSlug = selectedTags.map(t => t.replace(/[^a-zA-Z0-9]/g, '-')).join('_')
+      const date = new Date().toISOString().split('T')[0]
+      a.download = `contacts-${tagSlug}-${date}.csv`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Error exporting contacts:', error)
+      alert('Failed to export contacts. Please try again.')
+    } finally {
+      setExportingCSV(false)
+    }
+  }
+
   const bulkTagSuggestions = bulkTagName.trim()
     ? allTags.filter(tag =>
         tag.toLowerCase().includes(bulkTagName.toLowerCase())
@@ -396,14 +457,27 @@ export default function Contacts() {
       {/* Contacts List */}
       <Card>
         <CardHeader>
-          <CardTitle>
-            {showContacts && contacts.length > 0
-              ? `${filteredContacts.length.toLocaleString()} Contact${filteredContacts.length !== 1 ? 's' : ''}`
-              : selectedTags.length > 0
-                ? `${filteredCount !== null ? filteredCount.toLocaleString() : '...'} Contact${filteredCount !== 1 ? 's' : ''}`
-                : `${totalCount.toLocaleString()} Contact${totalCount !== 1 ? 's' : ''}`
-            }
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle>
+              {showContacts && contacts.length > 0
+                ? `${filteredContacts.length.toLocaleString()} Contact${filteredContacts.length !== 1 ? 's' : ''}`
+                : selectedTags.length > 0
+                  ? `${filteredCount !== null ? filteredCount.toLocaleString() : '...'} Contact${filteredCount !== 1 ? 's' : ''}`
+                  : `${totalCount.toLocaleString()} Contact${totalCount !== 1 ? 's' : ''}`
+              }
+            </CardTitle>
+            {selectedTags.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportContactsCSV}
+                disabled={exportingCSV || filteredCount === 0}
+              >
+                {exportingCSV ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
+                Export CSV
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
           {loading ? (
@@ -489,6 +563,14 @@ export default function Contacts() {
                 >
                   <TagIcon className="h-4 w-4 mr-2" />
                   Add Tag
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={exportContactsCSV}
+                  disabled={exportingCSV || filteredCount === 0}
+                >
+                  {exportingCSV ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Download className="h-4 w-4 mr-2" />}
+                  Export CSV
                 </Button>
               </div>
               {showBulkTagInput && (
