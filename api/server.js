@@ -124,6 +124,48 @@ async function addSourceCodeTags(batchRecords, clientId, recordType) {
 }
 
 /**
+ * Add a "Campaign: <name>" tag to contacts during Salesforce Campaign sync.
+ * Uses the same append_tag_to_contacts RPC as addSourceCodeTags.
+ */
+async function addCampaignTag(campaignName, emails, clientId) {
+  try {
+    if (!emails || emails.length === 0) return
+
+    const tagName = `Campaign: ${campaignName}`
+
+    const { data: affected, error: rpcError } = await supabase.rpc('append_tag_to_contacts', {
+      p_client_id: clientId,
+      p_tag_name: tagName,
+      p_emails: emails,
+    })
+
+    if (rpcError) {
+      console.error(`Error appending tag "${tagName}":`, rpcError.message)
+      return
+    }
+
+    // Upsert tag to tags table with accurate contact_count
+    const { count } = await supabase
+      .from('contacts')
+      .select('*', { count: 'exact', head: true })
+      .eq('client_id', clientId)
+      .filter('tags', 'cs', `{"${tagName}"}`)
+
+    await supabase
+      .from('tags')
+      .upsert(
+        { name: tagName, client_id: clientId, contact_count: count ?? 0 },
+        { onConflict: 'name,client_id' }
+      )
+
+    console.log(`🏷️  Tag "${tagName}": ${affected ?? 0} contacts updated, ${count ?? 0} total`)
+  } catch (err) {
+    console.error(`Error adding campaign tag for "${campaignName}":`, err.message)
+    // Don't throw - tag failures should not break the sync
+  }
+}
+
+/**
  * Bot Click Detection
  * Tracks recent clicks to detect security scanner bots.
  * Rule: 3+ unique URLs clicked within 10 seconds = bot
@@ -2481,7 +2523,7 @@ app.get('/api/salesforce/campaigns/:campaignId/members', async (req, res) => {
 
 /**
  * Sync Salesforce Campaigns and Campaign Members
- * Only syncs Lead-based campaign members (LeadId != null)
+ * Syncs campaign members linked via LeadId or ContactId
  */
 app.post('/api/salesforce/sync-campaigns', async (req, res) => {
   const { clientId } = req.body
@@ -2541,27 +2583,27 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
 
       campaignsSynced++
 
-      // 3. Get Campaign Members - ONLY Leads (LeadId != null)
+      // 3. Get Campaign Members (Leads and Contacts)
       const membersQuery = `
-        SELECT Id, LeadId, Status
+        SELECT Id, LeadId, ContactId, Status
         FROM CampaignMember
         WHERE CampaignId = '${sfCampaign.Id}'
-        AND LeadId != null
+        AND (LeadId != null OR ContactId != null)
       `
 
       try {
         const membersResult = await conn.query(membersQuery)
-        console.log(`  📥 Campaign "${sfCampaign.Name}": ${membersResult.totalSize} Lead members`)
+        console.log(`  📥 Campaign "${sfCampaign.Name}": ${membersResult.totalSize} members`)
 
         if (membersResult.records.length === 0) continue
 
-        // Get all Lead IDs from this campaign
-        const leadIds = membersResult.records.map(m => m.LeadId)
+        // Get all Lead/Contact IDs from this campaign
+        const leadIds = membersResult.records.map(m => m.LeadId || m.ContactId)
 
         // Batch lookup: find all matching contacts at once
         const { data: contacts } = await supabase
           .from('contacts')
-          .select('id, salesforce_id')
+          .select('id, salesforce_id, email')
           .eq('client_id', clientId)
           .in('salesforce_id', leadIds)
 
@@ -2582,8 +2624,8 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
         const newMemberContactIds = []
 
         for (const member of membersResult.records) {
-          const contactId = contactMap.get(member.LeadId)
-          if (!contactId) continue // Lead not synced yet
+          const contactId = contactMap.get(member.LeadId || member.ContactId)
+          if (!contactId) continue // Lead/Contact not synced yet
 
           const isNew = !existingMemberSet.has(member.Id)
 
@@ -2613,6 +2655,10 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
             membersSynced += membersToUpsert.length
           }
         }
+
+        // Tag matched contacts with "Campaign: <name>"
+        const matchedEmails = contacts?.filter(c => contactMap.has(c.salesforce_id)).map(c => c.email).filter(Boolean) || []
+        await addCampaignTag(sfCampaign.Name, matchedEmails, clientId)
 
         // Handle auto-enrollment for new members (if any sequences are configured)
         if (newMemberContactIds.length > 0) {
@@ -3816,16 +3862,16 @@ app.listen(PORT, () => {
               if (campaignError) continue
               campaignsSynced++
 
-              // Get Campaign Members - ONLY Leads
-              const membersQuery = `SELECT Id, LeadId, Status FROM CampaignMember WHERE CampaignId = '${sfCampaign.Id}' AND LeadId != null`
+              // Get Campaign Members (Leads and Contacts)
+              const membersQuery = `SELECT Id, LeadId, ContactId, Status FROM CampaignMember WHERE CampaignId = '${sfCampaign.Id}' AND (LeadId != null OR ContactId != null)`
               const membersResult = await conn.query(membersQuery)
 
               if (membersResult.records.length === 0) continue
 
-              const leadIds = membersResult.records.map(m => m.LeadId)
+              const leadIds = membersResult.records.map(m => m.LeadId || m.ContactId)
               const { data: contacts } = await supabase
                 .from('contacts')
-                .select('id, salesforce_id')
+                .select('id, salesforce_id, email')
                 .eq('client_id', client.id)
                 .in('salesforce_id', leadIds)
 
@@ -3844,7 +3890,7 @@ app.listen(PORT, () => {
               const newMemberContactIds = []
 
               for (const member of membersResult.records) {
-                const contactId = contactMap.get(member.LeadId)
+                const contactId = contactMap.get(member.LeadId || member.ContactId)
                 if (!contactId) continue
 
                 membersToUpsert.push({
@@ -3867,6 +3913,10 @@ app.listen(PORT, () => {
                   .upsert(membersToUpsert, { onConflict: 'salesforce_id,client_id' })
                 membersSynced += membersToUpsert.length
               }
+
+              // Tag matched contacts with "Campaign: <name>"
+              const matchedEmails = contacts?.filter(c => contactMap.has(c.salesforce_id)).map(c => c.email).filter(Boolean) || []
+              await addCampaignTag(sfCampaign.Name, matchedEmails, client.id)
 
               // Auto-enroll new members in matching sequences
               if (newMemberContactIds.length > 0) {
