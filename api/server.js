@@ -59,6 +59,51 @@ const supabase = createClient(
 )
 
 /**
+ * Upsert a batch of contact records with individual retry fallback.
+ * First tries batch upsert by salesforce_id. If that fails, retries each record
+ * individually so a single bad record doesn't silently drop the entire batch.
+ */
+async function upsertContactBatch(chunk, clientId) {
+  const { error: batchError } = await supabase
+    .from('contacts')
+    .upsert(chunk, { onConflict: 'salesforce_id', ignoreDuplicates: false })
+
+  if (!batchError) return { succeeded: chunk.length, failed: 0 }
+
+  console.warn(`Batch upsert by salesforce_id failed (${chunk.length} records): ${batchError.message}. Retrying individually...`)
+
+  let succeeded = 0
+  let failed = 0
+
+  for (const record of chunk) {
+    // Try by salesforce_id first
+    const { error: sfError } = await supabase
+      .from('contacts')
+      .upsert(record, { onConflict: 'salesforce_id', ignoreDuplicates: false })
+
+    if (!sfError) {
+      succeeded++
+      continue
+    }
+
+    // Fall back to email,client_id
+    const { error: emailError } = await supabase
+      .from('contacts')
+      .upsert(record, { onConflict: 'email,client_id', ignoreDuplicates: false })
+
+    if (!emailError) {
+      succeeded++
+    } else {
+      failed++
+      console.error(`Failed to upsert contact ${record.email} (sf_id: ${record.salesforce_id}): ${emailError.message}`)
+    }
+  }
+
+  console.log(`Individual retry results: ${succeeded} succeeded, ${failed} failed`)
+  return { succeeded, failed }
+}
+
+/**
  * Add source code tags to contacts during Salesforce sync.
  * Groups records by source_code and source_code_history, prefixes with LSC: (leads) or CSC: (contacts),
  * appends the tag to each contact's tags array, and upserts the tag to the tags table.
@@ -2194,25 +2239,10 @@ app.post('/api/salesforce/sync', async (req, res) => {
           })
         }
 
-        // Upsert in batches of BATCH_SIZE
+        // Upsert in batches of BATCH_SIZE with individual retry fallback
         for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
           const chunk = batchRecords.slice(i, i + BATCH_SIZE)
-          const { error: upsertError } = await supabase
-            .from('contacts')
-            .upsert(chunk, {
-              onConflict: 'salesforce_id',
-              ignoreDuplicates: false,
-            })
-
-          if (upsertError) {
-            // Try upserting by email instead if salesforce_id conflict fails
-            await supabase
-              .from('contacts')
-              .upsert(chunk, {
-                onConflict: 'email,client_id',
-                ignoreDuplicates: false,
-              })
-          }
+          await upsertContactBatch(chunk, clientId)
         }
 
         totalSynced += batchRecords.length
@@ -2267,25 +2297,10 @@ app.post('/api/salesforce/sync', async (req, res) => {
           })
         }
 
-        // Upsert in batches of BATCH_SIZE
+        // Upsert in batches of BATCH_SIZE with individual retry fallback
         for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
           const chunk = batchRecords.slice(i, i + BATCH_SIZE)
-          const { error: upsertError } = await supabase
-            .from('contacts')
-            .upsert(chunk, {
-              onConflict: 'salesforce_id',
-              ignoreDuplicates: false,
-            })
-
-          if (upsertError) {
-            // Try upserting by email instead
-            await supabase
-              .from('contacts')
-              .upsert(chunk, {
-                onConflict: 'email,client_id',
-                ignoreDuplicates: false,
-              })
-          }
+          await upsertContactBatch(chunk, clientId)
         }
 
         totalSynced += batchRecords.length
@@ -3789,12 +3804,7 @@ app.listen(PORT, () => {
 
             for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
               const chunk = batchRecords.slice(i, i + BATCH_SIZE)
-              const { error: upsertError } = await supabase
-                .from('contacts')
-                .upsert(chunk, { onConflict: 'salesforce_id', ignoreDuplicates: false })
-              if (upsertError) {
-                await supabase.from('contacts').upsert(chunk, { onConflict: 'email,client_id', ignoreDuplicates: false })
-              }
+              await upsertContactBatch(chunk, client.id)
             }
             totalSynced += batchRecords.length
             await addSourceCodeTags(batchRecords, client.id, 'lead')
@@ -3834,12 +3844,7 @@ app.listen(PORT, () => {
 
             for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
               const chunk = batchRecords.slice(i, i + BATCH_SIZE)
-              const { error: upsertError } = await supabase
-                .from('contacts')
-                .upsert(chunk, { onConflict: 'salesforce_id', ignoreDuplicates: false })
-              if (upsertError) {
-                await supabase.from('contacts').upsert(chunk, { onConflict: 'email,client_id', ignoreDuplicates: false })
-              }
+              await upsertContactBatch(chunk, client.id)
             }
             totalSynced += batchRecords.length
             await addSourceCodeTags(batchRecords, client.id, 'contact')
