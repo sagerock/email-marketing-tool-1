@@ -1975,6 +1975,9 @@ app.post('/api/salesforce/disconnect', async (req, res) => {
         salesforce_sync_message: null,
         last_salesforce_sync: null,
         salesforce_sync_count: null,
+        campaign_sync_status: null,
+        campaign_sync_message: null,
+        last_campaign_sync: null,
       })
       .eq('id', clientId)
 
@@ -2001,7 +2004,7 @@ app.get('/api/salesforce/status', async (req, res) => {
 
     const { data: client, error } = await supabase
       .from('clients')
-      .select('salesforce_instance_url, salesforce_connected_at, last_salesforce_sync, salesforce_sync_status, salesforce_sync_message, salesforce_sync_count')
+      .select('salesforce_instance_url, salesforce_connected_at, last_salesforce_sync, salesforce_sync_status, salesforce_sync_message, salesforce_sync_count, campaign_sync_status, campaign_sync_message, last_campaign_sync')
       .eq('id', clientId)
       .single()
 
@@ -2015,6 +2018,9 @@ app.get('/api/salesforce/status', async (req, res) => {
       syncStatus: client.salesforce_sync_status,
       syncMessage: client.salesforce_sync_message,
       syncCount: client.salesforce_sync_count,
+      campaignSyncStatus: client.campaign_sync_status,
+      campaignSyncMessage: client.campaign_sync_message,
+      lastCampaignSync: client.last_campaign_sync,
     })
   } catch (error) {
     console.error('Error getting Salesforce status:', error)
@@ -2540,6 +2546,12 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
 
   // Run sync in background
   try {
+    // Set campaign sync status to syncing
+    await supabase
+      .from('clients')
+      .update({ campaign_sync_status: 'syncing', campaign_sync_message: 'Campaign sync starting...' })
+      .eq('id', clientId)
+
     console.log(`🔄 Starting Salesforce Campaign sync for client ${clientId}`)
 
     const conn = await getSalesforceConnection(clientId)
@@ -2769,9 +2781,26 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
       }
     }
 
-    console.log(`✅ Salesforce Campaign sync complete: ${campaignsSynced} campaigns, ${membersSynced} members, ${newEnrollments} new enrollments`)
+    const summaryMsg = `Synced ${campaignsSynced} campaigns, ${membersSynced} members, ${newEnrollments} new enrollments`
+    console.log(`✅ Salesforce Campaign sync complete: ${summaryMsg}`)
+
+    await supabase
+      .from('clients')
+      .update({
+        campaign_sync_status: 'success',
+        campaign_sync_message: summaryMsg,
+        last_campaign_sync: new Date().toISOString(),
+      })
+      .eq('id', clientId)
   } catch (error) {
     console.error('❌ Error syncing Salesforce campaigns:', error)
+    await supabase
+      .from('clients')
+      .update({
+        campaign_sync_status: 'error',
+        campaign_sync_message: error.message || 'Campaign sync failed',
+      })
+      .eq('id', clientId)
   }
 })
 
@@ -3837,6 +3866,10 @@ app.listen(PORT, () => {
 
           // Also sync Salesforce Campaigns
           console.log(`  🔄 Syncing Salesforce Campaigns for ${client.name}...`)
+          await supabase
+            .from('clients')
+            .update({ campaign_sync_status: 'syncing', campaign_sync_message: 'Daily auto-sync starting...' })
+            .eq('id', client.id)
           try {
             const campaignsQuery = `SELECT Id, Name, Type, Status, StartDate, EndDate FROM Campaign ORDER BY StartDate DESC`
             const campaignsResult = await conn.query(campaignsQuery)
@@ -4009,9 +4042,25 @@ app.listen(PORT, () => {
                 }
               }
             }
-            console.log(`  ✅ Campaigns: ${campaignsSynced} synced, ${membersSynced} members, ${newEnrollments} new enrollments`)
+            const campaignSummary = `Synced ${campaignsSynced} campaigns, ${membersSynced} members, ${newEnrollments} new enrollments`
+            console.log(`  ✅ Campaigns: ${campaignSummary}`)
+            await supabase
+              .from('clients')
+              .update({
+                campaign_sync_status: 'success',
+                campaign_sync_message: campaignSummary,
+                last_campaign_sync: new Date().toISOString(),
+              })
+              .eq('id', client.id)
           } catch (campaignError) {
             console.error(`  ⚠️ Campaign sync error for ${client.name}:`, campaignError.message)
+            await supabase
+              .from('clients')
+              .update({
+                campaign_sync_status: 'error',
+                campaign_sync_message: campaignError.message || 'Campaign sync failed',
+              })
+              .eq('id', client.id)
           }
 
         } catch (clientError) {

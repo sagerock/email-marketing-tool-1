@@ -18,6 +18,9 @@ interface SalesforceStatus {
   syncStatus?: 'idle' | 'syncing' | 'success' | 'error'
   syncMessage?: string
   syncCount?: number
+  campaignSyncStatus?: 'idle' | 'syncing' | 'success' | 'error'
+  campaignSyncMessage?: string
+  lastCampaignSync?: string
 }
 
 interface SalesforceField {
@@ -293,16 +296,28 @@ export default function Settings() {
         body: JSON.stringify({ clientId: selectedClient.id }),
       })
       const data = await response.json()
-      if (response.ok) {
-        alert(data.message)
-      } else {
+      if (!response.ok) {
         throw new Error(data.error || 'Campaign sync failed')
       }
+      // Poll status until no longer syncing
+      const pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${API_URL}/api/salesforce/status?clientId=${selectedClient.id}`)
+          const statusData = await statusRes.json()
+          setSfStatus(statusData)
+          if (statusData.campaignSyncStatus !== 'syncing') {
+            clearInterval(pollInterval)
+            setSyncingCampaigns(false)
+          }
+        } catch {
+          clearInterval(pollInterval)
+          setSyncingCampaigns(false)
+        }
+      }, 3000)
     } catch (error) {
       console.error('Error syncing Salesforce campaigns:', error)
-      alert('Campaign sync failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
-    } finally {
       setSyncingCampaigns(false)
+      fetchSalesforceStatus()
     }
   }
 
@@ -495,7 +510,7 @@ export default function Settings() {
                   </div>
                   {sfStatus.lastSync && (
                     <div>
-                      <span className="text-gray-500">Last Sync: </span>
+                      <span className="text-gray-500">Last Contact Sync: </span>
                       <span>{new Date(sfStatus.lastSync).toLocaleString()}</span>
                     </div>
                   )}
@@ -505,9 +520,15 @@ export default function Settings() {
                       <span>{sfStatus.syncCount} records</span>
                     </div>
                   )}
+                  {sfStatus.lastCampaignSync && (
+                    <div>
+                      <span className="text-gray-500">Last Campaign Sync: </span>
+                      <span>{new Date(sfStatus.lastCampaignSync).toLocaleString()}</span>
+                    </div>
+                  )}
                 </div>
 
-                {/* Sync Status */}
+                {/* Contact Sync Status */}
                 {sfStatus.syncStatus && sfStatus.syncStatus !== 'idle' && (
                   <div className={`flex items-center gap-2 text-sm p-2 rounded ${
                     sfStatus.syncStatus === 'syncing' ? 'bg-blue-50 text-blue-700' :
@@ -517,7 +538,21 @@ export default function Settings() {
                     {sfStatus.syncStatus === 'syncing' && <Loader2 className="h-4 w-4 animate-spin" />}
                     {sfStatus.syncStatus === 'success' && <CheckCircle className="h-4 w-4" />}
                     {sfStatus.syncStatus === 'error' && <XCircle className="h-4 w-4" />}
-                    <span>{sfStatus.syncMessage}</span>
+                    <span>Contacts: {sfStatus.syncMessage}</span>
+                  </div>
+                )}
+
+                {/* Campaign Sync Status */}
+                {sfStatus.campaignSyncStatus && sfStatus.campaignSyncStatus !== 'idle' && (
+                  <div className={`flex items-center gap-2 text-sm p-2 rounded ${
+                    sfStatus.campaignSyncStatus === 'syncing' ? 'bg-blue-50 text-blue-700' :
+                    sfStatus.campaignSyncStatus === 'success' ? 'bg-green-50 text-green-700' :
+                    'bg-red-50 text-red-700'
+                  }`}>
+                    {sfStatus.campaignSyncStatus === 'syncing' && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {sfStatus.campaignSyncStatus === 'success' && <CheckCircle className="h-4 w-4" />}
+                    {sfStatus.campaignSyncStatus === 'error' && <XCircle className="h-4 w-4" />}
+                    <span>Campaigns: {sfStatus.campaignSyncMessage}</span>
                   </div>
                 )}
 
