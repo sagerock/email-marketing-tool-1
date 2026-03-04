@@ -3418,6 +3418,42 @@ app.post('/api/contacts/sync-bounce-types', async (req, res) => {
 // This must come AFTER all API routes
 // ============================================================
 
+// ==========================================
+// Contact form (landing page)
+// ==========================================
+app.post('/api/contact', async (req, res) => {
+  try {
+    const { name, email, message } = req.body
+
+    if (!name || !email || !message) {
+      return res.status(400).json({ error: 'Name, email, and message are required' })
+    }
+
+    const apiKey = process.env.CONTACT_SENDGRID_API_KEY
+    if (!apiKey) {
+      console.error('❌ CONTACT_SENDGRID_API_KEY not configured')
+      return res.status(500).json({ error: 'Contact form is not configured' })
+    }
+
+    sgMail.setApiKey(apiKey)
+
+    await sgMail.send({
+      to: 'sage@sagerock.com',
+      from: { email: 'sage@sagerock.com', name: 'SageRock Website' },
+      replyTo: { email, name },
+      subject: `SageRock Email Platform Inquiry from ${name}`,
+      text: `Name: ${name}\nEmail: ${email}\n\nMessage:\n${message}`,
+      html: `<p><strong>Name:</strong> ${name}</p><p><strong>Email:</strong> ${email}</p><hr><p>${message.replace(/\n/g, '<br>')}</p>`,
+    })
+
+    console.log('📧 Contact form submission sent from:', email)
+    res.json({ success: true })
+  } catch (error) {
+    console.error('❌ Contact form error:', error)
+    res.status(500).json({ error: 'Failed to send message' })
+  }
+})
+
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
 

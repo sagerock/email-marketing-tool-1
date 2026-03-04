@@ -72,14 +72,36 @@ export default function Landing() {
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [message, setMessage] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [formError, setFormError] = useState('')
 
-  const handleContact = (e: React.FormEvent) => {
+  const handleContact = async (e: React.FormEvent) => {
     e.preventDefault()
-    const subject = encodeURIComponent(`SageRock Email Platform Inquiry from ${name}`)
-    const body = encodeURIComponent(
-      `Name: ${name}\nEmail: ${email}\n\nMessage:\n${message}`
-    )
-    window.location.href = `mailto:sage@sagerock.com?subject=${subject}&body=${body}`
+    setSending(true)
+    setFormError('')
+
+    try {
+      const res = await fetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, message }),
+      })
+
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error || 'Failed to send message')
+      }
+
+      setSent(true)
+      setName('')
+      setEmail('')
+      setMessage('')
+    } catch (err: any) {
+      setFormError(err.message || 'Something went wrong. Please try again.')
+    } finally {
+      setSending(false)
+    }
   }
 
   const scrollToFeatures = () => {
@@ -258,39 +280,57 @@ export default function Landing() {
                 Tell us about your email marketing needs and we'll be in touch.
               </p>
             </div>
-            <form onSubmit={handleContact} className="space-y-5">
-              <Input
-                label="Name"
-                placeholder="Your name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-              />
-              <Input
-                label="Email"
-                type="email"
-                placeholder="you@company.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-              <div className="w-full">
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Message
-                </label>
-                <textarea
-                  placeholder="Tell us about your needs..."
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                  rows={4}
-                  required
-                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                />
+            {sent ? (
+              <div className="text-center py-8">
+                <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <Send className="h-7 w-7 text-green-600" />
+                </div>
+                <h3 className="text-lg font-medium text-slate-900 mb-2">Message Sent</h3>
+                <p className="text-slate-500">Thanks for reaching out! We'll be in touch soon.</p>
               </div>
-              <Button type="submit" size="lg" className="w-full bg-amber-500 hover:bg-amber-600 text-white focus-visible:ring-amber-500">
-                Send Message
-              </Button>
-            </form>
+            ) : (
+              <form onSubmit={handleContact} className="space-y-5">
+                {formError && (
+                  <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
+                    <p className="text-sm text-red-800">{formError}</p>
+                  </div>
+                )}
+                <Input
+                  label="Name"
+                  placeholder="Your name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  required
+                  disabled={sending}
+                />
+                <Input
+                  label="Email"
+                  type="email"
+                  placeholder="you@company.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  disabled={sending}
+                />
+                <div className="w-full">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Message
+                  </label>
+                  <textarea
+                    placeholder="Tell us about your needs..."
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value)}
+                    rows={4}
+                    required
+                    disabled={sending}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                </div>
+                <Button type="submit" size="lg" className="w-full bg-amber-500 hover:bg-amber-600 text-white focus-visible:ring-amber-500" disabled={sending}>
+                  {sending ? 'Sending...' : 'Send Message'}
+                </Button>
+              </form>
+            )}
           </div>
         </section>
 
