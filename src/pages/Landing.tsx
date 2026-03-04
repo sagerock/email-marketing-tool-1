@@ -131,9 +131,9 @@ export default function Landing() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex items-center justify-between h-16">
               <img
-                src="https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png"
+                src="/sagerock-logo.png"
                 alt="SageRock"
-                className="h-9 w-auto brightness-0 invert"
+                className="h-9 w-auto"
               />
               <Link to="/login">
                 <Button
@@ -299,9 +299,9 @@ export default function Landing() {
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
             <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
               <img
-                src="https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png"
+                src="/sagerock-logo.png"
                 alt="SageRock"
-                className="h-7 w-auto brightness-0 invert"
+                className="h-7 w-auto"
               />
               <p className="text-slate-500 text-sm">
                 © {new Date().getFullYear()} SageRock. All rights reserved.
