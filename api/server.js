@@ -1396,6 +1396,7 @@ app.get('/api/health', (req, res) => {
  * URL: https://mail.sagerock.com/api/webhook/gravity-forms?key=YOUR_API_SECRET_KEY
  * Method: POST, Format: JSON
  * Map your email field to the key "email"
+ * Optional: add &tag=yourtagname to specify a tag (defaults to "discountform")
  */
 app.post('/api/webhook/gravity-forms', async (req, res) => {
   try {
@@ -1419,6 +1420,7 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
     }
 
     const normalizedEmail = email.toLowerCase().trim()
+    const tag = (req.query.tag || 'discountform').toLowerCase().trim()
 
     // Look up Alconox client
     const { data: client, error: clientError } = await supabase
@@ -1441,18 +1443,18 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
       .single()
 
     if (existing) {
-      // Add discountform tag if not already present
+      // Add tag if not already present
       const existingTags = existing.tags || []
-      if (!existingTags.includes('discountform')) {
+      if (!existingTags.includes(tag)) {
         await supabase
           .from('contacts')
-          .update({ tags: [...existingTags, 'discountform'] })
+          .update({ tags: [...existingTags, tag] })
           .eq('id', existing.id)
-        console.log(`📝 Gravity Forms: added discountform tag to existing contact ${normalizedEmail}`)
-        return res.json({ success: true, action: 'tagged', email: normalizedEmail })
+        console.log(`📝 Gravity Forms: added ${tag} tag to existing contact ${normalizedEmail}`)
+        return res.json({ success: true, action: 'tagged', email: normalizedEmail, tag })
       }
-      console.log(`ℹ️ Gravity Forms: contact ${normalizedEmail} already exists with tag, skipping`)
-      return res.json({ success: true, action: 'exists', email: normalizedEmail })
+      console.log(`ℹ️ Gravity Forms: contact ${normalizedEmail} already exists with tag ${tag}, skipping`)
+      return res.json({ success: true, action: 'exists', email: normalizedEmail, tag })
     }
 
     // Create new contact
@@ -1463,7 +1465,7 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
         email: normalizedEmail,
         first_name: null,
         last_name: null,
-        tags: ['discountform'],
+        tags: [tag],
         unsubscribed: false,
       })
       .select()
@@ -1471,14 +1473,14 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
 
     if (createError) throw createError
 
-    // Ensure discountform tag exists in tags table
+    // Ensure tag exists in tags table
     await supabase.from('tags').upsert(
-      { name: 'discountform', client_id: client.id },
+      { name: tag, client_id: client.id },
       { onConflict: 'name,client_id' }
     )
 
-    console.log(`✅ Gravity Forms: created contact ${normalizedEmail} with tag: discountform`)
-    res.json({ success: true, action: 'created', email: normalizedEmail, contact_id: created.id })
+    console.log(`✅ Gravity Forms: created contact ${normalizedEmail} with tag: ${tag}`)
+    res.json({ success: true, action: 'created', email: normalizedEmail, contact_id: created.id, tag })
   } catch (error) {
     console.error('❌ Gravity Forms webhook error:', error)
     res.status(500).json({ error: error.message })
