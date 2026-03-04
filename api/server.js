@@ -2388,6 +2388,111 @@ app.get('/api/salesforce/preview', async (req, res) => {
   }
 })
 
+// ============ SALESFORCE LOOKUP ENDPOINT ============
+
+/**
+ * Look up a specific email in Salesforce (Leads + Contacts + Campaign Memberships)
+ */
+app.get('/api/salesforce/lookup', async (req, res) => {
+  try {
+    const { clientId, email } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+    if (!email) {
+      return res.status(400).json({ error: 'email is required' })
+    }
+
+    const conn = await getSalesforceConnection(clientId)
+
+    // Sanitize email to prevent SOQL injection
+    const sanitizedEmail = email.replace(/'/g, "\\'").replace(/\\/g, '\\\\')
+
+    // Query Leads and Contacts in parallel
+    const [leadResult, contactResult] = await Promise.all([
+      conn.query(`SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Lead WHERE Email = '${sanitizedEmail}'`),
+      conn.query(`SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`),
+    ])
+
+    const leads = (leadResult.records || []).map(r => ({
+      type: 'Lead',
+      id: r.Id,
+      email: r.Email,
+      firstName: r.FirstName,
+      lastName: r.LastName,
+      company: r.Company,
+      industry: r.Industry,
+      sourceCode: r.Source_code__c,
+      sourceCodeHistory: r.Source_Code_History__c,
+      createdDate: r.CreatedDate,
+      lastModifiedDate: r.LastModifiedDate,
+    }))
+
+    const contacts = (contactResult.records || []).map(r => ({
+      type: 'Contact',
+      id: r.Id,
+      email: r.Email,
+      firstName: r.FirstName,
+      lastName: r.LastName,
+      company: null,
+      industry: r.Industry__c,
+      sourceCode: r.Source_Code1__c,
+      sourceCodeHistory: r.Source_Code_History__c,
+      createdDate: r.CreatedDate,
+      lastModifiedDate: r.LastModifiedDate,
+    }))
+
+    // Collect all IDs for campaign member lookup
+    const leadIds = leads.map(l => l.id)
+    const contactIds = contacts.map(c => c.id)
+
+    let campaignMembers = []
+    if (leadIds.length > 0 || contactIds.length > 0) {
+      const conditions = []
+      if (leadIds.length > 0) {
+        conditions.push(`LeadId IN ('${leadIds.join("','")}')`)
+      }
+      if (contactIds.length > 0) {
+        conditions.push(`ContactId IN ('${contactIds.join("','")}')`)
+      }
+
+      const cmResult = await conn.query(
+        `SELECT Id, LeadId, ContactId, Status, CampaignId, Campaign.Name, Campaign.Type, Campaign.Status FROM CampaignMember WHERE ${conditions.join(' OR ')}`
+      )
+
+      campaignMembers = (cmResult.records || []).map(r => ({
+        id: r.Id,
+        leadId: r.LeadId,
+        contactId: r.ContactId,
+        memberStatus: r.Status,
+        campaignId: r.CampaignId,
+        campaignName: r.Campaign?.Name,
+        campaignType: r.Campaign?.Type,
+        campaignStatus: r.Campaign?.Status,
+      }))
+    }
+
+    // Attach campaign memberships to each record
+    const allRecords = [...leads, ...contacts].map(record => ({
+      ...record,
+      campaigns: campaignMembers.filter(cm =>
+        (record.type === 'Lead' && cm.leadId === record.id) ||
+        (record.type === 'Contact' && cm.contactId === record.id)
+      ),
+    }))
+
+    res.json({
+      email,
+      totalResults: allRecords.length,
+      records: allRecords,
+    })
+  } catch (error) {
+    console.error('Error looking up Salesforce record:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // ============ INDUSTRY LINKS ENDPOINTS ============
 
 /**

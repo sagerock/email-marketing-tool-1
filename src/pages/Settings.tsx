@@ -6,7 +6,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 // Settings page - includes client management, Salesforce integration, and UTM tracking
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2, Users, TrendingUp } from 'lucide-react'
+import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2, Users, TrendingUp, Search } from 'lucide-react'
+import Badge from '../components/ui/Badge'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -65,6 +66,31 @@ export default function Settings() {
   const [syncingBounceTypes, setSyncingBounceTypes] = useState(false)
   const [bounceTypeSyncResult, setBounceTypeSyncResult] = useState<{ hard: number; soft: number } | null>(null)
 
+  // Salesforce Lookup state
+  const [lookupEmail, setLookupEmail] = useState('')
+  const [lookupLoading, setLookupLoading] = useState(false)
+  const [lookupResults, setLookupResults] = useState<Array<{
+    type: string
+    id: string
+    email: string
+    firstName: string
+    lastName: string
+    company: string | null
+    industry: string | null
+    sourceCode: string | null
+    sourceCodeHistory: string | null
+    createdDate: string
+    lastModifiedDate: string
+    campaigns: Array<{
+      id: string
+      memberStatus: string
+      campaignName: string
+      campaignType: string
+      campaignStatus: string
+    }>
+  }> | null>(null)
+  const [lookupError, setLookupError] = useState<string | null>(null)
+
   // Fetch Salesforce status and industry links when selected client changes
   useEffect(() => {
     if (selectedClient) {
@@ -72,6 +98,24 @@ export default function Settings() {
       fetchIndustryLinks()
     }
   }, [selectedClient])
+
+  // Salesforce Lookup function
+  const lookupSalesforce = async () => {
+    if (!selectedClient || !lookupEmail.trim()) return
+    setLookupLoading(true)
+    setLookupError(null)
+    setLookupResults(null)
+    try {
+      const res = await fetch(`${API_URL}/api/salesforce/lookup?clientId=${selectedClient.id}&email=${encodeURIComponent(lookupEmail.trim())}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Lookup failed')
+      setLookupResults(data.records)
+    } catch (err: any) {
+      setLookupError(err.message)
+    } finally {
+      setLookupLoading(false)
+    }
+  }
 
   // Industry Links functions
   const fetchIndustryLinks = async () => {
@@ -716,6 +760,127 @@ export default function Settings() {
                     </div>
                   </div>
                 )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Salesforce Lookup Card */}
+      {selectedClient && sfStatus?.connected && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Search className="h-5 w-5" />
+              Salesforce Lookup
+              <span className="text-sm font-normal text-gray-500">
+                ({selectedClient.name})
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-gray-600 mb-4">
+              Search Salesforce directly by email to view Lead/Contact details, source codes, and campaign memberships.
+            </p>
+            <div className="flex gap-2 mb-4">
+              <Input
+                type="email"
+                placeholder="Enter email address..."
+                value={lookupEmail}
+                onChange={(e) => setLookupEmail(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && lookupSalesforce()}
+                className="max-w-md"
+              />
+              <Button onClick={lookupSalesforce} disabled={lookupLoading || !lookupEmail.trim()}>
+                {lookupLoading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Searching...
+                  </>
+                ) : (
+                  <>
+                    <Search className="h-4 w-4 mr-2" />
+                    Search
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {lookupError && (
+              <div className="text-red-600 text-sm mb-4">
+                <XCircle className="h-4 w-4 inline mr-1" />
+                {lookupError}
+              </div>
+            )}
+
+            {lookupResults !== null && lookupResults.length === 0 && (
+              <p className="text-sm text-gray-500">No Leads or Contacts found for this email in Salesforce.</p>
+            )}
+
+            {lookupResults && lookupResults.length > 0 && (
+              <div className="space-y-4">
+                {lookupResults.map((record) => (
+                  <div key={record.id} className="border rounded-lg p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Badge variant={record.type === 'Lead' ? 'default' : 'secondary'}>
+                        {record.type}
+                      </Badge>
+                      <span className="font-medium">
+                        {record.firstName} {record.lastName}
+                      </span>
+                      <span className="text-sm text-gray-500">{record.email}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm mb-3">
+                      {record.company && (
+                        <div><span className="text-gray-500">Company:</span> {record.company}</div>
+                      )}
+                      {record.industry && (
+                        <div><span className="text-gray-500">Industry:</span> {record.industry}</div>
+                      )}
+                      {record.sourceCode && (
+                        <div><span className="text-gray-500">Source Code:</span> {record.sourceCode}</div>
+                      )}
+                      {record.sourceCodeHistory && (
+                        <div className="col-span-2"><span className="text-gray-500">Source Code History:</span> {record.sourceCodeHistory}</div>
+                      )}
+                      <div><span className="text-gray-500">Created:</span> {new Date(record.createdDate).toLocaleDateString()}</div>
+                      <div><span className="text-gray-500">Modified:</span> {new Date(record.lastModifiedDate).toLocaleDateString()}</div>
+                    </div>
+
+                    {record.campaigns.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-medium text-gray-700 mb-2">Campaign Memberships ({record.campaigns.length})</h4>
+                        <div className="border rounded overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead className="bg-gray-50">
+                              <tr>
+                                <th className="text-left px-3 py-1.5 font-medium text-gray-600">Campaign</th>
+                                <th className="text-left px-3 py-1.5 font-medium text-gray-600">Type</th>
+                                <th className="text-left px-3 py-1.5 font-medium text-gray-600">Campaign Status</th>
+                                <th className="text-left px-3 py-1.5 font-medium text-gray-600">Member Status</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y">
+                              {record.campaigns.map((cm) => (
+                                <tr key={cm.id}>
+                                  <td className="px-3 py-1.5">{cm.campaignName}</td>
+                                  <td className="px-3 py-1.5">{cm.campaignType || '—'}</td>
+                                  <td className="px-3 py-1.5">{cm.campaignStatus || '—'}</td>
+                                  <td className="px-3 py-1.5">{cm.memberStatus || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {record.campaigns.length === 0 && (
+                      <p className="text-xs text-gray-400">No campaign memberships</p>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </CardContent>
