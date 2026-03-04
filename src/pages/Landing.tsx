@@ -1,238 +1,321 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
-  Mail,
   Users,
+  Mail,
   Zap,
   BarChart3,
-  Database,
-  Cloud,
-  Server,
-  CheckCircle,
-  ArrowRight
+  ArrowDown,
+  Send,
+  Shield,
+  RefreshCw,
+  TrendingUp,
 } from 'lucide-react'
 import Button from '../components/ui/Button'
+import Input from '../components/ui/Input'
 
 const features = [
   {
     name: 'Contact Management',
-    description: 'Import, organize, and segment your contacts with powerful tagging and filtering.',
+    description:
+      'Organize, segment, and tag your contacts. Import from Salesforce or CSV with automatic deduplication.',
     icon: Users,
   },
   {
-    name: 'Email Campaigns',
-    description: 'Create and send beautiful email campaigns with our intuitive design tools.',
+    name: 'Campaign Builder',
+    description:
+      'Design and send targeted email campaigns with merge tags, recipient filtering, and A/B testing.',
     icon: Mail,
   },
   {
     name: 'Automation Sequences',
-    description: 'Set up automated email sequences that nurture leads while you sleep.',
+    description:
+      'Trigger multi-step email sequences from tags, Salesforce campaigns, or manual enrollment.',
     icon: Zap,
   },
   {
-    name: 'Real-time Analytics',
-    description: 'Track opens, clicks, and conversions with detailed campaign analytics.',
+    name: 'Real Analytics',
+    description:
+      'Track opens, clicks, and conversions with bot-click filtering that shows real human engagement.',
     icon: BarChart3,
   },
 ]
 
-const techStack = [
+const platformPoints = [
   {
-    name: 'Supabase',
-    description: 'Your contacts and data stored securely in a modern, scalable database.',
-    icon: Database,
+    icon: RefreshCw,
+    title: 'Salesforce Integration',
+    description:
+      'Two-way sync keeps your contacts, campaigns, and lead data connected without manual imports.',
   },
   {
-    name: 'SendGrid',
-    description: 'Industry-leading email delivery with high deliverability rates.',
-    icon: Server,
+    icon: Send,
+    title: 'SendGrid Delivery',
+    description:
+      'Enterprise-grade email infrastructure with dedicated IP pools and high deliverability rates.',
   },
   {
-    name: 'Amazon S3',
-    description: 'Email assets and images hosted on reliable cloud storage.',
-    icon: Cloud,
+    icon: Shield,
+    title: 'Bot-Click Filtering',
+    description:
+      'Proprietary detection strips out security-scanner noise so your analytics reflect real engagement.',
   },
-]
-
-const benefits = [
-  'Pay only for what you use',
-  'No bloated features you don\'t need',
-  'Best-in-class services at each layer',
-  'Low overhead, high performance',
-  'Simple, transparent pricing',
-  'Enterprise-grade infrastructure',
+  {
+    icon: TrendingUp,
+    title: 'Built for Scale',
+    description:
+      'Multi-tenant architecture means each client gets isolated data, keys, and sending reputation.',
+  },
 ]
 
 export default function Landing() {
+  const [name, setName] = useState('')
+  const [email, setEmail] = useState('')
+  const [message, setMessage] = useState('')
+
+  const handleContact = (e: React.FormEvent) => {
+    e.preventDefault()
+    const subject = encodeURIComponent(`SageRock Email Platform Inquiry from ${name}`)
+    const body = encodeURIComponent(
+      `Name: ${name}\nEmail: ${email}\n\nMessage:\n${message}`
+    )
+    window.location.href = `mailto:sage@sagerock.com?subject=${subject}&body=${body}`
+  }
+
+  const scrollToFeatures = () => {
+    document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' })
+  }
+
   return (
-    <div className="min-h-screen bg-white">
-      {/* Header */}
-      <header className="fixed top-0 left-0 right-0 bg-white/95 backdrop-blur-sm border-b border-gray-200 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <img
-              src="https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png"
-              alt="SageRock"
-              className="h-10 w-auto"
-            />
-            <div className="flex items-center gap-4">
+    <>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Serif+Display&display=swap');
+
+        .landing-page { font-family: 'DM Sans', sans-serif; }
+        .landing-page h1, .landing-page h2, .landing-page h3 { font-family: 'DM Serif Display', serif; }
+
+        @keyframes drift {
+          0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.12; }
+          25% { transform: translate(40px, -30px) scale(1.1); opacity: 0.18; }
+          50% { transform: translate(-20px, 20px) scale(0.95); opacity: 0.10; }
+          75% { transform: translate(30px, 40px) scale(1.05); opacity: 0.16; }
+        }
+
+        .hero-orb {
+          position: absolute;
+          border-radius: 50%;
+          filter: blur(80px);
+          animation: drift 20s ease-in-out infinite;
+        }
+
+        .feature-card {
+          transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .feature-card:hover {
+          transform: translateY(-4px);
+          box-shadow: 0 12px 32px rgba(0, 0, 0, 0.08);
+        }
+
+        .scroll-btn {
+          animation: bounce-subtle 2.5s ease-in-out infinite;
+        }
+        @keyframes bounce-subtle {
+          0%, 100% { transform: translateY(0); }
+          50% { transform: translateY(6px); }
+        }
+      `}</style>
+
+      <div className="landing-page min-h-screen bg-white">
+        {/* Header */}
+        <header className="fixed top-0 left-0 right-0 z-50 bg-slate-900/80 backdrop-blur-md border-b border-white/5">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex items-center justify-between h-16">
+              <img
+                src="https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png"
+                alt="SageRock"
+                className="h-9 w-auto brightness-0 invert"
+              />
               <Link to="/login">
-                <Button variant="ghost">Sign In</Button>
-              </Link>
-              <Link to="/signup">
-                <Button>Get Started</Button>
-              </Link>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Hero Section */}
-      <section className="pt-32 pb-20 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto text-center">
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-gray-900 tracking-tight">
-            Email Marketing,{' '}
-            <span className="text-blue-600">Simplified</span>
-          </h1>
-          <p className="mt-6 text-xl text-gray-600 max-w-3xl mx-auto">
-            The SageRock email marketing platform where you only pay for the tools you need,
-            not extra stuff you don't use.
-          </p>
-          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link to="/signup">
-              <Button size="lg" className="px-8">
-                Start Free Trial
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
-            </Link>
-            <Link to="/login">
-              <Button variant="outline" size="lg" className="px-8">
-                Sign In to Your Account
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </section>
-
-      {/* Features Section */}
-      <section className="py-20 bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="text-center mb-16">
-            <h2 className="text-3xl font-bold text-gray-900">
-              Everything You Need, Nothing You Don't
-            </h2>
-            <p className="mt-4 text-lg text-gray-600">
-              Powerful features designed for results, not complexity.
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
-            {features.map((feature) => {
-              const Icon = feature.icon
-              return (
-                <div
-                  key={feature.name}
-                  className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-shadow"
+                <Button
+                  variant="ghost"
+                  className="text-slate-300 hover:text-white hover:bg-white/10"
                 >
-                  <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mb-4">
-                    <Icon className="h-6 w-6 text-blue-600" />
-                  </div>
-                  <h3 className="text-lg font-semibold text-gray-900 mb-2">
-                    {feature.name}
-                  </h3>
-                  <p className="text-gray-600">
-                    {feature.description}
-                  </p>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* Benefits Section */}
-      <section className="py-20">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
-            <div>
-              <h2 className="text-3xl font-bold text-gray-900 mb-6">
-                Why Pay for Features You'll Never Use?
-              </h2>
-              <p className="text-lg text-gray-600 mb-8">
-                Most email marketing platforms charge you for a mountain of features
-                you'll never touch. We believe in a different approach: give you exactly
-                what you need to run successful email campaigns, powered by the best
-                services in the industry.
-              </p>
-              <ul className="space-y-4">
-                {benefits.map((benefit) => (
-                  <li key={benefit} className="flex items-center gap-3">
-                    <CheckCircle className="h-5 w-5 text-green-500 flex-shrink-0" />
-                    <span className="text-gray-700">{benefit}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="bg-gradient-to-br from-blue-600 to-blue-800 rounded-2xl p-8 text-white">
-              <h3 className="text-2xl font-bold mb-6">Built on Best-in-Class Services</h3>
-              <div className="space-y-6">
-                {techStack.map((tech) => {
-                  const Icon = tech.icon
-                  return (
-                    <div key={tech.name} className="flex gap-4">
-                      <div className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center flex-shrink-0">
-                        <Icon className="h-5 w-5 text-white" />
-                      </div>
-                      <div>
-                        <h4 className="font-semibold">{tech.name}</h4>
-                        <p className="text-blue-100 text-sm">{tech.description}</p>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
+                  Client Login
+                </Button>
+              </Link>
             </div>
           </div>
-        </div>
-      </section>
+        </header>
 
-      {/* CTA Section */}
-      <section className="py-20 bg-gray-900">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
-          <h2 className="text-3xl font-bold text-white mb-4">
-            Ready to Simplify Your Email Marketing?
-          </h2>
-          <p className="text-xl text-gray-400 mb-8 max-w-2xl mx-auto">
-            Join businesses that are saving money and getting better results
-            with a streamlined email marketing approach.
-          </p>
-          <Link to="/signup">
-            <Button size="lg" className="px-8 bg-white text-gray-900 hover:bg-gray-100">
-              Get Started Today
-              <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
-          </Link>
-        </div>
-      </section>
+        {/* Hero */}
+        <section className="relative min-h-screen flex items-center justify-center overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900">
+          {/* Animated orbs */}
+          <div
+            className="hero-orb bg-amber-500/30 w-96 h-96 top-1/4 left-1/4"
+            style={{ animationDelay: '0s' }}
+          />
+          <div
+            className="hero-orb bg-amber-400/20 w-72 h-72 bottom-1/4 right-1/4"
+            style={{ animationDelay: '-7s' }}
+          />
+          <div
+            className="hero-orb bg-slate-500/20 w-80 h-80 top-1/3 right-1/3"
+            style={{ animationDelay: '-13s' }}
+          />
 
-      {/* Footer */}
-      <footer className="py-12 bg-gray-50 border-t border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
-            <img
-              src="https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png"
-              alt="SageRock"
-              className="h-8 w-auto"
-            />
-            <p className="text-gray-500 text-sm">
-              © {new Date().getFullYear()} SageRock. All rights reserved.
+          <div className="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl text-white tracking-tight leading-tight">
+              Email Marketing That{' '}
+              <span className="text-amber-400">Delivers Results</span>
+            </h1>
+            <p className="mt-6 text-lg sm:text-xl text-slate-300 max-w-2xl mx-auto leading-relaxed">
+              A purpose-built platform for companies that need reliable campaigns,
+              smart automation, and analytics you can actually trust.
             </p>
-            <div className="flex items-center gap-6">
-              <a href="https://sagerock.com" className="text-gray-500 hover:text-gray-700 text-sm">
-                SageRock.com
+            <button
+              onClick={scrollToFeatures}
+              className="scroll-btn mt-12 inline-flex items-center gap-2 text-amber-400 hover:text-amber-300 transition-colors text-sm font-medium tracking-wide uppercase"
+            >
+              Learn More
+              <ArrowDown className="h-4 w-4" />
+            </button>
+          </div>
+        </section>
+
+        {/* Features */}
+        <section id="features" className="py-24 bg-white">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl sm:text-4xl text-slate-900">
+                Everything You Need to Run Great Campaigns
+              </h2>
+              <p className="mt-4 text-lg text-slate-500 max-w-2xl mx-auto">
+                Powerful tools without the bloat. Each feature is built around
+                real workflows, not marketing checklists.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+              {features.map((feature) => {
+                const Icon = feature.icon
+                return (
+                  <div
+                    key={feature.name}
+                    className="feature-card bg-white rounded-xl p-6 border border-slate-200"
+                  >
+                    <div className="w-12 h-12 bg-amber-50 rounded-lg flex items-center justify-center mb-4">
+                      <Icon className="h-6 w-6 text-amber-500" />
+                    </div>
+                    <h3 className="text-lg text-slate-900 mb-2">{feature.name}</h3>
+                    <p className="text-slate-500 text-sm leading-relaxed">
+                      {feature.description}
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* Platform */}
+        <section className="py-24 bg-slate-50">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl sm:text-4xl text-slate-900">
+                What Sets This Platform Apart
+              </h2>
+              <p className="mt-4 text-lg text-slate-500 max-w-2xl mx-auto">
+                Built on enterprise-grade infrastructure with integrations that
+                keep your data connected and your metrics honest.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+              {platformPoints.map((point) => {
+                const Icon = point.icon
+                return (
+                  <div key={point.title} className="flex gap-4">
+                    <div className="w-11 h-11 bg-amber-500 rounded-lg flex items-center justify-center flex-shrink-0">
+                      <Icon className="h-5 w-5 text-white" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg text-slate-900 mb-1">{point.title}</h3>
+                      <p className="text-slate-500 text-sm leading-relaxed">
+                        {point.description}
+                      </p>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* Contact */}
+        <section className="py-24 bg-white">
+          <div className="max-w-xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="text-center mb-10">
+              <h2 className="text-3xl sm:text-4xl text-slate-900">Interested?</h2>
+              <p className="mt-4 text-lg text-slate-500">
+                Tell us about your email marketing needs and we'll be in touch.
+              </p>
+            </div>
+            <form onSubmit={handleContact} className="space-y-5">
+              <Input
+                label="Name"
+                placeholder="Your name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+              <Input
+                label="Email"
+                type="email"
+                placeholder="you@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+              />
+              <div className="w-full">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Message
+                </label>
+                <textarea
+                  placeholder="Tell us about your needs..."
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  rows={4}
+                  required
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                />
+              </div>
+              <Button type="submit" size="lg" className="w-full bg-amber-500 hover:bg-amber-600 text-white focus-visible:ring-amber-500">
+                Send Message
+              </Button>
+            </form>
+          </div>
+        </section>
+
+        {/* Footer */}
+        <footer className="py-10 bg-slate-900 border-t border-slate-800">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+              <img
+                src="https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png"
+                alt="SageRock"
+                className="h-7 w-auto brightness-0 invert"
+              />
+              <p className="text-slate-500 text-sm">
+                © {new Date().getFullYear()} SageRock. All rights reserved.
+              </p>
+              <a
+                href="https://sagerock.com"
+                className="text-slate-500 hover:text-slate-300 text-sm transition-colors"
+              >
+                sagerock.com
               </a>
             </div>
           </div>
-        </div>
-      </footer>
-    </div>
+        </footer>
+      </div>
+    </>
   )
 }
