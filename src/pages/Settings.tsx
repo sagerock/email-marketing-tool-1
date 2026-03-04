@@ -822,7 +822,7 @@ export default function Settings() {
                 {lookupResults.map((record) => (
                   <div key={record.id} className="border rounded-lg p-4">
                     <div className="flex items-center gap-2 mb-3">
-                      <Badge variant={record.type === 'Lead' ? 'default' : 'secondary'}>
+                      <Badge variant={record.type === 'Lead' ? 'default' : 'info'}>
                         {record.type}
                       </Badge>
                       <span className="font-medium">
