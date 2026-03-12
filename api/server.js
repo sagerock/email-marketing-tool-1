@@ -23,6 +23,23 @@ const jsforce = require('jsforce')
 const puppeteer = require('puppeteer')
 require('dotenv').config()
 
+// Retry helper for transient network errors (e.g. TLS connection resets)
+async function withRetry(fn, { retries = 3, delay = 1000, label = 'operation' } = {}) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      return await fn()
+    } catch (err) {
+      const isTransient = err.message?.includes('terminated') ||
+        err.message?.includes('ECONNRESET') ||
+        err.message?.includes('socket hang up') ||
+        err.message?.includes('ETIMEDOUT')
+      if (!isTransient || attempt === retries) throw err
+      console.warn(`⚠️ ${label} failed (attempt ${attempt}/${retries}): ${err.message}. Retrying in ${delay}ms...`)
+      await new Promise(r => setTimeout(r, delay * attempt))
+    }
+  }
+}
+
 const app = express()
 const PORT = process.env.PORT || 3001
 
@@ -314,11 +331,10 @@ async function sendCampaignById(campaignId) {
   }
 
   // 2. Fetch client to get API key
-  const { data: client, error: clientError } = await supabase
-    .from('clients')
-    .select('*')
-    .eq('id', campaign.client_id)
-    .single()
+  const { data: client, error: clientError } = await withRetry(
+    () => supabase.from('clients').select('*').eq('id', campaign.client_id).single(),
+    { label: 'Fetch client' }
+  )
 
   if (clientError) throw clientError
 
@@ -330,11 +346,10 @@ async function sendCampaignById(campaignId) {
   // 3. Fetch template if specified
   let htmlContent = ''
   if (campaign.template_id) {
-    const { data: template } = await supabase
-      .from('templates')
-      .select('html_content')
-      .eq('id', campaign.template_id)
-      .single()
+    const { data: template } = await withRetry(
+      () => supabase.from('templates').select('html_content').eq('id', campaign.template_id).single(),
+      { label: 'Fetch template' }
+    )
 
     htmlContent = template?.html_content || ''
   }
@@ -342,11 +357,12 @@ async function sendCampaignById(campaignId) {
   // 4. Get contact IDs from Salesforce Campaign if specified
   let sfCampaignContactIds = null
   if (campaign.salesforce_campaign_id) {
-    const { data: members, error: membersError } = await supabase
-      .from('salesforce_campaign_members')
-      .select('contact_id')
-      .eq('salesforce_campaign_id', campaign.salesforce_campaign_id)
-      .eq('client_id', campaign.client_id)
+    const { data: members, error: membersError } = await withRetry(
+      () => supabase.from('salesforce_campaign_members').select('contact_id')
+        .eq('salesforce_campaign_id', campaign.salesforce_campaign_id)
+        .eq('client_id', campaign.client_id),
+      { label: 'Fetch SF campaign members' }
+    )
 
     if (membersError) throw membersError
     sfCampaignContactIds = new Set(members?.map(m => m.contact_id) || [])
@@ -368,14 +384,13 @@ async function sendCampaignById(campaignId) {
   const pageSize = 1000
 
   while (true) {
-    let query = supabase
-      .from('contacts')
-      .select('*')
-      .eq('unsubscribed', false)
-      .eq('client_id', campaign.client_id)
-      .range(page * pageSize, (page + 1) * pageSize - 1)
-
-    const { data, error } = await query
+    const { data, error } = await withRetry(
+      () => supabase.from('contacts').select('*')
+        .eq('unsubscribed', false)
+        .eq('client_id', campaign.client_id)
+        .range(page * pageSize, (page + 1) * pageSize - 1),
+      { label: `Fetch contacts page ${page + 1}` }
+    )
 
     if (error) throw error
     if (!data || data.length === 0) break
@@ -664,6 +679,8 @@ app.post('/api/send-test-email', async (req, res) => {
         .replace(/{{last_name}}/gi, 'Doe')
         .replace(/{{unsubscribe_url}}/gi, testUnsubscribeUrl)
         .replace(/{{mailing_address}}/gi, mailingAddress)
+        .replace(/{{campaign_name}}/gi, campaign.name || '')
+        .replace(/{{industry_link}}/gi, 'https://alconox.com/industries/')
 
       // Append UTM params to all links
       personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
@@ -677,6 +694,10 @@ app.post('/api/send-test-email', async (req, res) => {
         replyTo: campaign.reply_to || undefined,
         subject: `[TEST] ${campaign.subject}`,
         html: personalizedHtml,
+        customArgs: {
+          campaign_id: campaignId,
+        },
+        categories: [`campaign-${campaignId}`],
         ipPoolName: client.ip_pool || undefined,
         headers: {
           'List-Unsubscribe': `<${testUnsubscribeUrl}>`,
