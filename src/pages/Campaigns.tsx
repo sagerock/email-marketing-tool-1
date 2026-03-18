@@ -6,7 +6,7 @@ import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus } from 'lucide-react'
+import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, Download } from 'lucide-react'
 
 export default function Campaigns() {
   const { selectedClient } = useClient()
@@ -250,7 +250,7 @@ export default function Campaigns() {
             setSendProgress(null)
             fetchCampaigns()
             if (progress.status === 'sent') {
-              alert(`Campaign sent successfully to ${progress.sent_count} recipients!${progress.failed_count > 0 ? ` (${progress.failed_count} failed)` : ''}`)
+              alert(`Campaign sent successfully to ${progress.sent_count} recipients!${progress.failed_count > 0 ? ` (${progress.failed_count} failed — download the list from the campaign card)` : ''}`)
             } else {
               alert(`Campaign failed: ${progress.send_error || 'Unknown error'}`)
             }
@@ -441,7 +441,14 @@ export default function Campaigns() {
                           </div>
                           <div>
                             <p className="text-gray-500">Recipients</p>
-                            <p className="text-gray-900">{campaign.recipient_count}</p>
+                            <p className="text-gray-900">
+                              {campaign.recipient_count}
+                              {campaign.failed_count && campaign.failed_count > 0 ? (
+                                <span className="text-red-600 ml-2">
+                                  ({campaign.failed_count.toLocaleString()} failed)
+                                </span>
+                              ) : null}
+                            </p>
                           </div>
                           <div>
                             <p className="text-gray-500">
@@ -468,6 +475,26 @@ export default function Campaigns() {
                         </div>
                       </div>
                       <div className="flex gap-2">
+                        {campaign.failed_recipients && campaign.failed_recipients.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => {
+                              const emails = campaign.failed_recipients!.join('\n')
+                              const blob = new Blob([emails], { type: 'text/plain' })
+                              const url = URL.createObjectURL(blob)
+                              const a = document.createElement('a')
+                              a.href = url
+                              a.download = `failed-recipients-${campaign.name.replace(/\s+/g, '-')}.txt`
+                              a.click()
+                              URL.revokeObjectURL(url)
+                            }}
+                            className="text-red-600 border-red-300 hover:bg-red-50"
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            Failed ({campaign.failed_recipients.length.toLocaleString()})
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="outline"

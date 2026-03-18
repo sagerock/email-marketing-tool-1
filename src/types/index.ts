@@ -64,6 +64,7 @@ export interface Campaign {
   sent_count?: number
   failed_count?: number
   send_error?: string
+  failed_recipients?: string[]
   created_at: string
   updated_at: string
   client_id?: string

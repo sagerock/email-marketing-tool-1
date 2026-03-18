@@ -445,6 +445,7 @@ async function sendCampaignById(campaignId) {
   const PAGE_SIZE = 1000
   let sentCount = 0
   let failedCount = 0
+  let failedRecipients = [] // Email addresses from failed batches
   let totalRecipients = 0
   let page = 0
   let pendingPersonalizations = [] // Buffer for building up to PERSONALIZATIONS_BATCH_SIZE
@@ -471,6 +472,8 @@ async function sendCampaignById(campaignId) {
       console.log(`📧 ${batchLabel}: sent ${personalizations.length} emails`)
     } catch (err) {
       failedCount += personalizations.length
+      const batchEmails = personalizations.map(p => p.to[0].email)
+      failedRecipients = failedRecipients.concat(batchEmails)
       console.error(`📧 ${batchLabel} FAILED (${personalizations.length} emails):`, err.message || err)
     }
 
@@ -478,6 +481,7 @@ async function sendCampaignById(campaignId) {
     await supabase.from('campaigns').update({
       sent_count: sentCount,
       failed_count: failedCount,
+      failed_recipients: failedRecipients,
     }).eq('id', campaignId)
   }
 
@@ -562,6 +566,7 @@ async function sendCampaignById(campaignId) {
       recipient_count: totalRecipients,
       sent_count: sentCount,
       failed_count: failedCount,
+      failed_recipients: failedRecipients,
     })
     .eq('id', campaignId)
 
@@ -779,7 +784,7 @@ app.get('/api/campaign-progress/:id', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('campaigns')
-      .select('id, status, recipient_count, sent_count, failed_count, send_error')
+      .select('id, status, recipient_count, sent_count, failed_count, send_error, failed_recipients')
       .eq('id', req.params.id)
       .single()
     if (error) return res.status(500).json({ error: error.message })
