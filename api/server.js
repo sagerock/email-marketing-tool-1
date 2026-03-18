@@ -3475,6 +3475,317 @@ app.post('/api/contacts/sync-bounce-types', async (req, res) => {
 })
 
 // ============================================================
+// BOUNCE RECOVERY ENDPOINTS
+// View, recover, and re-send to hard-bounced contacts
+// ============================================================
+
+/**
+ * Get hard bounce summary grouped by domain
+ */
+app.get('/api/bounces/summary', async (req, res) => {
+  try {
+    const { clientId } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const { data: contacts, error } = await supabase
+      .from('contacts')
+      .select('email, bounce_status, bounced_at')
+      .eq('client_id', clientId)
+      .eq('bounce_status', 'hard')
+
+    if (error) throw error
+
+    // Group by domain
+    const domainCounts = {}
+    for (const contact of contacts || []) {
+      const domain = contact.email.split('@')[1]?.toLowerCase() || 'unknown'
+      if (!domainCounts[domain]) {
+        domainCounts[domain] = 0
+      }
+      domainCounts[domain]++
+    }
+
+    // Sort by count descending
+    const domains = Object.entries(domainCounts)
+      .map(([domain, count]) => ({ domain, count }))
+      .sort((a, b) => b.count - a.count)
+
+    res.json({
+      totalHardBounces: contacts?.length || 0,
+      domains,
+    })
+  } catch (error) {
+    console.error('Error fetching bounce summary:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Get hard-bounced contacts with optional domain filter
+ */
+app.get('/api/bounces/contacts', async (req, res) => {
+  try {
+    const { clientId, domain, page = 0, pageSize = 50 } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const pageNum = parseInt(page)
+    const size = Math.min(parseInt(pageSize), 200)
+
+    let query = supabase
+      .from('contacts')
+      .select('id, email, first_name, last_name, bounce_status, bounced_at, last_bounce_campaign_id, tags')
+      .eq('client_id', clientId)
+      .eq('bounce_status', 'hard')
+      .order('bounced_at', { ascending: false })
+      .range(pageNum * size, (pageNum + 1) * size - 1)
+
+    const { data: contacts, error } = await query
+
+    if (error) throw error
+
+    // Filter by domain in JS (Supabase doesn't support LIKE on email easily via REST)
+    let filtered = contacts || []
+    if (domain) {
+      filtered = filtered.filter(c => c.email.toLowerCase().endsWith(`@${domain.toLowerCase()}`))
+    }
+
+    res.json({ contacts: filtered })
+  } catch (error) {
+    console.error('Error fetching bounced contacts:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Remove contacts from SendGrid suppression list and reset bounce status
+ */
+app.post('/api/bounces/recover', async (req, res) => {
+  try {
+    const { clientId, contactIds } = req.body
+
+    if (!clientId || !contactIds || !Array.isArray(contactIds) || contactIds.length === 0) {
+      return res.status(400).json({ error: 'clientId and contactIds array are required' })
+    }
+
+    if (contactIds.length > 500) {
+      return res.status(400).json({ error: 'Maximum 500 contacts per recovery request' })
+    }
+
+    // Get client's SendGrid API key
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('sendgrid_api_key')
+      .eq('id', clientId)
+      .single()
+
+    if (clientError || !client) {
+      return res.status(404).json({ error: 'Client not found' })
+    }
+
+    // Get contact emails
+    const { data: contacts, error: contactsError } = await supabase
+      .from('contacts')
+      .select('id, email')
+      .in('id', contactIds)
+      .eq('client_id', clientId)
+      .eq('bounce_status', 'hard')
+
+    if (contactsError) throw contactsError
+
+    if (!contacts || contacts.length === 0) {
+      return res.json({ recovered: 0, suppressionRemoved: 0, message: 'No matching hard-bounced contacts found' })
+    }
+
+    const emails = contacts.map(c => c.email.toLowerCase())
+    console.log(`🔄 Recovering ${emails.length} hard-bounced contacts for client ${clientId}`)
+
+    // Remove from SendGrid suppression list (bounces endpoint)
+    let suppressionRemoved = 0
+    for (const email of emails) {
+      try {
+        const deleteRes = await fetch(`https://api.sendgrid.com/v3/suppression/bounces/${encodeURIComponent(email)}`, {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${client.sendgrid_api_key}`,
+            'Content-Type': 'application/json',
+          },
+        })
+        // 204 = success, 404 = not in suppression list (also fine)
+        if (deleteRes.status === 204 || deleteRes.status === 404) {
+          suppressionRemoved++
+        } else {
+          console.warn(`   ⚠️ Failed to remove ${email} from suppression: ${deleteRes.status}`)
+        }
+      } catch (err) {
+        console.warn(`   ⚠️ Error removing ${email} from suppression:`, err.message)
+      }
+    }
+
+    // Reset bounce status in database
+    const ids = contacts.map(c => c.id)
+    const { error: updateError } = await supabase
+      .from('contacts')
+      .update({
+        bounce_status: 'none',
+        bounced_at: null,
+        last_bounce_campaign_id: null,
+      })
+      .in('id', ids)
+      .eq('client_id', clientId)
+
+    if (updateError) throw updateError
+
+    console.log(`   ✅ Recovered ${contacts.length} contacts, removed ${suppressionRemoved} from SendGrid suppression`)
+
+    res.json({
+      recovered: contacts.length,
+      suppressionRemoved,
+      emails: emails,
+      message: `Recovered ${contacts.length} contacts. Removed ${suppressionRemoved} from SendGrid suppression list.`,
+    })
+  } catch (error) {
+    console.error('Error recovering bounces:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Send a test/recovery campaign to recovered contacts in controlled batches
+ */
+app.post('/api/bounces/send-recovery', async (req, res) => {
+  try {
+    const { clientId, contactIds, templateId, subject, batchSize = 100 } = req.body
+
+    if (!clientId || !contactIds || !templateId || !subject) {
+      return res.status(400).json({ error: 'clientId, contactIds, templateId, and subject are required' })
+    }
+
+    if (contactIds.length > 1000) {
+      return res.status(400).json({ error: 'Maximum 1000 contacts per recovery send' })
+    }
+
+    // Get client
+    const { data: client, error: clientError } = await supabase
+      .from('clients')
+      .select('sendgrid_api_key, from_email, from_name, mailing_address, ip_pool')
+      .eq('id', clientId)
+      .single()
+
+    if (clientError || !client) {
+      return res.status(404).json({ error: 'Client not found' })
+    }
+
+    // Get template
+    const { data: template, error: templateError } = await supabase
+      .from('templates')
+      .select('html_content')
+      .eq('id', templateId)
+      .single()
+
+    if (templateError || !template) {
+      return res.status(404).json({ error: 'Template not found' })
+    }
+
+    // Get contacts (only those with bounce_status = 'none', meaning already recovered)
+    const { data: contacts, error: contactsError } = await supabase
+      .from('contacts')
+      .select('id, email, first_name, last_name, unsubscribe_token, industry')
+      .in('id', contactIds)
+      .eq('client_id', clientId)
+      .eq('bounce_status', 'none')
+      .eq('unsubscribed', false)
+
+    if (contactsError) throw contactsError
+
+    if (!contacts || contacts.length === 0) {
+      return res.json({ sent: 0, failed: 0, message: 'No eligible contacts to send to. Contacts must be recovered first.' })
+    }
+
+    // Get industry links
+    const { data: industryLinks } = await supabase
+      .from('industry_links')
+      .select('industry, url')
+      .eq('client_id', clientId)
+    const industryLinkMap = new Map((industryLinks || []).map(l => [l.industry, l.url]))
+    const defaultIndustryUrl = 'https://alconox.com/industries/'
+    const baseUrl = process.env.BASE_URL || 'https://mail.sagerock.com'
+
+    const recoverySgClient = require('@sendgrid/client')
+    recoverySgClient.setApiKey(client.sendgrid_api_key)
+
+    const htmlContent = template.html_content
+      .replace(/\{\{mailing_address\}\}/g, client.mailing_address || '')
+
+    let sentCount = 0
+    let failedCount = 0
+    const safeBatchSize = Math.min(parseInt(batchSize) || 100, 200)
+
+    // Send in controlled batches
+    for (let i = 0; i < contacts.length; i += safeBatchSize) {
+      const batch = contacts.slice(i, i + safeBatchSize)
+
+      const personalizations = batch.map(contact => {
+        const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}`
+        const industryLink = contact.industry
+          ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl)
+          : defaultIndustryUrl
+
+        return {
+          to: [{ email: contact.email }],
+          substitutions: {
+            '{{email}}': contact.email,
+            '{{first_name}}': contact.first_name || '',
+            '{{last_name}}': contact.last_name || '',
+            '{{unsubscribe_url}}': unsubscribeUrl,
+            '{{industry_link}}': industryLink,
+          },
+          headers: {
+            'List-Unsubscribe': `<${unsubscribeUrl}>`,
+            'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+          },
+        }
+      })
+
+      const requestBody = {
+        personalizations,
+        from: { email: client.from_email, name: client.from_name || '' },
+        subject,
+        content: [{ type: 'text/html', value: htmlContent }],
+        categories: ['bounce-recovery'],
+      }
+      if (client.ip_pool) requestBody.ip_pool_name = client.ip_pool
+
+      try {
+        await recoverySgClient.request({ method: 'POST', url: '/v3/mail/send', body: requestBody })
+        sentCount += batch.length
+        console.log(`📧 Recovery batch ${Math.floor(i / safeBatchSize) + 1}: sent ${batch.length} emails`)
+      } catch (err) {
+        failedCount += batch.length
+        console.error(`📧 Recovery batch FAILED:`, err.message || err)
+      }
+    }
+
+    console.log(`✅ Recovery send complete: ${sentCount} sent, ${failedCount} failed`)
+
+    res.json({
+      sent: sentCount,
+      failed: failedCount,
+      total: contacts.length,
+      message: `Sent ${sentCount} recovery emails (${failedCount} failed)`,
+    })
+  } catch (error) {
+    console.error('Error sending recovery emails:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// ============================================================
 // STATIC FILE SERVING (Frontend)
 // Serve the built React app from the dist folder
 // This must come AFTER all API routes

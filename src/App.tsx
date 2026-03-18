@@ -14,6 +14,7 @@ import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import Unsubscribe from './pages/Unsubscribe'
 import Admin from './pages/Admin'
+import BounceRecovery from './pages/BounceRecovery'
 import DebugAuth from './pages/DebugAuth'
 
 function App() {
@@ -86,6 +87,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Settings />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/bounce-recovery"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <BounceRecovery />
                   </Layout>
                 </ProtectedRoute>
               }
