@@ -463,10 +463,10 @@ async function sendCampaignById(campaignId) {
     if (client.ip_pool) requestBody.ip_pool_name = client.ip_pool
 
     try {
-      await withRetry(
-        () => campaignSgClient.request({ method: 'POST', url: '/v3/mail/send', body: requestBody }),
-        { retries: 3, delay: 2000, label: batchLabel }
-      )
+      // No retry on sends — retrying risks duplicate emails if SendGrid
+      // processed the request but the response was lost (e.g. connection reset).
+      // Failed batches are counted and can be investigated after.
+      await campaignSgClient.request({ method: 'POST', url: '/v3/mail/send', body: requestBody })
       sentCount += personalizations.length
       console.log(`📧 ${batchLabel}: sent ${personalizations.length} emails`)
     } catch (err) {
