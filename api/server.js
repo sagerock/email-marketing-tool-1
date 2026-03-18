@@ -296,6 +296,12 @@ function isClickFromBot(campaignId, email, url, timestampMs) {
 /**
  * Helper function to send a campaign by ID
  * Used by both the API endpoint and the scheduled campaign cron job
+ *
+ * Designed for large sends (47K+ contacts):
+ * - Uses SendGrid personalizations API (up to 1000 recipients per API call)
+ * - Processes contacts in pages to limit memory usage
+ * - Tracks progress via sent_count/failed_count columns for live UI updates
+ * - Creates a dedicated SendGrid client instance to avoid API key conflicts
  */
 async function sendCampaignById(campaignId) {
   // 1. Fetch campaign
@@ -320,7 +326,7 @@ async function sendCampaignById(campaignId) {
   // This prevents race conditions if send is triggered twice
   const { data: claimResult, error: claimError } = await supabase
     .from('campaigns')
-    .update({ status: 'sending' })
+    .update({ status: 'sending', sent_count: 0, failed_count: 0, send_error: null })
     .eq('id', campaignId)
     .in('status', ['draft', 'scheduled'])
     .select('id')
@@ -340,8 +346,11 @@ async function sendCampaignById(campaignId) {
 
   console.log('📧 Sending campaign for client:', client.name, '| IP Pool:', client.ip_pool || '(none)')
 
-  // Set SendGrid API key
-  sgMail.setApiKey(client.sendgrid_api_key)
+  // Create a dedicated SendGrid client instance for this send
+  // (avoids API key conflicts if multiple campaigns send concurrently)
+  const SendGridClient = sgClient.constructor
+  const campaignSgClient = new SendGridClient()
+  campaignSgClient.setApiKey(client.sendgrid_api_key)
 
   // 3. Fetch template if specified
   let htmlContent = ''
@@ -378,63 +387,7 @@ async function sendCampaignById(campaignId) {
     }
   }
 
-  // 5. Fetch ALL contacts (paginated to handle large lists)
-  let allContacts = []
-  let page = 0
-  const pageSize = 1000
-
-  while (true) {
-    const { data, error } = await withRetry(
-      () => supabase.from('contacts').select('*')
-        .eq('unsubscribed', false)
-        .eq('client_id', campaign.client_id)
-        .range(page * pageSize, (page + 1) * pageSize - 1),
-      { label: `Fetch contacts page ${page + 1}` }
-    )
-
-    if (error) throw error
-    if (!data || data.length === 0) break
-
-    allContacts = allContacts.concat(data)
-    page++
-
-    // Safety check - stop if we've fetched less than a full page
-    if (data.length < pageSize) break
-  }
-
-  console.log(`📧 Fetched ${allContacts.length} total contacts for campaign`)
-
-  // Filter by Salesforce Campaign membership if specified
-  let contacts = allContacts
-  if (sfCampaignContactIds) {
-    contacts = contacts.filter((contact) => sfCampaignContactIds.has(contact.id))
-    console.log(`📧 After SF Campaign filter: ${contacts.length} contacts`)
-  }
-
-  // Filter by tags if specified (OR logic - contact has any of the selected tags)
-  if (campaign.filter_tags && campaign.filter_tags.length > 0) {
-    contacts = contacts.filter((contact) =>
-      campaign.filter_tags.some((tag) => contact.tags?.includes(tag))
-    )
-    console.log(`📧 After tag filter: ${contacts.length} contacts`)
-  }
-
-  // Exclude hard-bounced contacts (they cannot receive emails)
-  const beforeBounceFilter = contacts.length
-  contacts = contacts.filter((contact) => contact.bounce_status !== 'hard')
-  if (contacts.length < beforeBounceFilter) {
-    console.log(`📧 Excluded ${beforeBounceFilter - contacts.length} hard-bounced contacts, ${contacts.length} remaining`)
-  }
-
-  // 6. Update recipient count (status already set to 'sending' at start)
-  await supabase
-    .from('campaigns')
-    .update({
-      recipient_count: contacts.length,
-    })
-    .eq('id', campaignId)
-
-  // 7. Send emails
+  // 5. Prepare template and shared data before fetching contacts
   const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
   const mailingAddress = client.mailing_address || 'No mailing address configured'
   const utmParams = campaign.utm_params || ''
@@ -462,98 +415,153 @@ async function sendCampaignById(campaignId) {
   // Helper function to append UTM params to URLs
   const appendUtmParams = (html, params) => {
     if (!params) return html
-    // Match href attributes with http/https URLs (not mailto:, tel:, #, etc.)
     return html.replace(/href="(https?:\/\/[^"]+)"/gi, (match, url) => {
-      // Don't add UTM to unsubscribe URLs (they already have params)
       if (url.includes('unsubscribe')) return match
       const separator = url.includes('?') ? '&' : '?'
       return `href="${url}${separator}${params}"`
     })
   }
 
-  // Process contacts in batches to avoid memory issues with large lists
-  const BATCH_SIZE = 500
+  // Helper to append UTM to a single URL string
+  const appendUtmToUrl = (url, params) => {
+    if (!params || !url) return url
+    if (url.includes('unsubscribe')) return url
+    const separator = url.includes('?') ? '&' : '?'
+    return `${url}${separator}${params}`
+  }
+
+  // Pre-process the shared HTML template:
+  // 1. Replace merge tags that are the same for all contacts
+  let processedTemplate = htmlContent
+    .replace(/{{mailing_address}}/gi, mailingAddress)
+    .replace(/{{campaign_name}}/gi, sfCampaignName)
+
+  // 2. Apply UTM params to all static URLs in the template
+  //    (merge tag placeholders like {{unsubscribe_url}} are not real URLs so they're skipped)
+  processedTemplate = appendUtmParams(processedTemplate, utmParams)
+
+  // 6. Fetch contacts in pages, filter, and send — without accumulating all in memory
+  const PERSONALIZATIONS_BATCH_SIZE = 1000 // SendGrid max per API call
+  const PAGE_SIZE = 1000
   let sentCount = 0
   let failedCount = 0
-  const totalContacts = contacts.length
+  let totalRecipients = 0
+  let page = 0
+  let pendingPersonalizations = [] // Buffer for building up to PERSONALIZATIONS_BATCH_SIZE
 
-  console.log(`📧 Starting batched send: ${totalContacts} contacts in batches of ${BATCH_SIZE}`)
+  // Helper: flush a batch of personalizations to SendGrid
+  const flushBatch = async (personalizations, batchLabel) => {
+    const requestBody = {
+      personalizations,
+      from: { email: campaign.from_email, name: campaign.from_name },
+      subject: campaign.subject,
+      content: [{ type: 'text/html', value: processedTemplate }],
+      categories: [`campaign-${campaignId}`],
+      custom_args: { campaign_id: campaignId },
+    }
+    if (campaign.reply_to) requestBody.reply_to = { email: campaign.reply_to }
+    if (client.ip_pool) requestBody.ip_pool_name = client.ip_pool
 
-  for (let i = 0; i < totalContacts; i += BATCH_SIZE) {
-    const batch = contacts.slice(i, i + BATCH_SIZE)
-    const batchNum = Math.floor(i / BATCH_SIZE) + 1
-    const totalBatches = Math.ceil(totalContacts / BATCH_SIZE)
+    try {
+      await withRetry(
+        () => campaignSgClient.request({ method: 'POST', url: '/v3/mail/send', body: requestBody }),
+        { retries: 3, delay: 2000, label: batchLabel }
+      )
+      sentCount += personalizations.length
+      console.log(`📧 ${batchLabel}: sent ${personalizations.length} emails`)
+    } catch (err) {
+      failedCount += personalizations.length
+      console.error(`📧 ${batchLabel} FAILED (${personalizations.length} emails):`, err.message || err)
+    }
 
-    console.log(`📧 Processing batch ${batchNum}/${totalBatches} (${batch.length} contacts)`)
+    // Update progress in DB after each batch
+    await supabase.from('campaigns').update({
+      sent_count: sentCount,
+      failed_count: failedCount,
+    }).eq('id', campaignId)
+  }
 
-    const batchPromises = batch.map((contact) => {
-      // Generate unsubscribe URL with campaign_id for tracking
+  console.log(`📧 Starting paginated send with ${PERSONALIZATIONS_BATCH_SIZE}-recipient batches`)
+
+  while (true) {
+    const { data: pageContacts, error } = await withRetry(
+      () => supabase.from('contacts').select('id, email, first_name, last_name, unsubscribe_token, industry, tags, bounce_status')
+        .eq('unsubscribed', false)
+        .eq('client_id', campaign.client_id)
+        .neq('bounce_status', 'hard')
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1),
+      { label: `Fetch contacts page ${page + 1}` }
+    )
+
+    if (error) throw error
+    if (!pageContacts || pageContacts.length === 0) break
+
+    // Filter this page
+    let filtered = pageContacts
+    if (sfCampaignContactIds) {
+      filtered = filtered.filter(c => sfCampaignContactIds.has(c.id))
+    }
+    if (campaign.filter_tags && campaign.filter_tags.length > 0) {
+      filtered = filtered.filter(c =>
+        campaign.filter_tags.some(tag => c.tags?.includes(tag))
+      )
+    }
+
+    totalRecipients += filtered.length
+
+    // Build personalizations for each contact
+    for (const contact of filtered) {
       const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}&campaign_id=${campaignId}`
+      const rawIndustryLink = contact.industry
+        ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl)
+        : defaultIndustryUrl
+      const industryLink = appendUtmToUrl(rawIndustryLink, utmParams)
 
-      // Get industry link for this contact
-      const industryLink = contact.industry ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl) : defaultIndustryUrl
-
-      // Replace merge tags in HTML
-      let personalizedHtml = htmlContent
-        .replace(/{{email}}/gi, contact.email)
-        .replace(/{{first_name}}/gi, contact.first_name || '')
-        .replace(/{{last_name}}/gi, contact.last_name || '')
-        .replace(/{{unsubscribe_url}}/gi, unsubscribeUrl)
-        .replace(/{{mailing_address}}/gi, mailingAddress)
-        .replace(/{{campaign_name}}/gi, sfCampaignName)
-        .replace(/{{industry_link}}/gi, industryLink)
-
-      // Append UTM params to all links
-      personalizedHtml = appendUtmParams(personalizedHtml, utmParams)
-
-      const msg = {
-        to: contact.email,
-        from: {
-          email: campaign.from_email,
-          name: campaign.from_name,
+      pendingPersonalizations.push({
+        to: [{ email: contact.email }],
+        substitutions: {
+          '{{email}}': contact.email,
+          '{{first_name}}': contact.first_name || '',
+          '{{last_name}}': contact.last_name || '',
+          '{{unsubscribe_url}}': unsubscribeUrl,
+          '{{industry_link}}': industryLink,
         },
-        replyTo: campaign.reply_to || undefined,
-        subject: campaign.subject,
-        html: personalizedHtml,
-        customArgs: {
-          campaign_id: campaignId,
-        },
-        // Add category for SendGrid Stats API tracking
-        categories: [`campaign-${campaignId}`],
-        ipPoolName: client.ip_pool || undefined,
-        // Add List-Unsubscribe header for one-click unsubscribe
         headers: {
           'List-Unsubscribe': `<${unsubscribeUrl}>`,
           'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
         },
+      })
+
+      // Flush when we hit the batch size
+      if (pendingPersonalizations.length >= PERSONALIZATIONS_BATCH_SIZE) {
+        const batchNum = Math.floor((sentCount + failedCount) / PERSONALIZATIONS_BATCH_SIZE) + 1
+        await flushBatch(pendingPersonalizations, `Batch ${batchNum}`)
+        pendingPersonalizations = []
       }
+    }
 
-      return sgMail.send(msg)
-        .then(() => ({ success: true }))
-        .catch((error) => {
-          console.error(`Failed to send to ${contact.email}:`, error.message || error)
-          return { success: false }
-        })
-    })
-
-    const results = await Promise.all(batchPromises)
-    const batchSent = results.filter(r => r.success).length
-    const batchFailed = results.filter(r => !r.success).length
-    sentCount += batchSent
-    failedCount += batchFailed
-
-    console.log(`📧 Batch ${batchNum} complete: ${batchSent} sent, ${batchFailed} failed`)
+    page++
+    if (pageContacts.length < PAGE_SIZE) break
   }
 
-  console.log(`📧 Campaign send complete: ${sentCount} sent, ${failedCount} failed`)
+  // Flush any remaining personalizations
+  if (pendingPersonalizations.length > 0) {
+    const batchNum = Math.floor((sentCount + failedCount) / PERSONALIZATIONS_BATCH_SIZE) + 1
+    await flushBatch(pendingPersonalizations, `Batch ${batchNum} (final)`)
+    pendingPersonalizations = []
+  }
 
-  // 7. Update campaign to sent with actual recipient count
+  console.log(`📧 Campaign send complete: ${sentCount} sent, ${failedCount} failed out of ${totalRecipients} recipients`)
+
+  // 7. Update campaign to sent with final counts
   await supabase
     .from('campaigns')
     .update({
       status: 'sent',
       sent_at: new Date().toISOString(),
-      recipient_count: sentCount,
+      recipient_count: totalRecipients,
+      sent_count: sentCount,
+      failed_count: failedCount,
     })
     .eq('id', campaignId)
 
@@ -737,19 +745,47 @@ app.post('/api/send-test-email', async (req, res) => {
 app.post('/api/send-campaign', async (req, res) => {
   try {
     const { campaignId } = req.body
-    const result = await sendCampaignById(campaignId)
-    res.json(result)
+    if (!campaignId) return res.status(400).json({ error: 'Campaign ID is required' })
+
+    // Validate campaign exists and is sendable
+    const { data: campaign, error } = await supabase
+      .from('campaigns').select('id, status').eq('id', campaignId).single()
+    if (error || !campaign) return res.status(404).json({ error: 'Campaign not found' })
+    if (campaign.status === 'sending') return res.status(409).json({ error: 'Campaign is already sending' })
+    if (campaign.status === 'sent') return res.status(409).json({ error: 'Campaign has already been sent' })
+
+    // Return 202 immediately — send runs in the background
+    res.status(202).json({ message: 'Campaign send started', campaignId })
+
+    // Fire-and-forget: run send in background
+    sendCampaignById(campaignId).catch(async (err) => {
+      console.error(`Background campaign send failed for ${campaignId}:`, err)
+      await supabase.from('campaigns')
+        .update({ status: 'failed', send_error: err.message })
+        .eq('id', campaignId)
+    })
   } catch (error) {
-    console.error('Error sending campaign:', error)
-
-    // Update campaign to failed
-    if (req.body.campaignId) {
-      await supabase
-        .from('campaigns')
-        .update({ status: 'failed' })
-        .eq('id', req.body.campaignId)
+    console.error('Error initiating campaign send:', error)
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message })
     }
+  }
+})
 
+/**
+ * Campaign progress endpoint for polling during large sends
+ */
+app.get('/api/campaign-progress/:id', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('campaigns')
+      .select('id, status, recipient_count, sent_count, failed_count, send_error')
+      .eq('id', req.params.id)
+      .single()
+    if (error) return res.status(500).json({ error: error.message })
+    if (!data) return res.status(404).json({ error: 'Campaign not found' })
+    res.json(data)
+  } catch (error) {
     res.status(500).json({ error: error.message })
   }
 })
@@ -3513,7 +3549,7 @@ app.listen(PORT, () => {
             // Mark campaign as failed
             await supabase
               .from('campaigns')
-              .update({ status: 'failed' })
+              .update({ status: 'failed', send_error: campaignError.message })
               .eq('id', campaign.id)
           }
         }

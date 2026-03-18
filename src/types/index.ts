@@ -61,6 +61,9 @@ export interface Campaign {
   utm_params?: string
   folder_id?: string
   salesforce_campaign_id?: string
+  sent_count?: number
+  failed_count?: number
+  send_error?: string
   created_at: string
   updated_at: string
   client_id?: string

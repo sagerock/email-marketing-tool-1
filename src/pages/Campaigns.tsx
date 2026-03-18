@@ -18,6 +18,8 @@ export default function Campaigns() {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editingCampaign, setEditingCampaign] = useState<Campaign | null>(null)
   const [sendingCampaignId, setSendingCampaignId] = useState<string | null>(null)
+  const [sendProgress, setSendProgress] = useState<{ sent_count: number; recipient_count: number; failed_count: number } | null>(null)
+  const progressIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [showTestEmailModal, setShowTestEmailModal] = useState<Campaign | null>(null)
   const [showCreateFolderModal, setShowCreateFolderModal] = useState(false)
   const [editingFolder, setEditingFolder] = useState<Folder | null>(null)
@@ -40,6 +42,13 @@ export default function Campaigns() {
   useEffect(() => {
     fetchCampaigns()
   }, [selectedFolderId, showUnfiled])
+
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
+    }
+  }, [])
 
   const fetchFolders = async () => {
     if (!selectedClient) return
@@ -206,6 +215,7 @@ export default function Campaigns() {
     }
 
     setSendingCampaignId(campaignId)
+    setSendProgress(null)
     try {
       const apiUrl = import.meta.env.VITE_API_URL || ''
       const response = await fetch(`${apiUrl}/api/send-campaign`, {
@@ -217,16 +227,43 @@ export default function Campaigns() {
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to send campaign')
+        throw new Error(data.error || 'Failed to start campaign send')
       }
 
-      alert(`Campaign sent successfully to ${data.sent} recipients!`)
-      fetchCampaigns()
+      // Poll for progress until complete
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
+      progressIntervalRef.current = setInterval(async () => {
+        try {
+          const res = await fetch(`${apiUrl}/api/campaign-progress/${campaignId}`)
+          const progress = await res.json()
+
+          setSendProgress({
+            sent_count: progress.sent_count || 0,
+            recipient_count: progress.recipient_count || 0,
+            failed_count: progress.failed_count || 0,
+          })
+
+          if (progress.status === 'sent' || progress.status === 'failed') {
+            clearInterval(progressIntervalRef.current!)
+            progressIntervalRef.current = null
+            setSendingCampaignId(null)
+            setSendProgress(null)
+            fetchCampaigns()
+            if (progress.status === 'sent') {
+              alert(`Campaign sent successfully to ${progress.sent_count} recipients!${progress.failed_count > 0 ? ` (${progress.failed_count} failed)` : ''}`)
+            } else {
+              alert(`Campaign failed: ${progress.send_error || 'Unknown error'}`)
+            }
+          }
+        } catch {
+          // Polling error — keep trying
+        }
+      }, 3000)
     } catch (error) {
       console.error('Error sending campaign:', error)
       alert(error instanceof Error ? error.message : 'Failed to send campaign')
-    } finally {
       setSendingCampaignId(null)
+      setSendProgress(null)
     }
   }
 
@@ -463,7 +500,11 @@ export default function Campaigns() {
                               disabled={sendingCampaignId === campaign.id}
                             >
                               <Send className="h-4 w-4 mr-1" />
-                              {sendingCampaignId === campaign.id ? 'Sending...' : 'Send Now'}
+                              {sendingCampaignId === campaign.id
+                                ? (sendProgress && sendProgress.sent_count > 0
+                                  ? `Sending ${sendProgress.sent_count.toLocaleString()}${sendProgress.recipient_count > 0 ? `/${sendProgress.recipient_count.toLocaleString()}` : ''}...`
+                                  : 'Starting...')
+                                : 'Send Now'}
                             </Button>
                           </>
                         )}
