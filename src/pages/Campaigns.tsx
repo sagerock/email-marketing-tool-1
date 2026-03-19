@@ -6,7 +6,7 @@ import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, Download } from 'lucide-react'
+import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, Download, Copy } from 'lucide-react'
 
 export default function Campaigns() {
   const { selectedClient } = useClient()
@@ -498,6 +498,14 @@ export default function Campaigns() {
                         <Button
                           size="sm"
                           variant="outline"
+                          onClick={() => handleDuplicate(campaign)}
+                        >
+                          <Copy className="h-4 w-4 mr-1" />
+                          Duplicate
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
                           onClick={() => setMovingCampaign(campaign)}
                         >
                           <FolderOpen className="h-4 w-4 mr-1" />
@@ -628,6 +636,33 @@ export default function Campaigns() {
       )}
     </div>
   )
+
+  async function handleDuplicate(campaign: Campaign) {
+    try {
+      const { error } = await supabase.from('campaigns').insert({
+        client_id: selectedClient!.id,
+        name: `${campaign.name} (Copy)`,
+        template_id: campaign.template_id,
+        subject: campaign.subject,
+        from_email: campaign.from_email,
+        from_name: campaign.from_name,
+        reply_to: campaign.reply_to || null,
+        status: 'draft',
+        recipient_count: 0,
+        filter_tags: campaign.filter_tags || null,
+        ip_pool: campaign.ip_pool || null,
+        utm_params: campaign.utm_params || null,
+        folder_id: campaign.folder_id || null,
+        salesforce_campaign_id: campaign.salesforce_campaign_id || null,
+      })
+      if (error) throw error
+      fetchCampaigns()
+      fetchAllCampaigns()
+    } catch (error) {
+      console.error('Error duplicating campaign:', error)
+      alert('Failed to duplicate campaign')
+    }
+  }
 
   async function handleDelete(id: string) {
     if (!confirm('Are you sure you want to delete this campaign?')) return
