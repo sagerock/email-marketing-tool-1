@@ -65,6 +65,14 @@ export interface Campaign {
   failed_count?: number
   send_error?: string
   failed_recipients?: string[]
+  send_breakdown?: {
+    total_contacts: number
+    excluded_unsubscribed: number
+    excluded_hard_bounced: number
+    excluded_sf_campaign_filter?: number
+    excluded_tag_filter?: number
+    final_recipients: number
+  }
   created_at: string
   updated_at: string
   client_id?: string

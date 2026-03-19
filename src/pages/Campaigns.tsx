@@ -473,6 +473,33 @@ export default function Campaigns() {
                             </div>
                           )}
                         </div>
+                        {campaign.send_breakdown && campaign.status === 'sent' && (
+                          <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm">
+                            <p className="text-gray-500 font-medium mb-1">Send Breakdown</p>
+                            <div className="grid grid-cols-2 gap-x-6 gap-y-0.5 text-gray-700">
+                              <span>Total contacts:</span>
+                              <span>{campaign.send_breakdown.total_contacts.toLocaleString()}</span>
+                              <span>Unsubscribed:</span>
+                              <span className="text-red-600">−{campaign.send_breakdown.excluded_unsubscribed.toLocaleString()}</span>
+                              <span>Hard bounced:</span>
+                              <span className="text-red-600">−{campaign.send_breakdown.excluded_hard_bounced.toLocaleString()}</span>
+                              {campaign.send_breakdown.excluded_sf_campaign_filter !== undefined && (
+                                <>
+                                  <span>Not in SF Campaign:</span>
+                                  <span className="text-red-600">−{campaign.send_breakdown.excluded_sf_campaign_filter.toLocaleString()}</span>
+                                </>
+                              )}
+                              {campaign.send_breakdown.excluded_tag_filter !== undefined && campaign.send_breakdown.excluded_tag_filter > 0 && (
+                                <>
+                                  <span>No matching tags:</span>
+                                  <span className="text-red-600">−{campaign.send_breakdown.excluded_tag_filter.toLocaleString()}</span>
+                                </>
+                              )}
+                              <span className="font-medium border-t border-gray-300 pt-1 mt-1">Sent to:</span>
+                              <span className="font-medium text-green-700 border-t border-gray-300 pt-1 mt-1">{campaign.send_breakdown.final_recipients.toLocaleString()}</span>
+                            </div>
+                          </div>
+                        )}
                       </div>
                       <div className="flex gap-2">
                         {campaign.failed_recipients && campaign.failed_recipients.length > 0 && (

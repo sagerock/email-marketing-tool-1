@@ -387,6 +387,39 @@ async function sendCampaignById(campaignId) {
     }
   }
 
+  // 4b. Count contacts excluded by each filter for the send breakdown
+  const breakdown = { total_contacts: 0, excluded_unsubscribed: 0, excluded_hard_bounced: 0, final_recipients: 0 }
+
+  // Total contacts for this client
+  const { count: totalCount } = await supabase.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', campaign.client_id)
+  breakdown.total_contacts = totalCount || 0
+
+  // Unsubscribed contacts
+  const { count: unsubCount } = await supabase.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', campaign.client_id)
+    .eq('unsubscribed', true)
+  breakdown.excluded_unsubscribed = unsubCount || 0
+
+  // Hard bounced contacts
+  const { count: bounceCount } = await supabase.from('contacts')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', campaign.client_id)
+    .eq('bounce_status', 'hard')
+  breakdown.excluded_hard_bounced = bounceCount || 0
+
+  // SF campaign filter exclusions (contacts not in the SF campaign)
+  if (sfCampaignContactIds) {
+    const eligibleAfterBounceUnsub = breakdown.total_contacts - breakdown.excluded_unsubscribed - breakdown.excluded_hard_bounced
+    breakdown.excluded_sf_campaign_filter = eligibleAfterBounceUnsub - sfCampaignContactIds.size
+  }
+
+  // Tag filter - we'll calculate after the send loop since it's interleaved with pagination
+
+  console.log(`📧 Send breakdown: ${JSON.stringify(breakdown)}`)
+
   // 5. Prepare template and shared data before fetching contacts
   const baseUrl = process.env.BASE_URL || 'http://localhost:5173'
   const mailingAddress = client.mailing_address || 'No mailing address configured'
@@ -506,9 +539,11 @@ async function sendCampaignById(campaignId) {
       filtered = filtered.filter(c => sfCampaignContactIds.has(c.id))
     }
     if (campaign.filter_tags && campaign.filter_tags.length > 0) {
+      const beforeTagFilter = filtered.length
       filtered = filtered.filter(c =>
         campaign.filter_tags.some(tag => c.tags?.includes(tag))
       )
+      breakdown.excluded_tag_filter = (breakdown.excluded_tag_filter || 0) + (beforeTagFilter - filtered.length)
     }
 
     totalRecipients += filtered.length
@@ -555,7 +590,10 @@ async function sendCampaignById(campaignId) {
     pendingPersonalizations = []
   }
 
+  // Finalize breakdown
+  breakdown.final_recipients = totalRecipients
   console.log(`📧 Campaign send complete: ${sentCount} sent, ${failedCount} failed out of ${totalRecipients} recipients`)
+  console.log(`📧 Send breakdown: ${JSON.stringify(breakdown)}`)
 
   // 7. Update campaign to sent with final counts
   await supabase
@@ -567,6 +605,7 @@ async function sendCampaignById(campaignId) {
       sent_count: sentCount,
       failed_count: failedCount,
       failed_recipients: failedRecipients,
+      send_breakdown: breakdown,
     })
     .eq('id', campaignId)
 
