@@ -501,7 +501,7 @@ export default function Analytics() {
         bounces: sendgridStats.bounces,
         blocks: sendgridStats.blocks,
         spam: sendgridStats.spam_reports,
-        unsubscribes: sendgridStats.unsubscribes,
+        unsubscribes: eventCounts.unsubscribes,
         source: 'sendgrid' as const,
         // Additional SendGrid-only metrics
         bounceDrops: sendgridStats.bounce_drops,
