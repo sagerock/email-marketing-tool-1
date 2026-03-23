@@ -667,23 +667,57 @@ export default function Analytics() {
   const downloadHeatmapImage = async (campaignName: string, heatmapHtml: string) => {
     setDownloadingImage(true)
     try {
-      // Use server-side Puppeteer to capture full-size screenshot
-      const response = await fetch(`${API_URL}/api/screenshot`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ html: heatmapHtml, width: 800 }),
+      // Render heatmap HTML in a hidden iframe and capture with html-to-image
+      const { toPng } = await import('html-to-image')
+
+      const iframe = document.createElement('iframe')
+      iframe.style.position = 'fixed'
+      iframe.style.left = '-9999px'
+      iframe.style.top = '0'
+      iframe.style.width = '800px'
+      iframe.style.height = '600px'
+      iframe.style.border = 'none'
+      document.body.appendChild(iframe)
+
+      const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document
+      if (!iframeDoc) throw new Error('Could not access iframe document')
+
+      iframeDoc.open()
+      iframeDoc.write(heatmapHtml)
+      iframeDoc.close()
+
+      // Wait for images to load
+      await new Promise<void>((resolve) => {
+        const images = iframeDoc.querySelectorAll('img')
+        if (images.length === 0) { resolve(); return }
+        let loaded = 0
+        const checkDone = () => { if (++loaded >= images.length) resolve() }
+        images.forEach(img => {
+          if (img.complete) { checkDone() }
+          else { img.onload = checkDone; img.onerror = checkDone }
+        })
+        // Timeout fallback
+        setTimeout(resolve, 5000)
       })
 
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.error || 'Failed to generate screenshot')
-      }
+      // Resize iframe to content height
+      const bodyHeight = iframeDoc.body.scrollHeight
+      iframe.style.height = `${bodyHeight}px`
 
-      const { image } = await response.json()
+      // Small delay for layout
+      await new Promise(resolve => setTimeout(resolve, 300))
 
-      // Download the image directly as PNG (full size, no scaling)
+      const dataUrl = await toPng(iframeDoc.body, {
+        width: 800,
+        height: bodyHeight,
+        backgroundColor: '#ffffff',
+      })
+
+      document.body.removeChild(iframe)
+
+      // Download the image
       const link = document.createElement('a')
-      link.href = image
+      link.href = dataUrl
       link.download = `heatmap-${campaignName.replace(/[^a-z0-9]/gi, '-').toLowerCase()}-${new Date().toISOString().split('T')[0]}.png`
       document.body.appendChild(link)
       link.click()
