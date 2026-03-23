@@ -686,9 +686,19 @@ export default function Analytics() {
       iframeDoc.write(heatmapHtml)
       iframeDoc.close()
 
+      // Set crossOrigin on all images so html-to-image can fetch them via CORS
+      const images = iframeDoc.querySelectorAll('img')
+      images.forEach(img => {
+        img.crossOrigin = 'anonymous'
+        // Add cache-buster to avoid browser serving cached non-CORS response
+        if (img.src && !img.src.startsWith('data:')) {
+          const separator = img.src.includes('?') ? '&' : '?'
+          img.src = img.src + separator + '_cors=1'
+        }
+      })
+
       // Wait for images to load
       await new Promise<void>((resolve) => {
-        const images = iframeDoc.querySelectorAll('img')
         if (images.length === 0) { resolve(); return }
         let loaded = 0
         const checkDone = () => { if (++loaded >= images.length) resolve() }
