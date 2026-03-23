@@ -16,6 +16,10 @@ export interface Contact {
   bounce_status?: 'none' | 'soft' | 'hard'
   bounced_at?: string
   last_bounce_campaign_id?: string
+  // Salesforce fields
+  industry?: string
+  record_type?: 'lead' | 'contact'
+  source_code?: string
   // Engagement tracking
   engagement_score?: number
   total_opens?: number

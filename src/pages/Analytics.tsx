@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Badge from '../components/ui/Badge'
 import Input from '../components/ui/Input'
-import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame, FileDown, Loader2 } from 'lucide-react'
+import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame, FileDown, Loader2, Sparkles } from 'lucide-react'
 import type { Contact } from '../types/index.js'
 
 const API_URL = import.meta.env.VITE_API_URL || ''
@@ -107,6 +107,9 @@ export default function Analytics() {
     campaign_id: string
   }[]>([])
   const [loadingSubscriberActivity, setLoadingSubscriberActivity] = useState(false)
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null)
+  const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false)
+  const [aiAnalysisError, setAiAnalysisError] = useState<string | null>(null)
   const [downloadingImage, setDownloadingImage] = useState(false)
 
   useEffect(() => {
@@ -1006,6 +1009,95 @@ export default function Analytics() {
     }
   }
 
+  // AI subscriber analysis with streaming
+  const handleAnalyzeWithAI = async () => {
+    setAiAnalysisLoading(true)
+    setAiAnalysisError(null)
+    setAiAnalysis('')
+
+    let contacts: any[]
+    let analysisType: string
+    if (subscriberTab === 'top') {
+      contacts = topSubscribers
+      analysisType = engagementFilter === 'opened_and_clicked' ? 'opened_and_clicked' : 'top_engaged'
+    } else if (subscriberTab === 'bounced') {
+      contacts = bouncedContacts
+      analysisType = 'bounced'
+    } else {
+      contacts = unsubscribedContacts
+      analysisType = 'unsubscribed'
+    }
+
+    // Strip PII, keep only analytical fields, cap at 200
+    const sanitized = contacts.slice(0, 200).map((c: any) => ({
+      company: c.company,
+      tags: c.tags,
+      industry: c.industry,
+      record_type: c.record_type,
+      source_code: c.source_code,
+      engagement_score: c.engagement_score,
+      total_opens: c.total_opens,
+      total_clicks: c.total_clicks,
+      last_engaged_at: c.last_engaged_at,
+      bounce_status: c.bounce_status,
+      bounced_at: c.bounced_at,
+      unsubscribed_at: c.unsubscribed_at,
+      created_at: c.created_at,
+      custom_fields: c.custom_fields,
+    }))
+
+    try {
+      const response = await fetch(`${API_URL}/api/analyze-subscribers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          analysisType,
+          contacts: sanitized,
+          totalContactCount: contacts.length,
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json()
+        throw new Error(errorData.error || 'Analysis failed')
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('Streaming not supported')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6))
+              if (data.type === 'text') {
+                setAiAnalysis(prev => (prev || '') + data.text)
+              } else if (data.type === 'error') {
+                setAiAnalysisError(data.error)
+              }
+            } catch {
+              // ignore parse errors for incomplete chunks
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      setAiAnalysisError(err.message || 'Analysis failed')
+    } finally {
+      setAiAnalysisLoading(false)
+    }
+  }
+
   // Load subscriber data when switching to subscribers view
   useEffect(() => {
     if (viewMode === 'subscribers' && selectedClient) {
@@ -1154,26 +1246,39 @@ export default function Analytics() {
                     Tag {selectedSubscriberIds.size} Selected
                   </Button>
                 )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleAnalyzeWithAI}
+                  disabled={aiAnalysisLoading || (subscriberTab === 'top' ? topSubscribers.length === 0 : subscriberTab === 'bounced' ? bouncedContacts.length === 0 : unsubscribedContacts.length === 0)}
+                >
+                  {aiAnalysisLoading ? (
+                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4 mr-1" />
+                  )}
+                  {aiAnalysisLoading ? 'Analyzing...' : 'Analyze with AI'}
+                </Button>
               </div>
               <div className="flex gap-2">
                 <Button
                   variant={subscriberTab === 'top' ? 'primary' : 'outline'}
                   size="sm"
-                  onClick={() => setSubscriberTab('top')}
+                  onClick={() => { setSubscriberTab('top'); setAiAnalysis(null); setAiAnalysisError(null) }}
                 >
                   Top Engaged ({topSubscribers.length})
                 </Button>
                 <Button
                   variant={subscriberTab === 'bounced' ? 'primary' : 'outline'}
                   size="sm"
-                  onClick={() => setSubscriberTab('bounced')}
+                  onClick={() => { setSubscriberTab('bounced'); setAiAnalysis(null); setAiAnalysisError(null) }}
                 >
                   Bounced ({bouncedContacts.length})
                 </Button>
                 <Button
                   variant={subscriberTab === 'unsubscribed' ? 'primary' : 'outline'}
                   size="sm"
-                  onClick={() => setSubscriberTab('unsubscribed')}
+                  onClick={() => { setSubscriberTab('unsubscribed'); setAiAnalysis(null); setAiAnalysisError(null) }}
                 >
                   Unsubscribed ({unsubscribedContacts.length})
                 </Button>
@@ -1181,6 +1286,45 @@ export default function Analytics() {
             </div>
           </CardHeader>
           <CardContent>
+            {/* AI Analysis Results */}
+            {aiAnalysisError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                Analysis failed: {aiAnalysisError}
+                <button onClick={() => setAiAnalysisError(null)} className="ml-2 text-red-500 hover:text-red-700">
+                  <X className="h-3 w-3 inline" />
+                </button>
+              </div>
+            )}
+            {(aiAnalysis !== null && aiAnalysis !== '') && (
+              <div className="mb-4 p-4 bg-gradient-to-r from-purple-50 to-blue-50 border border-purple-200 rounded-lg relative">
+                <button
+                  onClick={() => { setAiAnalysis(null); setAiAnalysisError(null) }}
+                  className="absolute top-2 right-2 text-gray-400 hover:text-gray-600"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+                <div className="flex items-center gap-2 mb-3">
+                  <Sparkles className="h-4 w-4 text-purple-600" />
+                  <h4 className="text-sm font-semibold text-purple-900">AI Analysis</h4>
+                  {aiAnalysisLoading && <Loader2 className="h-3 w-3 animate-spin text-purple-500" />}
+                </div>
+                <div
+                  className="text-sm text-gray-800 prose prose-sm max-w-none prose-headings:text-purple-900 prose-strong:text-gray-900 prose-li:my-0.5"
+                  dangerouslySetInnerHTML={{
+                    __html: (aiAnalysis || '')
+                      .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+                      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+                      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+                      .replace(/^- (.*$)/gm, '<li>$1</li>')
+                      .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+                      .replace(/^\d+\. (.*$)/gm, '<li>$1</li>')
+                      .replace(/\n\n/g, '<br/><br/>')
+                      .replace(/\n/g, '<br/>')
+                  }}
+                />
+              </div>
+            )}
             {loadingSubscribers ? (
               <div className="text-center py-12 text-gray-500">Loading subscriber data...</div>
             ) : subscriberTab === 'top' ? (
