@@ -1491,6 +1491,84 @@ app.get('/api/health', (req, res) => {
 })
 
 /**
+ * AI Subscriber Analysis endpoint
+ * Streams Claude's analysis of subscriber segments
+ */
+const analyzeRateLimit = { timestamps: [] }
+app.post('/api/analyze-subscribers', async (req, res) => {
+  // Simple rate limiting: 10 requests per minute
+  const now = Date.now()
+  analyzeRateLimit.timestamps = analyzeRateLimit.timestamps.filter(t => now - t < 60000)
+  if (analyzeRateLimit.timestamps.length >= 10) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a minute.' })
+  }
+  analyzeRateLimit.timestamps.push(now)
+
+  try {
+    const { analysisType, contacts, totalContactCount } = req.body
+
+    if (!contacts || !Array.isArray(contacts) || contacts.length === 0) {
+      return res.status(400).json({ error: 'No contacts provided' })
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+    }
+
+    const Anthropic = require('@anthropic-ai/sdk')
+    const anthropic = new Anthropic()
+
+    const systemPrompt = `You are an email marketing analyst. You are given subscriber data from an email marketing tool (PII has been removed). Provide concise, actionable insights in markdown format. Focus on patterns and recommendations. Use headers, bullet points, and bold text for readability. Keep your response under 500 words.`
+
+    const typePrompts = {
+      top_engaged: `Analyze these ${contacts.length} top-engaged email subscribers (out of ${totalContactCount || 'unknown'} total contacts). Look for commonalities in company, industry, tags, source codes, and engagement timing. What patterns distinguish high engagers? Provide 3-5 actionable insights for the marketing team.`,
+      opened_and_clicked: `Analyze these ${contacts.length} subscribers who both opened AND clicked emails (out of ${totalContactCount || 'unknown'} total contacts). Look for commonalities in company, industry, tags, source codes, and engagement patterns. What makes these contacts more engaged than others? Provide 3-5 actionable insights.`,
+      bounced: `Analyze these ${contacts.length} bounced email contacts. Look for patterns in bounce type (hard vs soft), industry, company domains, source codes, and timing. What might explain the bounces? Provide actionable recommendations to reduce bounce rates.`,
+      unsubscribed: `Analyze these ${contacts.length} unsubscribed contacts. Look for patterns in when they unsubscribed, their prior engagement levels, industries, tags, and source codes. What might have caused them to leave? Provide actionable recommendations to reduce churn.`
+    }
+
+    const userPrompt = `${typePrompts[analysisType] || typePrompts.top_engaged}\n\nSubscriber data:\n${JSON.stringify(contacts.slice(0, 200), null, 2)}`
+
+    // Set up SSE streaming
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    })
+
+    const stream = anthropic.messages.stream({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+
+    stream.on('text', (text) => {
+      res.write(`data: ${JSON.stringify({ type: 'text', text })}\n\n`)
+    })
+
+    stream.on('end', () => {
+      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
+      res.end()
+    })
+
+    stream.on('error', (error) => {
+      console.error('Claude streaming error:', error)
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Analysis failed' })}\n\n`)
+      res.end()
+    })
+
+  } catch (error) {
+    console.error('Analyze subscribers error:', error)
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to analyze subscribers' })
+    } else {
+      res.end()
+    }
+  }
+})
+
+/**
  * Gravity Forms webhook endpoint
  * Receives form submissions and adds email to contacts for Alconox client
  * Configure in Gravity Forms: Settings → Webhooks → Add New
@@ -2364,10 +2442,10 @@ app.post('/api/salesforce/sync', async (req, res) => {
       // Continue with contacts even if leads fail
     }
 
-    // Sync Contacts (no Account.Name - not available in this org)
+    // Sync Contacts (Account.Name provides company for Contacts)
     const contactsQuery = syncSince
-      ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
-      : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+      ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
+      : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Contacts...`)
 
@@ -2391,6 +2469,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             email: contact.Email.toLowerCase().trim(),
             first_name: contact.FirstName || null,
             last_name: contact.LastName || null,
+            company: (contact.Account && contact.Account.Name) || null,
             salesforce_id: contact.Id,
             record_type: 'contact',
             industry: contact.Industry__c || null,
@@ -2475,7 +2554,7 @@ app.get('/api/salesforce/preview', async (req, res) => {
     if (targetObject === 'Lead') {
       query = `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, LastModifiedDate FROM Lead WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
     } else {
-      query = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
+      query = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
     }
 
     const result = await conn.query(query)
@@ -2515,7 +2594,7 @@ app.get('/api/salesforce/lookup', async (req, res) => {
     // Query Leads and Contacts in parallel
     const [leadResult, contactResult] = await Promise.all([
       conn.query(`SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Lead WHERE Email = '${sanitizedEmail}'`),
-      conn.query(`SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`),
+      conn.query(`SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`),
     ])
 
     const leads = (leadResult.records || []).map(r => ({
@@ -2538,7 +2617,7 @@ app.get('/api/salesforce/lookup', async (req, res) => {
       email: r.Email,
       firstName: r.FirstName,
       lastName: r.LastName,
-      company: null,
+      company: (r.Account && r.Account.Name) || null,
       industry: r.Industry__c,
       sourceCode: r.Source_Code1__c,
       sourceCodeHistory: r.Source_Code_History__c,
@@ -4371,10 +4450,10 @@ app.listen(PORT, () => {
             }
           }
 
-          // Sync Contacts
+          // Sync Contacts (Account.Name provides company for Contacts)
           const contactsQuery = lastSync
-            ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-            : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+            ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+            : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
 
           let contacts = await conn.query(contactsQuery)
           console.log(`  📥 Found ${contacts.totalSize} contacts to sync`)
@@ -4388,6 +4467,7 @@ app.listen(PORT, () => {
                 email: contact.Email.toLowerCase().trim(),
                 first_name: contact.FirstName || null,
                 last_name: contact.LastName || null,
+                company: (contact.Account && contact.Account.Name) || null,
                 salesforce_id: contact.Id,
                 record_type: 'contact',
                 industry: contact.Industry__c || null,
