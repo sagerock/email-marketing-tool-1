@@ -2443,10 +2443,10 @@ app.post('/api/salesforce/sync', async (req, res) => {
       // Continue with contacts even if leads fail
     }
 
-    // Sync Contacts (Account.Name provides company for Contacts)
+    // Sync Contacts
     const contactsQuery = syncSince
-      ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
-      : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+      ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
+      : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Contacts...`)
 
@@ -2470,7 +2470,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             email: contact.Email.toLowerCase().trim(),
             first_name: contact.FirstName || null,
             last_name: contact.LastName || null,
-            company: (contact.Account && contact.Account.Name) || null,
+            company: null,
             salesforce_id: contact.Id,
             record_type: 'contact',
             industry: contact.Industry__c || null,
@@ -2556,7 +2556,7 @@ app.get('/api/salesforce/preview', async (req, res) => {
     if (targetObject === 'Lead') {
       query = `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, LastModifiedDate FROM Lead WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
     } else {
-      query = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
+      query = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
     }
 
     const result = await conn.query(query)
@@ -2596,7 +2596,7 @@ app.get('/api/salesforce/lookup', async (req, res) => {
     // Query Leads and Contacts in parallel
     const [leadResult, contactResult] = await Promise.all([
       conn.query(`SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Lead WHERE Email = '${sanitizedEmail}'`),
-      conn.query(`SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`),
+      conn.query(`SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`),
     ])
 
     const leads = (leadResult.records || []).map(r => ({
@@ -2619,7 +2619,7 @@ app.get('/api/salesforce/lookup', async (req, res) => {
       email: r.Email,
       firstName: r.FirstName,
       lastName: r.LastName,
-      company: (r.Account && r.Account.Name) || null,
+      company: null,
       industry: r.Industry__c,
       sourceCode: r.Source_Code1__c,
       sourceCodeHistory: r.Source_Code_History__c,
@@ -5126,10 +5126,10 @@ app.listen(PORT, () => {
             }
           }
 
-          // Sync Contacts (Account.Name provides company for Contacts)
+          // Sync Contacts
           const contactsQuery = lastSync
-            ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-            : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+            ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+            : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
 
           let contacts = await conn.query(contactsQuery)
           console.log(`  📥 Found ${contacts.totalSize} contacts to sync`)
@@ -5143,7 +5143,7 @@ app.listen(PORT, () => {
                 email: contact.Email.toLowerCase().trim(),
                 first_name: contact.FirstName || null,
                 last_name: contact.LastName || null,
-                company: (contact.Account && contact.Account.Name) || null,
+                company: null,
                 salesforce_id: contact.Id,
                 record_type: 'contact',
                 industry: contact.Industry__c || null,
