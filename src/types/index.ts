@@ -276,3 +276,70 @@ export interface IndustryLink {
   created_at: string
   updated_at: string
 }
+
+// AI Follow-up Agent Types
+export type AIFollowupContactStatus = 'pending' | 'in_progress' | 'completed' | 'opted_out'
+export type AIFollowupDraftStatus = 'pending' | 'approved' | 'rejected' | 'sent' | 'failed'
+
+export interface AIFollowupConfig {
+  id: string
+  client_id: string
+  name: string
+  enabled: boolean
+  trigger_tag: string
+  from_email: string
+  from_name: string
+  reply_to?: string
+  max_followups: number
+  followup_delays: number[]
+  system_prompt?: string
+  log_to_salesforce: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface AIFollowupContact {
+  id: string
+  config_id: string
+  contact_id: string
+  client_id: string
+  status: AIFollowupContactStatus
+  current_step: number
+  enrolled_at: string
+  completed_at?: string
+  last_email_sent_at?: string
+  next_followup_at?: string
+  replied: boolean
+  created_at: string
+  // Joined fields
+  contact?: Contact
+  config?: AIFollowupConfig
+}
+
+export interface AIFollowupDraft {
+  id: string
+  followup_contact_id: string
+  contact_id: string
+  client_id: string
+  config_id: string
+  step_number: number
+  subject?: string
+  html_content?: string
+  plain_text?: string
+  ai_model?: string
+  ai_prompt_context?: Record<string, any>
+  status: AIFollowupDraftStatus
+  reviewed_by?: string
+  reviewed_at?: string
+  rejection_reason?: string
+  sent_at?: string
+  sendgrid_message_id?: string
+  salesforce_task_id?: string
+  error_message?: string
+  created_at: string
+  updated_at: string
+  // Joined fields
+  contact?: Contact
+  config?: AIFollowupConfig
+  followup_contact?: AIFollowupContact
+}

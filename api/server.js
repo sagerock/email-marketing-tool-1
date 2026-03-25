@@ -2428,6 +2428,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
         totalSynced += batchRecords.length
         await addSourceCodeTags(batchRecords, clientId, 'lead')
+        await checkAiFollowupEnrollment(batchRecords, clientId)
 
         // Check if there are more records to fetch
         if (!leads.done && leads.nextRecordsUrl) {
@@ -2487,6 +2488,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
         totalSynced += batchRecords.length
         await addSourceCodeTags(batchRecords, clientId, 'contact')
+        await checkAiFollowupEnrollment(batchRecords, clientId)
 
         // Check if there are more records to fetch
         if (!contacts.done && contacts.nextRecordsUrl) {
@@ -3945,6 +3947,627 @@ app.post('/api/contact', async (req, res) => {
   }
 })
 
+// ============================================================
+// AI Follow-up Agent Endpoints
+// ============================================================
+
+// Get all AI agent configs for a client
+app.get('/api/ai-followup/configs', async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const { data, error } = await supabase
+      .from('ai_followup_config')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error fetching AI configs:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Create a new AI agent config
+app.post('/api/ai-followup/configs', async (req, res) => {
+  try {
+    const { clientId, name, trigger_tag, from_email, from_name, reply_to, max_followups, followup_delays, system_prompt, log_to_salesforce } = req.body
+    if (!clientId || !name || !from_email || !from_name) {
+      return res.status(400).json({ error: 'clientId, name, from_email, and from_name are required' })
+    }
+
+    const { data, error } = await supabase
+      .from('ai_followup_config')
+      .insert({
+        client_id: clientId,
+        name,
+        trigger_tag: trigger_tag || 'Sample Request',
+        from_email,
+        from_name,
+        reply_to,
+        max_followups: max_followups || 3,
+        followup_delays: followup_delays || [1, 3, 7],
+        system_prompt: system_prompt || null,
+        log_to_salesforce: log_to_salesforce || false,
+        enabled: false,
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error creating AI config:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Update an AI agent config
+app.put('/api/ai-followup/configs/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const updates = req.body
+
+    // Remove fields that shouldn't be directly updated
+    delete updates.id
+    delete updates.created_at
+    delete updates.client_id
+
+    const { data, error } = await supabase
+      .from('ai_followup_config')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error updating AI config:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Delete an AI agent config
+app.delete('/api/ai-followup/configs/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { error } = await supabase
+      .from('ai_followup_config')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error deleting AI config:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Generate an AI draft for a specific contact
+app.post('/api/ai-followup/generate', async (req, res) => {
+  try {
+    const { contactId, configId } = req.body
+    if (!contactId || !configId) {
+      return res.status(400).json({ error: 'contactId and configId are required' })
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+    }
+
+    // Fetch config
+    const { data: config, error: configError } = await supabase
+      .from('ai_followup_config')
+      .select('*')
+      .eq('id', configId)
+      .single()
+    if (configError) throw configError
+
+    // Fetch contact
+    const { data: contact, error: contactError } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('id', contactId)
+      .single()
+    if (contactError) throw contactError
+
+    // Fetch the followup contact record (if enrolled)
+    const { data: followupContact } = await supabase
+      .from('ai_followup_contacts')
+      .select('*')
+      .eq('config_id', configId)
+      .eq('contact_id', contactId)
+      .single()
+
+    const stepNumber = followupContact ? followupContact.current_step + 1 : 1
+
+    // Fetch previous drafts for context
+    const { data: previousDrafts } = await supabase
+      .from('ai_followup_drafts')
+      .select('step_number, subject, plain_text, status')
+      .eq('config_id', configId)
+      .eq('contact_id', contactId)
+      .in('status', ['sent', 'approved'])
+      .order('step_number', { ascending: true })
+
+    // Build the AI prompt
+    const Anthropic = require('@anthropic-ai/sdk')
+    const anthropic = new Anthropic()
+
+    const contactContext = [
+      `Contact: ${contact.first_name || ''} ${contact.last_name || ''}`.trim(),
+      contact.email ? `Email: ${contact.email}` : null,
+      contact.company ? `Company: ${contact.company}` : null,
+      contact.industry ? `Industry: ${contact.industry}` : null,
+      contact.source_code ? `Source: ${contact.source_code}` : null,
+      `Follow-up #${stepNumber} of ${config.max_followups}`,
+    ].filter(Boolean).join('\n')
+
+    let previousContext = ''
+    if (previousDrafts && previousDrafts.length > 0) {
+      previousContext = '\n\nPrevious emails sent to this contact:\n' +
+        previousDrafts.map(d => `- Follow-up #${d.step_number}: Subject: "${d.subject}" | ${d.plain_text?.substring(0, 200) || '(no text)'}...`).join('\n')
+    }
+
+    const systemPrompt = config.system_prompt || `You are a friendly follow-up assistant. Your job is to write brief, professional follow-up emails. Keep emails under 150 words. Be warm and conversational, not salesy.`
+
+    const userPrompt = `Write a follow-up email for this contact. Return ONLY a JSON object with "subject" and "body" fields. The body should be plain text (no HTML). Do not include any other text outside the JSON.
+
+${contactContext}${previousContext}`
+
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+
+    // Parse the AI response
+    const aiText = response.content[0].text
+    let parsed
+    try {
+      // Try to extract JSON from the response (handle markdown code blocks)
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/)
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : aiText)
+    } catch (e) {
+      console.error('Failed to parse AI response:', aiText)
+      return res.status(500).json({ error: 'Failed to parse AI response', raw: aiText })
+    }
+
+    // Convert plain text body to simple HTML
+    const htmlContent = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">${parsed.body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>').replace(/^/, '<p>').replace(/$/, '</p>')}</div>`
+
+    // Insert the draft
+    const { data: draft, error: draftError } = await supabase
+      .from('ai_followup_drafts')
+      .insert({
+        followup_contact_id: followupContact?.id || null,
+        contact_id: contactId,
+        client_id: config.client_id,
+        config_id: configId,
+        step_number: stepNumber,
+        subject: parsed.subject,
+        html_content: htmlContent,
+        plain_text: parsed.body,
+        ai_model: 'claude-sonnet-4-20250514',
+        ai_prompt_context: { contact: { first_name: contact.first_name, last_name: contact.last_name, company: contact.company, industry: contact.industry, source_code: contact.source_code }, step: stepNumber, previous_drafts_count: previousDrafts?.length || 0 },
+        status: 'pending',
+      })
+      .select()
+      .single()
+
+    if (draftError) throw draftError
+
+    console.log(`🤖 AI draft generated for ${contact.email} (step ${stepNumber}) - config: ${config.name}`)
+    res.json(draft)
+  } catch (error) {
+    console.error('Error generating AI draft:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// List drafts for the approval queue
+app.get('/api/ai-followup/drafts', async (req, res) => {
+  try {
+    const { clientId, status, configId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    let query = supabase
+      .from('ai_followup_drafts')
+      .select(`
+        *,
+        contact:contacts(id, email, first_name, last_name, company, industry, salesforce_id),
+        config:ai_followup_config(id, name, from_email, from_name, reply_to, log_to_salesforce)
+      `)
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+
+    if (status) query = query.eq('status', status)
+    if (configId) query = query.eq('config_id', configId)
+
+    const { data, error } = await query
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error fetching AI drafts:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Approve and send an AI draft
+app.post('/api/ai-followup/drafts/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { reviewedBy } = req.body
+
+    // Fetch the draft with config and contact info
+    const { data: draft, error: draftError } = await supabase
+      .from('ai_followup_drafts')
+      .select(`
+        *,
+        contact:contacts(id, email, first_name, last_name, salesforce_id, unsubscribed),
+        config:ai_followup_config(id, name, from_email, from_name, reply_to, log_to_salesforce, max_followups, followup_delays, client_id)
+      `)
+      .eq('id', id)
+      .single()
+
+    if (draftError) throw draftError
+    if (!draft) return res.status(404).json({ error: 'Draft not found' })
+    if (draft.status !== 'pending') return res.status(400).json({ error: `Draft is already ${draft.status}` })
+    if (draft.contact?.unsubscribed) return res.status(400).json({ error: 'Contact has unsubscribed' })
+
+    // Fetch client SendGrid API key
+    const { data: client } = await supabase
+      .from('clients')
+      .select('sendgrid_api_key')
+      .eq('id', draft.client_id)
+      .single()
+
+    if (!client?.sendgrid_api_key) {
+      return res.status(400).json({ error: 'Client does not have a SendGrid API key configured' })
+    }
+
+    // Build unsubscribe URL
+    const baseUrl = process.env.BASE_URL || process.env.FRONTEND_URL || 'https://mail.sagerock.com'
+
+    // Fetch the contact's unsubscribe token
+    const { data: fullContact } = await supabase
+      .from('contacts')
+      .select('unsubscribe_token')
+      .eq('id', draft.contact_id)
+      .single()
+
+    const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${fullContact?.unsubscribe_token || ''}`
+
+    // Send via SendGrid
+    sgMail.setApiKey(client.sendgrid_api_key)
+    const msg = {
+      to: draft.contact.email,
+      from: { email: draft.config.from_email, name: draft.config.from_name },
+      replyTo: draft.config.reply_to || undefined,
+      subject: draft.subject,
+      html: draft.html_content,
+      text: draft.plain_text,
+      customArgs: {
+        ai_followup_draft_id: draft.id,
+        ai_followup_config_id: draft.config_id,
+      },
+      headers: {
+        'List-Unsubscribe': `<${unsubscribeUrl}>`,
+        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+      },
+    }
+
+    const [sgResponse] = await sgMail.send(msg)
+    const messageId = sgResponse?.headers?.['x-message-id'] || null
+
+    // Update draft status to sent
+    const now = new Date().toISOString()
+    await supabase
+      .from('ai_followup_drafts')
+      .update({
+        status: 'sent',
+        reviewed_by: reviewedBy || null,
+        reviewed_at: now,
+        sent_at: now,
+        sendgrid_message_id: messageId,
+      })
+      .eq('id', id)
+
+    // Update followup contact record
+    if (draft.followup_contact_id) {
+      const config = draft.config
+      const nextStep = draft.step_number
+      const isComplete = nextStep >= config.max_followups
+
+      const contactUpdate = {
+        current_step: nextStep,
+        last_email_sent_at: now,
+      }
+
+      if (isComplete) {
+        contactUpdate.status = 'completed'
+        contactUpdate.completed_at = now
+        contactUpdate.next_followup_at = null
+      } else {
+        // Calculate next followup time
+        const delayDays = config.followup_delays[nextStep] || config.followup_delays[config.followup_delays.length - 1] || 7
+        const nextDate = new Date()
+        nextDate.setDate(nextDate.getDate() + delayDays)
+        contactUpdate.next_followup_at = nextDate.toISOString()
+      }
+
+      await supabase
+        .from('ai_followup_contacts')
+        .update(contactUpdate)
+        .eq('id', draft.followup_contact_id)
+    }
+
+    // Salesforce Task write-back (non-blocking)
+    if (draft.config.log_to_salesforce && draft.contact.salesforce_id) {
+      try {
+        const taskResult = await createSalesforceTask(draft.client_id, {
+          whoId: draft.contact.salesforce_id,
+          subject: `AI Follow-up: ${draft.subject}`,
+          description: `Automated follow-up email sent via AI Agent "${draft.config.name}".\n\nStep ${draft.step_number} of ${draft.config.max_followups}.\n\n${draft.plain_text}`,
+        })
+        if (taskResult?.id) {
+          await supabase
+            .from('ai_followup_drafts')
+            .update({ salesforce_task_id: taskResult.id })
+            .eq('id', id)
+        }
+      } catch (sfError) {
+        console.error('⚠️ SF Task creation failed (non-blocking):', sfError.message)
+      }
+    }
+
+    console.log(`✅ AI draft approved and sent to ${draft.contact.email} (${draft.config.name} step ${draft.step_number})`)
+    res.json({ success: true, messageId })
+  } catch (error) {
+    console.error('Error approving AI draft:', error)
+    // Update draft as failed
+    await supabase
+      .from('ai_followup_drafts')
+      .update({ status: 'failed', error_message: error.message })
+      .eq('id', req.params.id)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Reject an AI draft
+app.post('/api/ai-followup/drafts/:id/reject', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { rejectionReason, regenerate, reviewedBy } = req.body
+
+    const now = new Date().toISOString()
+    const { data: draft, error } = await supabase
+      .from('ai_followup_drafts')
+      .update({
+        status: 'rejected',
+        rejection_reason: rejectionReason || null,
+        reviewed_by: reviewedBy || null,
+        reviewed_at: now,
+      })
+      .eq('id', id)
+      .select('*, config:ai_followup_config(id, name)')
+      .single()
+
+    if (error) throw error
+
+    console.log(`❌ AI draft rejected for config "${draft.config?.name}" - reason: ${rejectionReason || 'none'}`)
+
+    // Optionally regenerate
+    if (regenerate) {
+      // Trigger generation of a new draft (reuse the generate endpoint logic)
+      const generateRes = await fetch(`http://localhost:${PORT}/api/ai-followup/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId: draft.contact_id, configId: draft.config_id }),
+      })
+      const newDraft = await generateRes.json()
+      return res.json({ success: true, regenerated: true, newDraft })
+    }
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error rejecting AI draft:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Edit an AI draft
+app.put('/api/ai-followup/drafts/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { subject, html_content, plain_text } = req.body
+
+    const updates = {}
+    if (subject !== undefined) updates.subject = subject
+    if (html_content !== undefined) updates.html_content = html_content
+    if (plain_text !== undefined) updates.plain_text = plain_text
+
+    const { data, error } = await supabase
+      .from('ai_followup_drafts')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error updating AI draft:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get pipeline contacts for a client
+app.get('/api/ai-followup/contacts', async (req, res) => {
+  try {
+    const { clientId, configId, status } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    let query = supabase
+      .from('ai_followup_contacts')
+      .select(`
+        *,
+        contact:contacts(id, email, first_name, last_name, company, industry),
+        config:ai_followup_config(id, name)
+      `)
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+
+    if (configId) query = query.eq('config_id', configId)
+    if (status) query = query.eq('status', status)
+
+    const { data, error } = await query
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error fetching AI pipeline contacts:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Manually enroll a contact in an AI agent
+app.post('/api/ai-followup/enroll', async (req, res) => {
+  try {
+    const { contactId, configId } = req.body
+    if (!contactId || !configId) {
+      return res.status(400).json({ error: 'contactId and configId are required' })
+    }
+
+    const { data: config } = await supabase
+      .from('ai_followup_config')
+      .select('*')
+      .eq('id', configId)
+      .single()
+
+    if (!config) return res.status(404).json({ error: 'AI agent config not found' })
+
+    const delayDays = config.followup_delays[0] || 1
+    const nextDate = new Date()
+    nextDate.setDate(nextDate.getDate() + delayDays)
+
+    const { data, error } = await supabase
+      .from('ai_followup_contacts')
+      .upsert({
+        config_id: configId,
+        contact_id: contactId,
+        client_id: config.client_id,
+        status: 'in_progress',
+        current_step: 0,
+        next_followup_at: nextDate.toISOString(),
+      }, { onConflict: 'config_id,contact_id' })
+      .select()
+      .single()
+
+    if (error) throw error
+    console.log(`📥 Contact ${contactId} enrolled in AI agent "${config.name}"`)
+    res.json(data)
+  } catch (error) {
+    console.error('Error enrolling contact:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Salesforce Task write-back helper
+async function createSalesforceTask(clientId, { whoId, subject, description }) {
+  const conn = await getSalesforceConnection(clientId)
+  const result = await conn.sobject('Task').create({
+    WhoId: whoId,
+    Subject: subject,
+    Description: description,
+    Status: 'Completed',
+    ActivityDate: new Date().toISOString().split('T')[0],
+    Type: 'Email',
+  })
+  return result
+}
+
+// AI Follow-up enrollment check (called after Salesforce sync)
+async function checkAiFollowupEnrollment(batchRecords, clientId) {
+  try {
+    // Fetch all enabled AI configs for this client
+    const { data: configs } = await supabase
+      .from('ai_followup_config')
+      .select('*')
+      .eq('client_id', clientId)
+      .eq('enabled', true)
+
+    if (!configs || configs.length === 0) return
+
+    for (const config of configs) {
+      // Find contacts in batch that match the trigger tag
+      const matchingEmails = batchRecords
+        .filter(r => {
+          const sourceCode = r.Source_code__c || r.Source_Code1__c || ''
+          const sourceHistory = r.Source_Code_History__c || ''
+          return sourceCode.includes(config.trigger_tag) || sourceHistory.includes(config.trigger_tag)
+        })
+        .map(r => r.Email?.toLowerCase())
+        .filter(Boolean)
+
+      if (matchingEmails.length === 0) continue
+
+      // Look up contact IDs
+      const { data: contacts } = await supabase
+        .from('contacts')
+        .select('id, email')
+        .eq('client_id', clientId)
+        .in('email', matchingEmails)
+
+      if (!contacts || contacts.length === 0) continue
+
+      // Check which are already enrolled
+      const contactIds = contacts.map(c => c.id)
+      const { data: existing } = await supabase
+        .from('ai_followup_contacts')
+        .select('contact_id')
+        .eq('config_id', config.id)
+        .in('contact_id', contactIds)
+
+      const existingIds = new Set((existing || []).map(e => e.contact_id))
+      const newContacts = contacts.filter(c => !existingIds.has(c.id))
+
+      if (newContacts.length === 0) continue
+
+      // Enroll new contacts
+      const delayDays = config.followup_delays[0] || 1
+      const nextDate = new Date()
+      nextDate.setDate(nextDate.getDate() + delayDays)
+
+      const enrollments = newContacts.map(c => ({
+        config_id: config.id,
+        contact_id: c.id,
+        client_id: clientId,
+        status: 'in_progress',
+        current_step: 0,
+        next_followup_at: nextDate.toISOString(),
+      }))
+
+      const { error: enrollError } = await supabase
+        .from('ai_followup_contacts')
+        .insert(enrollments)
+
+      if (enrollError) {
+        console.error(`⚠️ AI enrollment error for config "${config.name}":`, enrollError.message)
+      } else {
+        console.log(`🤖 AI agent "${config.name}": enrolled ${newContacts.length} new contacts`)
+      }
+    }
+  } catch (error) {
+    console.error('⚠️ AI followup enrollment check error:', error.message)
+  }
+}
+
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
 
@@ -4357,12 +4980,62 @@ app.listen(PORT, () => {
       if (sent > 0 || failed > 0) {
         console.log(`📊 Sequence processing complete: ${sent} sent, ${failed} failed`)
       }
+
+      // ============ PART 3: AI Follow-up draft generation ============
+      // Find contacts that are due for their next follow-up and don't have a pending draft
+      try {
+        const { data: dueContacts } = await supabase
+          .from('ai_followup_contacts')
+          .select(`
+            *,
+            config:ai_followup_config(*)
+          `)
+          .eq('status', 'in_progress')
+          .lte('next_followup_at', now)
+          .limit(10) // Process up to 10 per minute to avoid rate limits
+
+        if (dueContacts && dueContacts.length > 0) {
+          for (const fc of dueContacts) {
+            // Check if there's already a pending draft for this contact+config
+            const { data: existingDraft } = await supabase
+              .from('ai_followup_drafts')
+              .select('id')
+              .eq('followup_contact_id', fc.id)
+              .eq('status', 'pending')
+              .limit(1)
+
+            if (existingDraft && existingDraft.length > 0) continue
+
+            // Check if config is still enabled
+            if (!fc.config?.enabled) continue
+
+            // Generate a draft via internal call
+            try {
+              const generateUrl = `http://localhost:${PORT}/api/ai-followup/generate`
+              const generateRes = await fetch(generateUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contactId: fc.contact_id, configId: fc.config_id }),
+              })
+              if (!generateRes.ok) {
+                const err = await generateRes.json()
+                console.error(`⚠️ AI draft generation failed for contact ${fc.contact_id}:`, err.error)
+              }
+            } catch (genError) {
+              console.error(`⚠️ AI draft generation error:`, genError.message)
+            }
+          }
+        }
+      } catch (aiError) {
+        console.error('⚠️ AI follow-up cron error:', aiError.message)
+      }
+
     } catch (error) {
       console.error('❌ Cron job error:', error.message)
     }
   })
 
-  console.log('✅ Cron job started (runs every minute) - processes scheduled campaigns and automation sequences')
+  console.log('✅ Cron job started (runs every minute) - processes scheduled campaigns, automation sequences, and AI follow-ups')
 
   // Daily Salesforce sync at 6 AM UTC
   cron.schedule('0 6 * * *', async () => {
@@ -4442,6 +5115,7 @@ app.listen(PORT, () => {
             }
             totalSynced += batchRecords.length
             await addSourceCodeTags(batchRecords, client.id, 'lead')
+            await checkAiFollowupEnrollment(batchRecords, client.id)
 
             if (!leads.done && leads.nextRecordsUrl) {
               leads = await conn.queryMore(leads.nextRecordsUrl)
@@ -4483,6 +5157,7 @@ app.listen(PORT, () => {
             }
             totalSynced += batchRecords.length
             await addSourceCodeTags(batchRecords, client.id, 'contact')
+            await checkAiFollowupEnrollment(batchRecords, client.id)
 
             if (!contacts.done && contacts.nextRecordsUrl) {
               contacts = await conn.queryMore(contacts.nextRecordsUrl)

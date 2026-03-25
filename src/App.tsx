@@ -14,6 +14,7 @@ import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
 import Unsubscribe from './pages/Unsubscribe'
 import Admin from './pages/Admin'
+import AIAgents from './pages/AIAgents'
 import BounceRecovery from './pages/BounceRecovery'
 import DebugAuth from './pages/DebugAuth'
 
@@ -87,6 +88,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Settings />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/ai-agents"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <AIAgents />
                   </Layout>
                 </ProtectedRoute>
               }

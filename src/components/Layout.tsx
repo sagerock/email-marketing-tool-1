@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { cn } from '../lib/utils'
-import { Users, Mail, BarChart3, FileText, Settings, Building2, LogOut, Shield, Zap, ShieldAlert } from 'lucide-react'
+import { Users, Mail, BarChart3, FileText, Settings, Building2, LogOut, Shield, Zap, ShieldAlert, Bot } from 'lucide-react'
 import { useClient } from '../context/ClientContext'
 import { useAuth } from '../contexts/AuthContext'
 import Button from './ui/Button'
@@ -15,6 +15,7 @@ const navigation = [
   { name: 'Email Designs', href: '/templates', icon: FileText },
   { name: 'Campaigns', href: '/campaigns', icon: Mail },
   { name: 'Automations', href: '/automations', icon: Zap },
+  { name: 'AI Agents', href: '/ai-agents', icon: Bot },
   { name: 'Analytics', href: '/analytics', icon: BarChart3 },
   { name: 'Bounce Recovery', href: '/bounce-recovery', icon: ShieldAlert },
   { name: 'Settings', href: '/settings', icon: Settings },
