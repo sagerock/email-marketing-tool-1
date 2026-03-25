@@ -54,6 +54,7 @@ export default function AIAgents() {
     from_email: '',
     from_name: '',
     reply_to: '',
+    bcc_email: '',
     max_followups: 3,
     followup_delays: '1, 3, 7',
     system_prompt: '',
@@ -186,6 +187,7 @@ export default function AIAgents() {
           from_email: newAgent.from_email,
           from_name: newAgent.from_name,
           reply_to: newAgent.reply_to || null,
+          bcc_email: newAgent.bcc_email || null,
           max_followups: newAgent.max_followups,
           followup_delays: delays,
           system_prompt: newAgent.system_prompt || null,
@@ -195,7 +197,7 @@ export default function AIAgents() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setShowCreateAgent(false)
-      setNewAgent({ name: '', trigger_tag: '', from_email: '', from_name: '', reply_to: '', max_followups: 3, followup_delays: '1, 3, 7', system_prompt: '', log_to_salesforce: false })
+      setNewAgent({ name: '', trigger_tag: '', from_email: '', from_name: '', reply_to: '', bcc_email: '', max_followups: 3, followup_delays: '1, 3, 7', system_prompt: '', log_to_salesforce: false })
       await fetchConfigs()
     } catch (error: any) {
       alert(`Failed to create agent: ${error.message}`)
@@ -636,6 +638,7 @@ export default function AIAgents() {
                         from_email: editingConfig.from_email,
                         from_name: editingConfig.from_name,
                         reply_to: editingConfig.reply_to || '',
+                        bcc_email: editingConfig.bcc_email || '',
                         max_followups: editingConfig.max_followups,
                         followup_delays: editingConfig.followup_delays.join(', '),
                         system_prompt: editingConfig.system_prompt || '',
@@ -651,6 +654,7 @@ export default function AIAgents() {
                             from_email: vals.from_email,
                             from_name: vals.from_name,
                             reply_to: vals.reply_to || undefined,
+                            bcc_email: vals.bcc_email || undefined,
                             max_followups: vals.max_followups,
                             followup_delays: delays,
                             system_prompt: vals.system_prompt || undefined,
@@ -702,7 +706,10 @@ export default function AIAgents() {
                                 <span className="font-medium">From:</span> {config.from_name} &lt;{config.from_email}&gt;
                               </p>
                               <p>
-                                <span className="font-medium">Schedule:</span> {config.max_followups} follow-ups at day{config.followup_delays.length > 1 ? 's' : ''} {config.followup_delays.join(', ')}
+                                {config.bcc_email && (
+                                <><span className="font-medium">BCC:</span> {config.bcc_email}<br/></>
+                              )}
+                              <span className="font-medium">Schedule:</span> {config.max_followups} follow-ups at day{config.followup_delays.length > 1 ? 's' : ''} {config.followup_delays.join(', ')}
                               </p>
                               {config.log_to_salesforce && (
                                 <p className="text-indigo-600">
@@ -823,6 +830,10 @@ function AgentForm({
           <label className="block text-sm font-medium text-gray-700 mb-1">Reply-To</label>
           <Input value={vals.reply_to} onChange={e => update('reply_to', e.target.value)} placeholder="Optional" />
         </div>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">BCC (copy of every sent email)</label>
+        <Input value={vals.bcc_email} onChange={e => update('bcc_email', e.target.value)} placeholder="Optional — e.g. team@company.com" />
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>

@@ -3974,7 +3974,7 @@ app.get('/api/ai-followup/configs', async (req, res) => {
 // Create a new AI agent config
 app.post('/api/ai-followup/configs', async (req, res) => {
   try {
-    const { clientId, name, trigger_tag, from_email, from_name, reply_to, max_followups, followup_delays, system_prompt, log_to_salesforce } = req.body
+    const { clientId, name, trigger_tag, from_email, from_name, reply_to, bcc_email, max_followups, followup_delays, system_prompt, log_to_salesforce } = req.body
     if (!clientId || !name || !from_email || !from_name) {
       return res.status(400).json({ error: 'clientId, name, from_email, and from_name are required' })
     }
@@ -3988,6 +3988,7 @@ app.post('/api/ai-followup/configs', async (req, res) => {
         from_email,
         from_name,
         reply_to,
+        bcc_email: bcc_email || null,
         max_followups: max_followups || 3,
         followup_delays: followup_delays || [1, 3, 7],
         system_prompt: system_prompt || null,
@@ -4182,7 +4183,7 @@ app.get('/api/ai-followup/drafts', async (req, res) => {
       .select(`
         *,
         contact:contacts(id, email, first_name, last_name, company, industry, salesforce_id),
-        config:ai_followup_config(id, name, from_email, from_name, reply_to, log_to_salesforce)
+        config:ai_followup_config(id, name, from_email, from_name, reply_to, bcc_email, log_to_salesforce)
       `)
       .eq('client_id', clientId)
       .order('created_at', { ascending: false })
@@ -4211,7 +4212,7 @@ app.post('/api/ai-followup/drafts/:id/approve', async (req, res) => {
       .select(`
         *,
         contact:contacts(id, email, first_name, last_name, salesforce_id, unsubscribed),
-        config:ai_followup_config(id, name, from_email, from_name, reply_to, log_to_salesforce, max_followups, followup_delays, client_id)
+        config:ai_followup_config(id, name, from_email, from_name, reply_to, bcc_email, log_to_salesforce, max_followups, followup_delays, client_id)
       `)
       .eq('id', id)
       .single()
@@ -4250,6 +4251,7 @@ app.post('/api/ai-followup/drafts/:id/approve', async (req, res) => {
       to: draft.contact.email,
       from: { email: draft.config.from_email, name: draft.config.from_name },
       replyTo: draft.config.reply_to || undefined,
+      bcc: draft.config.bcc_email ? [{ email: draft.config.bcc_email }] : undefined,
       subject: draft.subject,
       html: draft.html_content,
       text: draft.plain_text,

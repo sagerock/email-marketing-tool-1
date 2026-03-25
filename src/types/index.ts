@@ -290,6 +290,7 @@ export interface AIFollowupConfig {
   from_email: string
   from_name: string
   reply_to?: string
+  bcc_email?: string
   max_followups: number
   followup_delays: number[]
   system_prompt?: string
