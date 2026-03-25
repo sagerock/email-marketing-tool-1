@@ -2443,15 +2443,34 @@ app.post('/api/salesforce/sync', async (req, res) => {
       // Continue with contacts even if leads fail
     }
 
-    // Sync Contacts
-    const contactsQuery = syncSince
-      ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
-      : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+    // Sync Contacts — try with Account.Name first, fall back without if permission denied
+    let contactsQuery
+    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c'
+    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c'
+    let hasAccountAccess = true
+
+    contactsQuery = syncSince
+      ? `SELECT ${contactFieldsWithAccount} FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
+      : `SELECT ${contactFieldsWithAccount} FROM Contact WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Contacts...`)
 
     try {
-      let contacts = await conn.query(contactsQuery)
+      let contacts
+      try {
+        contacts = await conn.query(contactsQuery)
+      } catch (accountErr) {
+        if (accountErr.message?.includes('Account') || accountErr.message?.includes('relationship')) {
+          console.warn('⚠️ No access to Account relationship on Contact, falling back without Account.Name')
+          hasAccountAccess = false
+          contactsQuery = syncSince
+            ? `SELECT ${contactFieldsWithout} FROM Contact WHERE Email != null AND LastModifiedDate > ${syncSince}`
+            : `SELECT ${contactFieldsWithout} FROM Contact WHERE Email != null`
+          contacts = await conn.query(contactsQuery)
+        } else {
+          throw accountErr
+        }
+      }
       console.log(`Found ${contacts.totalSize} total contacts`)
 
       // Process all pages of results
@@ -2470,7 +2489,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             email: contact.Email.toLowerCase().trim(),
             first_name: contact.FirstName || null,
             last_name: contact.LastName || null,
-            company: null,
+            company: hasAccountAccess ? ((contact.Account && contact.Account.Name) || null) : null,
             salesforce_id: contact.Id,
             record_type: 'contact',
             industry: contact.Industry__c || null,
@@ -2556,10 +2575,20 @@ app.get('/api/salesforce/preview', async (req, res) => {
     if (targetObject === 'Lead') {
       query = `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, LastModifiedDate FROM Lead WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
     } else {
-      query = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
+      query = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
     }
 
-    const result = await conn.query(query)
+    let result
+    try {
+      result = await conn.query(query)
+    } catch (err) {
+      if (targetObject !== 'Lead' && (err.message?.includes('Account') || err.message?.includes('relationship'))) {
+        query = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, LastModifiedDate FROM Contact WHERE Email != null ORDER BY LastModifiedDate DESC LIMIT ${recordLimit}`
+        result = await conn.query(query)
+      } else {
+        throw err
+      }
+    }
 
     res.json({
       object: targetObject,
@@ -2594,10 +2623,19 @@ app.get('/api/salesforce/lookup', async (req, res) => {
     const sanitizedEmail = email.replace(/'/g, "\\'").replace(/\\/g, '\\\\')
 
     // Query Leads and Contacts in parallel
-    const [leadResult, contactResult] = await Promise.all([
-      conn.query(`SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Lead WHERE Email = '${sanitizedEmail}'`),
-      conn.query(`SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`),
-    ])
+    let contactQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`
+    const leadResult = await conn.query(`SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Lead WHERE Email = '${sanitizedEmail}'`)
+    let contactResult
+    try {
+      contactResult = await conn.query(contactQuery)
+    } catch (err) {
+      if (err.message?.includes('Account') || err.message?.includes('relationship')) {
+        contactQuery = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`
+        contactResult = await conn.query(contactQuery)
+      } else {
+        throw err
+      }
+    }
 
     const leads = (leadResult.records || []).map(r => ({
       type: 'Lead',
@@ -2619,7 +2657,7 @@ app.get('/api/salesforce/lookup', async (req, res) => {
       email: r.Email,
       firstName: r.FirstName,
       lastName: r.LastName,
-      company: null,
+      company: (r.Account && r.Account.Name) || null,
       industry: r.Industry__c,
       sourceCode: r.Source_Code1__c,
       sourceCodeHistory: r.Source_Code_History__c,
@@ -5126,12 +5164,26 @@ app.listen(PORT, () => {
             }
           }
 
-          // Sync Contacts
-          const contactsQuery = lastSync
-            ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-            : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
-
-          let contacts = await conn.query(contactsQuery)
+          // Sync Contacts — try with Account.Name, fall back without
+          let cronContactsQuery
+          let cronHasAccountAccess = true
+          try {
+            cronContactsQuery = lastSync
+              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+            var contacts = await conn.query(cronContactsQuery)
+          } catch (accountErr) {
+            if (accountErr.message?.includes('Account') || accountErr.message?.includes('relationship')) {
+              console.warn(`  ⚠️ No Account access for ${client.name}, falling back`)
+              cronHasAccountAccess = false
+              cronContactsQuery = lastSync
+                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+              var contacts = await conn.query(cronContactsQuery)
+            } else {
+              throw accountErr
+            }
+          }
           console.log(`  📥 Found ${contacts.totalSize} contacts to sync`)
 
           while (true) {
@@ -5143,7 +5195,7 @@ app.listen(PORT, () => {
                 email: contact.Email.toLowerCase().trim(),
                 first_name: contact.FirstName || null,
                 last_name: contact.LastName || null,
-                company: null,
+                company: cronHasAccountAccess ? ((contact.Account && contact.Account.Name) || null) : null,
                 salesforce_id: contact.Id,
                 record_type: 'contact',
                 industry: contact.Industry__c || null,
