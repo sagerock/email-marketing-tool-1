@@ -24,7 +24,7 @@ const navigation = [
 export default function Layout({ children }: LayoutProps) {
   const location = useLocation()
   const navigate = useNavigate()
-  const { selectedClient, setSelectedClient, clients, loading } = useClient()
+  const { selectedClient, setSelectedClient, clients, loading, canSwitchClients } = useClient()
   const { user, signOut, isSuperAdmin } = useAuth()
 
   const handleSignOut = async () => {
@@ -54,24 +54,25 @@ export default function Layout({ children }: LayoutProps) {
             <label className="block text-xs font-medium text-gray-500 mb-2 px-3">
               CURRENT CLIENT
             </label>
-            <select
-              value={selectedClient?.id || ''}
-              onChange={(e) => {
-                const client = clients.find((c) => c.id === e.target.value)
-                setSelectedClient(client || null)
-              }}
-              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            >
-              {clients.map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.name}
-                </option>
-              ))}
-            </select>
-            {selectedClient && (
-              <div className="mt-2 px-3 flex items-center gap-2 text-xs text-gray-500">
-                <Building2 className="h-3 w-3" />
-                <span className="truncate">{selectedClient.name}</span>
+            {canSwitchClients ? (
+              <select
+                value={selectedClient?.id || ''}
+                onChange={(e) => {
+                  const client = clients.find((c) => c.id === e.target.value)
+                  setSelectedClient(client || null)
+                }}
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                {clients.map((client) => (
+                  <option key={client.id} value={client.id}>
+                    {client.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <div className="px-3 py-2 text-sm font-medium text-gray-900 flex items-center gap-2">
+                <Building2 className="h-4 w-4 text-gray-400" />
+                {selectedClient?.name}
               </div>
             )}
           </div>

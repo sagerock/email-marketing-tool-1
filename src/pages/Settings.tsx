@@ -9,7 +9,7 @@ import Input from '../components/ui/Input'
 import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, ExternalLink, CheckCircle, XCircle, Loader2, Link2, Edit2, Users, TrendingUp, Search } from 'lucide-react'
 import Badge from '../components/ui/Badge'
 
-const API_URL = import.meta.env.VITE_API_URL || ''
+import { apiFetch } from '../lib/api'
 
 interface SalesforceStatus {
   connected: boolean
@@ -106,7 +106,7 @@ export default function Settings() {
     setLookupError(null)
     setLookupResults(null)
     try {
-      const res = await fetch(`${API_URL}/api/salesforce/lookup?clientId=${selectedClient.id}&email=${encodeURIComponent(lookupEmail.trim())}`)
+      const res = await apiFetch(`/api/salesforce/lookup?clientId=${selectedClient.id}&email=${encodeURIComponent(lookupEmail.trim())}`)
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Lookup failed')
       setLookupResults(data.records)
@@ -223,7 +223,7 @@ export default function Settings() {
     if (!selectedClient) return
     setSfLoading(true)
     try {
-      const response = await fetch(`${API_URL}/api/salesforce/status?clientId=${selectedClient.id}`)
+      const response = await apiFetch(`/api/salesforce/status?clientId=${selectedClient.id}`)
       const data = await response.json()
       setSfStatus(data)
     } catch (error) {
@@ -243,7 +243,7 @@ export default function Settings() {
 
     setSfConnecting(true)
     try {
-      const response = await fetch(`${API_URL}/api/salesforce/connect`, {
+      const response = await apiFetch(`/api/salesforce/connect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -275,7 +275,7 @@ export default function Settings() {
     if (!confirm('Are you sure you want to disconnect Salesforce? This will not delete any synced contacts.')) return
 
     try {
-      const response = await fetch(`${API_URL}/api/salesforce/disconnect`, {
+      const response = await apiFetch(`/api/salesforce/disconnect`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId: selectedClient.id }),
@@ -296,7 +296,7 @@ export default function Settings() {
     if (!selectedClient) return
     setSyncing(true)
     try {
-      const response = await fetch(`${API_URL}/api/salesforce/sync`, {
+      const response = await apiFetch(`/api/salesforce/sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId: selectedClient.id, fullSync }),
@@ -320,7 +320,7 @@ export default function Settings() {
   const fetchSalesforceFields = async () => {
     if (!selectedClient) return
     try {
-      const response = await fetch(`${API_URL}/api/salesforce/fields?clientId=${selectedClient.id}`)
+      const response = await apiFetch(`/api/salesforce/fields?clientId=${selectedClient.id}`)
       const data = await response.json()
       setSfFields(data)
       setShowFields(true)
@@ -334,7 +334,7 @@ export default function Settings() {
     if (!selectedClient) return
     setSyncingCampaigns(true)
     try {
-      const response = await fetch(`${API_URL}/api/salesforce/sync-campaigns`, {
+      const response = await apiFetch(`/api/salesforce/sync-campaigns`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId: selectedClient.id }),
@@ -346,7 +346,7 @@ export default function Settings() {
       // Poll status until no longer syncing
       const pollInterval = setInterval(async () => {
         try {
-          const statusRes = await fetch(`${API_URL}/api/salesforce/status?clientId=${selectedClient.id}`)
+          const statusRes = await apiFetch(`/api/salesforce/status?clientId=${selectedClient.id}`)
           const statusData = await statusRes.json()
           setSfStatus(statusData)
           if (statusData.campaignSyncStatus !== 'syncing') {
@@ -372,7 +372,7 @@ export default function Settings() {
     setBackfilling(true)
     setBackfillResult(null)
     try {
-      const response = await fetch(`${API_URL}/api/contacts/backfill-engagement`, {
+      const response = await apiFetch(`/api/contacts/backfill-engagement`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId: selectedClient.id }),
@@ -399,7 +399,7 @@ export default function Settings() {
     setSyncingBounceTypes(true)
     setBounceTypeSyncResult(null)
     try {
-      const response = await fetch(`${API_URL}/api/contacts/sync-bounce-types`, {
+      const response = await apiFetch(`/api/contacts/sync-bounce-types`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId: selectedClient.id }),

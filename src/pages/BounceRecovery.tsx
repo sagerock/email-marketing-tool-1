@@ -6,7 +6,7 @@ import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
 import { AlertTriangle, CheckCircle, Mail, RefreshCw, Search, Shield } from 'lucide-react'
 
-const API_URL = import.meta.env.VITE_API_URL || ''
+import { apiFetch } from '../lib/api'
 
 interface DomainSummary {
   domain: string
@@ -73,7 +73,7 @@ export default function BounceRecovery() {
     if (!selectedClient) return
     setLoadingSummary(true)
     try {
-      const res = await fetch(`${API_URL}/api/bounces/summary?clientId=${selectedClient.id}`)
+      const res = await apiFetch(`/api/bounces/summary?clientId=${selectedClient.id}`)
       const data = await res.json()
       if (res.ok) {
         setTotalBounces(data.totalHardBounces)
@@ -97,7 +97,7 @@ export default function BounceRecovery() {
       })
       if (domain) params.set('domain', domain)
 
-      const res = await fetch(`${API_URL}/api/bounces/contacts?${params}`)
+      const res = await apiFetch(`/api/bounces/contacts?${params}`)
       const data = await res.json()
       if (res.ok) {
         setContacts(data.contacts)
@@ -168,7 +168,7 @@ export default function BounceRecovery() {
     setRecovering(true)
     setRecoveryResult(null)
     try {
-      const res = await fetch(`${API_URL}/api/bounces/recover`, {
+      const res = await apiFetch(`/api/bounces/recover`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -208,7 +208,7 @@ export default function BounceRecovery() {
     setSending(true)
     setSendResult(null)
     try {
-      const res = await fetch(`${API_URL}/api/bounces/send-recovery`, {
+      const res = await apiFetch(`/api/bounces/send-recovery`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

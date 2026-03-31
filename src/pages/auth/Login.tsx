@@ -48,12 +48,9 @@ export default function Login() {
                   className="h-9 w-auto"
                 />
               </Link>
-              <Link
-                to="/signup"
-                className="text-sm text-slate-400 hover:text-white transition-colors"
-              >
-                Need an account?
-              </Link>
+              <span className="text-sm text-slate-500">
+                Contact your admin for access
+              </span>
             </div>
           </div>
         </header>
@@ -122,10 +119,7 @@ export default function Login() {
 
               <div className="mt-6 text-center">
                 <p className="text-sm text-slate-500">
-                  Don't have an account?{' '}
-                  <Link to="/signup" className="text-amber-600 hover:text-amber-700 font-medium">
-                    Sign up
-                  </Link>
+                  Need access? Contact your administrator.
                 </p>
               </div>
             </div>

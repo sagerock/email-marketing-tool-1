@@ -75,6 +75,294 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY // Use service key for backend
 )
 
+// ---- Auth Middleware ----
+
+async function authenticateUser(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '')
+  if (!token) return res.status(401).json({ error: 'Missing authorization token' })
+
+  try {
+    const { data: { user }, error } = await supabase.auth.getUser(token)
+    if (error || !user) return res.status(401).json({ error: 'Invalid or expired token' })
+
+    const { data: adminUser } = await supabase
+      .from('admin_users')
+      .select('*')
+      .eq('user_id', user.id)
+      .single()
+
+    if (!adminUser) return res.status(403).json({ error: 'Access denied' })
+
+    req.user = user
+    req.adminUser = adminUser
+    next()
+  } catch (err) {
+    return res.status(401).json({ error: 'Authentication failed' })
+  }
+}
+
+function requireSuperAdmin(req, res, next) {
+  if (req.adminUser?.role !== 'super_admin') {
+    return res.status(403).json({ error: 'Super admin access required' })
+  }
+  next()
+}
+
+function validateClientAccess(req, res, next) {
+  const { role, client_id } = req.adminUser
+
+  // Super admins and admins can access any client
+  if (role === 'super_admin' || role === 'admin') return next()
+
+  // Client admins: enforce their assigned client_id
+  if (role === 'client_admin') {
+    const requestedClientId = req.body?.clientId || req.query?.clientId
+    if (requestedClientId && requestedClientId !== client_id) {
+      return res.status(403).json({ error: 'Access denied to this client' })
+    }
+    // Inject assigned client_id so endpoints always have it
+    if (!req.body) req.body = {}
+    req.body.clientId = client_id
+    if (!req.query) req.query = {}
+    req.query.clientId = client_id
+    return next()
+  }
+
+  return res.status(403).json({ error: 'Access denied: unknown role' })
+}
+
+// Apply auth middleware to all /api/* routes except webhooks and health
+app.use('/api', (req, res, next) => {
+  // Skip auth for webhook endpoints (they have their own auth)
+  if (req.path.startsWith('/webhook/')) return next()
+  // Skip auth for contacts/upsert (uses API key auth)
+  if (req.path === '/contacts/upsert') return next()
+  // Skip auth for ip-pools (public)
+  if (req.path.startsWith('/ip-pools')) return next()
+  // Skip auth for accept-invite (user doesn't have an account yet)
+  if (req.path === '/auth/accept-invite') return next()
+
+  authenticateUser(req, res, (err) => {
+    if (err) return // authenticateUser already sent the response
+    validateClientAccess(req, res, next)
+  })
+})
+
+// ---- Admin User Management Endpoints ----
+
+// Invite a new user (custom token flow — avoids SendGrid click tracking consuming Supabase OTPs)
+app.post('/api/admin/invite-user', authenticateUser, requireSuperAdmin, async (req, res) => {
+  try {
+    const { email, role, clientId } = req.body
+    if (!email || !role) {
+      return res.status(400).json({ error: 'email and role are required' })
+    }
+    if (role === 'client_admin' && !clientId) {
+      return res.status(400).json({ error: 'clientId is required for client_admin role' })
+    }
+
+    const normalizedEmail = email.toLowerCase()
+
+    // Check if already an admin
+    const { data: existing } = await supabase
+      .from('admin_users')
+      .select('id')
+      .eq('email', normalizedEmail)
+      .single()
+    if (existing) {
+      return res.status(400).json({ error: 'This email already has admin access' })
+    }
+
+    // Check if there's already a pending invite
+    const { data: existingInvite } = await supabase
+      .from('invite_tokens')
+      .select('id')
+      .eq('email', normalizedEmail)
+      .is('accepted_at', null)
+      .gt('expires_at', new Date().toISOString())
+      .single()
+    if (existingInvite) {
+      return res.status(400).json({ error: 'A pending invite already exists for this email' })
+    }
+
+    // Generate secure invite token
+    const crypto = require('crypto')
+    const token = crypto.randomBytes(32).toString('hex')
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) // 7 days
+
+    // Store invite token
+    const { error: tokenError } = await supabase
+      .from('invite_tokens')
+      .insert({
+        token,
+        email: normalizedEmail,
+        role,
+        client_id: role === 'client_admin' ? clientId : null,
+        created_by: req.user.id,
+        expires_at: expiresAt.toISOString(),
+      })
+    if (tokenError) throw tokenError
+
+    // Send invite email via SendGrid
+    const apiKey = process.env.CONTACT_SENDGRID_API_KEY
+    if (!apiKey) {
+      throw new Error('CONTACT_SENDGRID_API_KEY not configured')
+    }
+
+    const baseUrl = process.env.BASE_URL || 'https://mail.sagerock.com'
+    const inviteUrl = `${baseUrl}/set-password?token=${token}`
+
+    sgMail.setApiKey(apiKey)
+    await sgMail.send({
+      to: normalizedEmail,
+      from: { email: 'sage@sagerock.com', name: 'SageRock Email Marketing' },
+      subject: 'You\'ve been invited to SageRock Email Marketing',
+      html: `
+        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 40px 20px;">
+          <h2 style="color: #1e293b; margin-bottom: 8px;">You're Invited!</h2>
+          <p style="color: #475569; line-height: 1.6;">
+            You've been invited to join the SageRock Email Marketing platform. Click the button below to set your password and get started.
+          </p>
+          <div style="margin: 32px 0;">
+            <a href="${inviteUrl}" style="background-color: #f59e0b; color: #fff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; display: inline-block;">
+              Set Your Password
+            </a>
+          </div>
+          <p style="color: #94a3b8; font-size: 13px;">
+            This link expires in 7 days. If you didn't expect this invite, you can safely ignore this email.
+          </p>
+        </div>
+      `,
+    })
+
+    console.log(`✅ Invited ${normalizedEmail} as ${role}${clientId ? ` for client ${clientId}` : ''}`)
+    res.json({ success: true, email: normalizedEmail, role })
+  } catch (error) {
+    console.error('Error inviting user:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Accept an invite — verify token, create auth user + admin record
+app.post('/api/auth/accept-invite', async (req, res) => {
+  try {
+    const { token, password } = req.body
+    if (!token || !password) {
+      return res.status(400).json({ error: 'Token and password are required' })
+    }
+    if (password.length < 8) {
+      return res.status(400).json({ error: 'Password must be at least 8 characters' })
+    }
+
+    // Look up and validate the token
+    const { data: invite, error: lookupError } = await supabase
+      .from('invite_tokens')
+      .select('*')
+      .eq('token', token)
+      .single()
+
+    if (lookupError || !invite) {
+      return res.status(400).json({ error: 'Invalid invite token' })
+    }
+    if (invite.accepted_at) {
+      return res.status(400).json({ error: 'This invite has already been used' })
+    }
+    if (new Date(invite.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'This invite has expired. Please ask your administrator to send a new one.' })
+    }
+
+    // Create the Supabase auth user with the password
+    const { data: authData, error: authError } = await supabase.auth.admin.createUser({
+      email: invite.email,
+      password,
+      email_confirm: true,
+    })
+    if (authError) throw authError
+
+    // Create admin_users record
+    const { error: adminError } = await supabase
+      .from('admin_users')
+      .insert({
+        user_id: authData.user.id,
+        email: invite.email,
+        role: invite.role,
+        client_id: invite.client_id,
+        created_by: invite.created_by,
+      })
+    if (adminError) {
+      // Clean up auth user if admin record fails
+      await supabase.auth.admin.deleteUser(authData.user.id)
+      throw adminError
+    }
+
+    // Mark token as accepted
+    await supabase
+      .from('invite_tokens')
+      .update({ accepted_at: new Date().toISOString() })
+      .eq('id', invite.id)
+
+    console.log(`✅ ${invite.email} accepted invite as ${invite.role}`)
+    res.json({ success: true, email: invite.email })
+  } catch (error) {
+    console.error('Error accepting invite:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// List all admin users
+app.get('/api/admin/users', authenticateUser, requireSuperAdmin, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('admin_users')
+      .select(`*, clients (name)`)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+
+    const users = data.map(u => ({
+      ...u,
+      client_name: u.clients?.name || null,
+    }))
+
+    res.json(users)
+  } catch (error) {
+    console.error('Error fetching admin users:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Delete an admin user
+app.delete('/api/admin/users/:id', authenticateUser, requireSuperAdmin, async (req, res) => {
+  try {
+    const { id } = req.params
+
+    // Look up the admin record to get user_id before deleting
+    const { data: adminRecord, error: lookupError } = await supabase
+      .from('admin_users')
+      .select('user_id, email')
+      .eq('id', id)
+      .single()
+    if (lookupError) throw lookupError
+
+    // Delete from admin_users
+    const { error } = await supabase.from('admin_users').delete().eq('id', id)
+    if (error) throw error
+
+    // Also delete from auth.users so the email can be re-invited
+    if (adminRecord?.user_id) {
+      const { error: authDeleteError } = await supabase.auth.admin.deleteUser(adminRecord.user_id)
+      if (authDeleteError) {
+        console.warn(`Admin record deleted but failed to remove auth user for ${adminRecord.email}:`, authDeleteError.message)
+      }
+    }
+
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error deleting admin user:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 /**
  * Upsert a batch of contact records with individual retry fallback.
  * First tries batch upsert by salesforce_id. If that fails, retries each record
@@ -857,12 +1145,95 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
     const campaignCache = new Map()
 
     // Process each event
+    // Event type mapping (shared by campaign and AI followup handlers)
+    const eventTypeMap = {
+      delivered: 'delivered',
+      open: 'open',
+      click: 'click',
+      bounce: 'bounce',
+      dropped: 'bounce',
+      blocked: 'block',
+      spamreport: 'spam',
+      unsubscribe: 'unsubscribe',
+    }
+
     for (const event of events) {
+      // ---- AI Follow-up email events ----
+      const aiDraftId = event.custom_args?.ai_followup_draft_id
+      if (aiDraftId) {
+        const eventType = eventTypeMap[event.event]
+        if (!eventType) { skipped++; continue }
+
+        // Bot detection for clicks
+        if (eventType === 'click' && event.email && event.url) {
+          const clickTimestamp = event.timestamp * 1000
+          if (isClickFromBot(aiDraftId, event.email, event.url, clickTimestamp)) {
+            skipped++; continue
+          }
+          // Click-to-open ratio check
+          const { data: emailStats } = await supabase
+            .from('ai_followup_analytics')
+            .select('event_type')
+            .eq('draft_id', aiDraftId)
+            .eq('email', event.email)
+            .in('event_type', ['open', 'click'])
+          if (emailStats) {
+            const opens = emailStats.filter(e => e.event_type === 'open').length
+            const clicks = emailStats.filter(e => e.event_type === 'click').length
+            if (opens === 0) { skipped++; continue }
+            if (clicks >= opens * 10) { skipped++; continue }
+          }
+        }
+
+        // Insert into ai_followup_analytics
+        const { error: aiInsertError } = await supabase.from('ai_followup_analytics').insert({
+          draft_id: aiDraftId,
+          email: event.email,
+          event_type: eventType,
+          timestamp: new Date(event.timestamp * 1000).toISOString(),
+          url: event.url || null,
+          user_agent: event.useragent || null,
+          ip_address: event.ip || null,
+          sg_event_id: event.sg_event_id,
+        })
+
+        if (aiInsertError && !aiInsertError.message?.includes('duplicate key')) {
+          errors++
+        } else {
+          processed++
+        }
+
+        // Handle unsubscribe/bounce for AI emails
+        if ((eventType === 'unsubscribe' || eventType === 'bounce') && event.email) {
+          const { data: draft } = await supabase.from('ai_followup_drafts').select('client_id').eq('id', aiDraftId).single()
+          if (draft) {
+            if (eventType === 'unsubscribe') {
+              await supabase.from('contacts').update({
+                unsubscribed: true,
+                unsubscribed_at: new Date(event.timestamp * 1000).toISOString(),
+              }).eq('email', event.email).eq('client_id', draft.client_id)
+            }
+            if (eventType === 'bounce') {
+              const isHardBounce = ['invalid', 'bounce', 'blocked'].includes(event.type) ||
+                event.reason?.toLowerCase().includes('invalid') ||
+                event.reason?.toLowerCase().includes('does not exist')
+              await supabase.from('contacts').update({
+                bounce_status: isHardBounce ? 'hard' : 'soft',
+                bounced_at: new Date(event.timestamp * 1000).toISOString(),
+              }).eq('email', event.email).eq('client_id', draft.client_id)
+            }
+          }
+        }
+
+        continue // Skip campaign processing
+      }
+
+      // ---- Regular campaign events ----
       // Extract campaign_id from custom args
       const campaignId = event.campaign_id || event.custom_args?.campaign_id
 
       if (!campaignId) {
-        console.warn('Event missing campaign_id:', JSON.stringify(event))
+        // Not a campaign or AI event — skip silently
         skipped++
         continue
       }
@@ -880,18 +1251,6 @@ app.post('/api/webhook/sendgrid', async (req, res) => {
           clientId = campaign.client_id
           campaignCache.set(campaignId, clientId)
         }
-      }
-
-      // Map SendGrid event types to our event types
-      const eventTypeMap = {
-        delivered: 'delivered',
-        open: 'open',
-        click: 'click',
-        bounce: 'bounce',
-        dropped: 'bounce',
-        blocked: 'block',
-        spamreport: 'spam',
-        unsubscribe: 'unsubscribe',
       }
 
       const eventType = eventTypeMap[event.event]
@@ -1537,8 +1896,8 @@ app.post('/api/analyze-subscribers', async (req, res) => {
     })
 
     const stream = anthropic.messages.stream({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     })
@@ -1577,8 +1936,149 @@ app.post('/api/analyze-subscribers', async (req, res) => {
  * Map your email field to the key "email"
  * Optional: add &tag=yourtagname to specify a tag (defaults to "discountform")
  */
+// New multi-tenant Gravity Forms webhook (routes by AI agent webhook key)
+app.post('/api/webhook/gravity-forms/:webhookKey', async (req, res) => {
+  try {
+    const { webhookKey } = req.params
+
+    // Look up AI agent config by webhook key
+    const { data: config, error: configError } = await supabase
+      .from('ai_followup_config')
+      .select('*')
+      .eq('webhook_key', webhookKey)
+      .single()
+
+    if (configError || !config) {
+      return res.status(404).json({ error: 'Invalid webhook key' })
+    }
+
+    if (!config.enabled) {
+      return res.status(400).json({ error: 'AI agent is disabled' })
+    }
+
+    // Extract email (required) - support various key formats
+    const email = req.body.email || req.body.Email || req.body['Work Email']
+    if (!email) {
+      console.error('❌ Gravity Forms webhook: no email field in payload', req.body)
+      return res.status(400).json({ error: 'No email field in request body' })
+    }
+
+    const normalizedEmail = email.toLowerCase().trim()
+    const clientId = config.client_id
+
+    // Extract known contact fields from body (support various key formats)
+    const body = req.body
+    const firstName = body.first_name || body.firstName || body['First Name'] || null
+    const lastName = body.last_name || body.lastName || body['Last Name'] || null
+    const company = body.company || body.Company || body.organization || body['Company Name'] || null
+
+    // Build form submission record with all fields
+    const formSubmission = {
+      form_name: req.body.form_name || req.body.form_title || 'Web Form',
+      submitted_at: new Date().toISOString(),
+      fields: { ...req.body },
+    }
+    // Remove email from fields display (already captured as contact field)
+    delete formSubmission.fields.email
+
+    // Check if contact already exists
+    const { data: existing } = await supabase
+      .from('contacts')
+      .select('id, first_name, last_name, company, form_submissions')
+      .eq('client_id', clientId)
+      .eq('email', normalizedEmail)
+      .single()
+
+    let contactId
+    if (existing) {
+      // Append form submission, fill in blank fields
+      const updatedSubmissions = [...(existing.form_submissions || []), formSubmission]
+      const updates = { form_submissions: updatedSubmissions }
+      if (!existing.first_name && firstName) updates.first_name = firstName
+      if (!existing.last_name && lastName) updates.last_name = lastName
+      if (!existing.company && company) updates.company = company
+
+      await supabase.from('contacts').update(updates).eq('id', existing.id)
+      contactId = existing.id
+      console.log(`📝 Gravity Forms webhook: updated contact ${normalizedEmail} with form submission (agent: ${config.name})`)
+    } else {
+      // Create new contact
+      const { data: created, error: createError } = await supabase
+        .from('contacts')
+        .insert({
+          client_id: clientId,
+          email: normalizedEmail,
+          first_name: firstName,
+          last_name: lastName,
+          company,
+          form_submissions: [formSubmission],
+          unsubscribed: false,
+        })
+        .select('id')
+        .single()
+
+      if (createError) throw createError
+      contactId = created.id
+      console.log(`✅ Gravity Forms webhook: created contact ${normalizedEmail} (agent: ${config.name})`)
+    }
+
+    // Check if already enrolled in this AI agent
+    const { data: existingEnrollment } = await supabase
+      .from('ai_followup_contacts')
+      .select('id')
+      .eq('config_id', config.id)
+      .eq('contact_id', contactId)
+      .limit(1)
+
+    if (existingEnrollment && existingEnrollment.length > 0) {
+      return res.json({ success: true, action: 'already_enrolled', contact_id: contactId })
+    }
+
+    // Enroll contact with immediate follow-up
+    const { error: enrollError } = await supabase
+      .from('ai_followup_contacts')
+      .upsert({
+        config_id: config.id,
+        contact_id: contactId,
+        client_id: clientId,
+        status: 'in_progress',
+        current_step: 0,
+        next_followup_at: new Date().toISOString(),
+      }, { onConflict: 'config_id,contact_id' })
+
+    if (enrollError) throw enrollError
+    console.log(`🤖 Gravity Forms webhook: enrolled ${normalizedEmail} in AI agent "${config.name}"`)
+
+    // Immediately generate AI draft
+    try {
+      const generateUrl = `http://localhost:${PORT}/api/ai-followup/generate`
+      const generateRes = await fetch(generateUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId, configId: config.id }),
+      })
+      if (!generateRes.ok) {
+        const err = await generateRes.json()
+        console.error(`⚠️ Immediate AI draft generation failed for ${normalizedEmail}:`, err.error)
+      } else {
+        console.log(`✅ AI draft generated immediately for ${normalizedEmail} (agent: ${config.name})`)
+      }
+    } catch (genError) {
+      console.error(`⚠️ Immediate AI draft generation error:`, genError.message)
+      // Don't fail the webhook - the cron will pick it up
+    }
+
+    res.json({ success: true, action: existing ? 'updated_and_enrolled' : 'created_and_enrolled', contact_id: contactId })
+  } catch (error) {
+    console.error('❌ Gravity Forms webhook error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Legacy Gravity Forms webhook (Alconox-specific, kept for backward compatibility)
 app.post('/api/webhook/gravity-forms', async (req, res) => {
   try {
+    console.log('⚠️ Deprecated: Using legacy Gravity Forms webhook. Migrate to /api/webhook/gravity-forms/:webhookKey')
     // Validate API key from query parameter
     const apiKey = process.env.API_SECRET_KEY
     if (!apiKey) {
@@ -4012,17 +4512,22 @@ app.get('/api/ai-followup/configs', async (req, res) => {
 // Create a new AI agent config
 app.post('/api/ai-followup/configs', async (req, res) => {
   try {
-    const { clientId, name, trigger_tag, from_email, from_name, reply_to, bcc_email, max_followups, followup_delays, system_prompt, log_to_salesforce } = req.body
+    const { clientId, name, trigger_type, trigger_tag, from_email, from_name, reply_to, bcc_email, max_followups, followup_delays, system_prompt, log_to_salesforce } = req.body
     if (!clientId || !name || !from_email || !from_name) {
       return res.status(400).json({ error: 'clientId, name, from_email, and from_name are required' })
     }
+
+    const isWebhook = trigger_type === 'webhook'
+    const webhookKey = isWebhook ? require('crypto').randomBytes(32).toString('hex') : null
 
     const { data, error } = await supabase
       .from('ai_followup_config')
       .insert({
         client_id: clientId,
         name,
-        trigger_tag: trigger_tag || 'Sample Request',
+        trigger_type: trigger_type || 'tag',
+        trigger_tag: isWebhook ? null : (trigger_tag || 'Sample Request'),
+        webhook_key: webhookKey,
         from_email,
         from_name,
         reply_to,
@@ -4054,6 +4559,23 @@ app.put('/api/ai-followup/configs/:id', async (req, res) => {
     delete updates.id
     delete updates.created_at
     delete updates.client_id
+
+    // Auto-generate webhook key when switching to webhook trigger type
+    if (updates.trigger_type === 'webhook' && !updates.webhook_key) {
+      // Check if config already has a webhook key
+      const { data: existing } = await supabase
+        .from('ai_followup_config')
+        .select('webhook_key')
+        .eq('id', id)
+        .single()
+      if (!existing?.webhook_key) {
+        updates.webhook_key = require('crypto').randomBytes(32).toString('hex')
+      }
+    }
+    // Clear webhook key when switching to tag trigger
+    if (updates.trigger_type === 'tag') {
+      updates.webhook_key = null
+    }
 
     const { data, error } = await supabase
       .from('ai_followup_config')
@@ -4147,6 +4669,19 @@ app.post('/api/ai-followup/generate', async (req, res) => {
       `Follow-up #${stepNumber} of ${config.max_followups}`,
     ].filter(Boolean).join('\n')
 
+    // Include form submission context if available
+    let formContext = ''
+    if (contact.form_submissions && contact.form_submissions.length > 0) {
+      const latest = contact.form_submissions[contact.form_submissions.length - 1]
+      const fieldEntries = Object.entries(latest.fields || {})
+        .filter(([k]) => !['email'].includes(k.toLowerCase()))
+        .map(([k, v]) => `  ${k}: ${v}`)
+        .join('\n')
+      if (fieldEntries) {
+        formContext = `\n\nForm submission (${latest.form_name || 'Web Form'}):\n${fieldEntries}`
+      }
+    }
+
     let previousContext = ''
     if (previousDrafts && previousDrafts.length > 0) {
       previousContext = '\n\nPrevious emails sent to this contact:\n' +
@@ -4157,11 +4692,11 @@ app.post('/api/ai-followup/generate', async (req, res) => {
 
     const userPrompt = `Write a follow-up email for this contact. Return ONLY a JSON object with "subject" and "body" fields. The body should be plain text (no HTML). Do not include any other text outside the JSON.
 
-${contactContext}${previousContext}`
+${contactContext}${formContext}${previousContext}`
 
     const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 1024,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 4096,
       system: systemPrompt,
       messages: [{ role: 'user', content: userPrompt }],
     })
@@ -4193,8 +4728,8 @@ ${contactContext}${previousContext}`
         subject: parsed.subject,
         html_content: htmlContent,
         plain_text: parsed.body,
-        ai_model: 'claude-sonnet-4-20250514',
-        ai_prompt_context: { contact: { first_name: contact.first_name, last_name: contact.last_name, company: contact.company, industry: contact.industry, source_code: contact.source_code }, step: stepNumber, previous_drafts_count: previousDrafts?.length || 0 },
+        ai_model: 'claude-sonnet-4-6',
+        ai_prompt_context: { contact: { first_name: contact.first_name, last_name: contact.last_name, company: contact.company, industry: contact.industry, source_code: contact.source_code }, step: stepNumber, previous_drafts_count: previousDrafts?.length || 0, form_submission: contact.form_submissions?.length > 0 ? contact.form_submissions[contact.form_submissions.length - 1] : null },
         status: 'pending',
       })
       .select()
@@ -4444,6 +4979,86 @@ app.put('/api/ai-followup/drafts/:id', async (req, res) => {
     res.json(data)
   } catch (error) {
     console.error('Error updating AI draft:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get sent AI emails with aggregated analytics
+app.get('/api/ai-followup/sent-emails', async (req, res) => {
+  try {
+    const { clientId, configId, search, startDate, endDate } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    let query = supabase
+      .from('ai_followup_drafts')
+      .select(`
+        id, subject, step_number, sent_at, sendgrid_message_id, plain_text, html_content, ai_prompt_context, status,
+        contact:contacts(id, email, first_name, last_name, company),
+        config:ai_followup_config(id, name, from_email, from_name)
+      `)
+      .eq('client_id', clientId)
+      .eq('status', 'sent')
+      .order('sent_at', { ascending: false })
+      .limit(200)
+
+    if (configId) query = query.eq('config_id', configId)
+    if (startDate) query = query.gte('sent_at', startDate)
+    if (endDate) query = query.lte('sent_at', endDate)
+
+    const { data: drafts, error } = await query
+    if (error) throw error
+
+    // Fetch aggregated analytics for all returned draft IDs
+    const draftIds = (drafts || []).map(d => d.id)
+    if (draftIds.length > 0) {
+      const { data: analytics } = await supabase
+        .from('ai_followup_analytics')
+        .select('draft_id, event_type')
+        .in('draft_id', draftIds)
+
+      const countsMap = {}
+      for (const evt of (analytics || [])) {
+        if (!countsMap[evt.draft_id]) countsMap[evt.draft_id] = {}
+        countsMap[evt.draft_id][evt.event_type] = (countsMap[evt.draft_id][evt.event_type] || 0) + 1
+      }
+
+      for (const draft of drafts) {
+        draft.analytics = countsMap[draft.id] || {}
+      }
+    }
+
+    // Apply search filter in-memory
+    let result = drafts || []
+    if (search) {
+      const s = search.toLowerCase()
+      result = result.filter(d =>
+        d.contact?.email?.toLowerCase().includes(s) ||
+        d.contact?.first_name?.toLowerCase().includes(s) ||
+        d.contact?.last_name?.toLowerCase().includes(s) ||
+        d.contact?.company?.toLowerCase().includes(s) ||
+        d.subject?.toLowerCase().includes(s)
+      )
+    }
+
+    res.json(result)
+  } catch (error) {
+    console.error('Error fetching sent AI emails:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Get detailed analytics events for a single AI draft
+app.get('/api/ai-followup/drafts/:id/analytics', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('ai_followup_analytics')
+      .select('*')
+      .eq('draft_id', req.params.id)
+      .order('timestamp', { ascending: true })
+    if (error) throw error
+    res.json(data || [])
+  } catch (error) {
+    console.error('Error fetching AI draft analytics:', error)
     res.status(500).json({ error: error.message })
   }
 })
@@ -4781,12 +5396,7 @@ app.listen(PORT, () => {
 
       if (claimError) {
         console.error('❌ Error claiming scheduled emails:', claimError)
-        return
-      }
-
-      if (!claimedIds || claimedIds.length === 0) {
-        return // No emails to process
-      }
+      } else if (claimedIds && claimedIds.length > 0) {
 
       // Now fetch full details for the emails we claimed
       const { data: scheduledEmails, error: fetchError } = await supabase
@@ -4810,12 +5420,7 @@ app.listen(PORT, () => {
           .from('scheduled_emails')
           .update({ status: 'pending' })
           .in('id', claimedIds.map(e => e.id))
-        return
-      }
-
-      if (!scheduledEmails || scheduledEmails.length === 0) {
-        return // No emails to process
-      }
+      } else if (scheduledEmails && scheduledEmails.length > 0) {
 
       console.log(`📬 Processing ${scheduledEmails.length} scheduled sequence emails`)
 
@@ -5020,6 +5625,9 @@ app.listen(PORT, () => {
       if (sent > 0 || failed > 0) {
         console.log(`📊 Sequence processing complete: ${sent} sent, ${failed} failed`)
       }
+
+      } // end scheduledEmails check
+      } // end claimedIds check
 
       // ============ PART 3: AI Follow-up draft generation ============
       // Find contacts that are due for their next follow-up and don't have a pending draft

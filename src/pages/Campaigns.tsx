@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
+import { apiFetch } from '../lib/api'
 import { useClient } from '../context/ClientContext'
 import type { Campaign, Template, Folder, SalesforceCampaign } from '../types/index.js'
 import { Card, CardContent } from '../components/ui/Card'
@@ -217,10 +218,8 @@ export default function Campaigns() {
     setSendingCampaignId(campaignId)
     setSendProgress(null)
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || ''
-      const response = await fetch(`${apiUrl}/api/send-campaign`, {
+      const response = await apiFetch(`/api/send-campaign`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ campaignId }),
       })
 
@@ -234,7 +233,7 @@ export default function Campaigns() {
       if (progressIntervalRef.current) clearInterval(progressIntervalRef.current)
       progressIntervalRef.current = setInterval(async () => {
         try {
-          const res = await fetch(`${apiUrl}/api/campaign-progress/${campaignId}`)
+          const res = await apiFetch(`/api/campaign-progress/${campaignId}`)
           const progress = await res.json()
 
           setSendProgress({
@@ -1321,10 +1320,8 @@ function SendTestEmailModal({
         throw new Error('Please enter at least one email address')
       }
 
-      const apiUrl = import.meta.env.VITE_API_URL || ''
-      const response = await fetch(`${apiUrl}/api/send-test-email`, {
+      const response = await apiFetch(`/api/send-test-email`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           campaignId: campaign.id,
           testEmails: emails,

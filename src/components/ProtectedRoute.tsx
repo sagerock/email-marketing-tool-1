@@ -1,25 +1,23 @@
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useEffect, useState } from 'react'
+import { ShieldX } from 'lucide-react'
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth()
+  const { user, loading, adminUser, adminLoading } = useAuth()
   const [showTimeout, setShowTimeout] = useState(false)
 
   useEffect(() => {
-    console.log('ProtectedRoute - loading:', loading, 'user:', user?.email)
-
-    // Show timeout message if loading takes more than 10 seconds
     const timeout = setTimeout(() => {
-      if (loading) {
+      if (loading || adminLoading) {
         setShowTimeout(true)
       }
     }, 10000)
 
     return () => clearTimeout(timeout)
-  }, [loading, user])
+  }, [loading, adminLoading])
 
-  if (loading) {
+  if (loading || adminLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
@@ -45,10 +43,33 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
   }
 
   if (!user) {
-    console.log('ProtectedRoute - No user, redirecting to landing page')
     return <Navigate to="/welcome" replace />
   }
 
-  console.log('ProtectedRoute - User authenticated, rendering children')
+  // User is authenticated but has no admin record
+  if (!adminUser) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center max-w-md">
+          <ShieldX className="h-16 w-16 text-gray-300 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Access Denied</h2>
+          <p className="text-gray-600 mb-6">
+            Your account does not have access to this tool. Please contact your administrator to request access.
+          </p>
+          <button
+            onClick={async () => {
+              const { supabase } = await import('../lib/supabase')
+              await supabase.auth.signOut()
+              window.location.href = '/login'
+            }}
+            className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+          >
+            Sign out and try a different account
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return <>{children}</>
 }

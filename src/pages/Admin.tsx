@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
-import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import { useClient } from '../context/ClientContext'
+import { apiFetch } from '../lib/api'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Shield, UserPlus, Trash2, AlertCircle } from 'lucide-react'
+import { Shield, UserPlus, Trash2, AlertCircle, Send } from 'lucide-react'
 
 interface AdminUser {
   id: string
@@ -19,12 +19,12 @@ interface AdminUser {
 }
 
 export default function Admin() {
-  const { isSuperAdmin, user, refreshAdminStatus } = useAuth()
+  const { isSuperAdmin, user } = useAuth()
   const { clients } = useClient()
   const [admins, setAdmins] = useState<AdminUser[]>([])
   const [loading, setLoading] = useState(true)
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState<'super_admin' | 'admin' | 'client_admin'>('admin')
+  const [role, setRole] = useState<'super_admin' | 'admin' | 'client_admin'>('client_admin')
   const [selectedClientId, setSelectedClientId] = useState<string>('')
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -36,24 +36,9 @@ export default function Admin() {
 
   const fetchAdmins = async () => {
     try {
-      const { data, error } = await supabase
-        .from('admin_users')
-        .select(`
-          *,
-          clients (
-            name
-          )
-        `)
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-
-      const adminsWithClientNames = data.map((admin: any) => ({
-        ...admin,
-        client_name: admin.clients?.name || null,
-      }))
-
-      setAdmins(adminsWithClientNames)
+      const res = await apiFetch('/api/admin/users')
+      const data = await res.json()
+      if (Array.isArray(data)) setAdmins(data)
     } catch (err) {
       console.error('Error fetching admins:', err)
     } finally {
@@ -61,78 +46,50 @@ export default function Admin() {
     }
   }
 
-  const handleAddAdminWithUserId = async (e: React.FormEvent) => {
+  const handleInviteUser = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setSuccess('')
     setSubmitting(true)
 
     try {
-      // Check if user exists and get their ID
-      const { data: authData } = await supabase.auth.admin.listUsers()
-      const targetUser = authData?.users?.find((u) => u.email === email.toLowerCase())
+      const res = await apiFetch('/api/admin/invite-user', {
+        method: 'POST',
+        body: JSON.stringify({
+          email: email.toLowerCase().trim(),
+          role,
+          clientId: role === 'client_admin' ? selectedClientId : null,
+        }),
+      })
 
-      if (!targetUser) {
-        setError('User not found. They must sign up first at /signup')
-        setSubmitting(false)
-        return
-      }
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
 
-      // Check if already an admin
-      const { data: existing } = await supabase
-        .from('admin_users')
-        .select('id')
-        .eq('user_id', targetUser.id)
-        .single()
-
-      if (existing) {
-        setError('This user is already an admin')
-        setSubmitting(false)
-        return
-      }
-
-      // Add as admin
-      const insertData: any = {
-        user_id: targetUser.id,
-        email: targetUser.email,
-        role,
-        created_by: user?.id,
-      }
-
-      if (role === 'client_admin' && selectedClientId) {
-        insertData.client_id = selectedClientId
-      } else {
-        insertData.client_id = null
-      }
-
-      const { error: insertError } = await supabase.from('admin_users').insert(insertData)
-
-      if (insertError) throw insertError
-
-      setSuccess(`Successfully added ${email} as ${role.replace('_', ' ')}`)
+      setSuccess(`Invite sent to ${email}! They'll receive an email to set up their account.`)
       setEmail('')
-      setRole('admin')
+      setRole('client_admin')
       setSelectedClientId('')
       fetchAdmins()
-      refreshAdminStatus()
 
-      setTimeout(() => setSuccess(''), 3000)
+      setTimeout(() => setSuccess(''), 5000)
     } catch (err: any) {
-      setError(err.message || 'Failed to add admin')
+      setError(err.message || 'Failed to invite user')
     } finally {
       setSubmitting(false)
     }
   }
 
   const handleRemoveAdmin = async (adminId: string, adminEmail: string) => {
-    if (!confirm(`Remove admin access for ${adminEmail}?`)) return
+    if (!confirm(`Remove access for ${adminEmail}?`)) return
 
     try {
-      const { error } = await supabase.from('admin_users').delete().eq('id', adminId)
+      const res = await apiFetch(`/api/admin/users/${adminId}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error)
+      }
 
-      if (error) throw error
-
-      setSuccess(`Removed admin access for ${adminEmail}`)
+      setSuccess(`Removed access for ${adminEmail}`)
       fetchAdmins()
 
       setTimeout(() => setSuccess(''), 3000)
@@ -163,7 +120,7 @@ export default function Admin() {
           Admin Panel
         </h1>
         <p className="mt-1 text-sm text-gray-600">
-          Manage administrative access to the system
+          Manage user access to the system
         </p>
       </div>
 
@@ -181,20 +138,18 @@ export default function Admin() {
         </div>
       )}
 
-      {/* Add Admin Form */}
+      {/* Invite User Form */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <UserPlus className="h-5 w-5" />
-            Add New Admin
+            Invite User
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleAddAdminWithUserId} className="space-y-4">
+          <form onSubmit={handleInviteUser} className="space-y-4">
             <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-900">
-              <strong>Note:</strong> The user must sign up at{' '}
-              <code className="bg-blue-100 px-1 py-0.5 rounded">/signup</code> before you can
-              add them as an admin.
+              <strong>How it works:</strong> Enter the user's email and select their role. They'll receive an invite email with a link to set up their password and access the tool.
             </div>
 
             <Input
@@ -215,9 +170,9 @@ export default function Admin() {
                 }
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
+                <option value="client_admin">Client Admin - Access to a single client</option>
+                <option value="admin">Admin - Access to all clients</option>
                 <option value="super_admin">Super Admin - Full system access</option>
-                <option value="admin">Admin - All clients access</option>
-                <option value="client_admin">Client Admin - Single client access</option>
               </select>
             </div>
 
@@ -243,7 +198,8 @@ export default function Admin() {
             )}
 
             <Button type="submit" disabled={submitting}>
-              {submitting ? 'Adding...' : 'Add Admin'}
+              <Send className="h-4 w-4 mr-2" />
+              {submitting ? 'Sending invite...' : 'Send Invite'}
             </Button>
           </form>
         </CardContent>
@@ -252,13 +208,13 @@ export default function Admin() {
       {/* Admin List */}
       <Card>
         <CardHeader>
-          <CardTitle>Current Admins ({admins.length})</CardTitle>
+          <CardTitle>Users ({admins.length})</CardTitle>
         </CardHeader>
         <CardContent>
           {loading ? (
-            <div className="text-center py-8 text-gray-500">Loading admins...</div>
+            <div className="text-center py-8 text-gray-500">Loading users...</div>
           ) : admins.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">No admins found</div>
+            <div className="text-center py-8 text-gray-500">No users found</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">

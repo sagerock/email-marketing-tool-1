@@ -286,7 +286,9 @@ export interface AIFollowupConfig {
   client_id: string
   name: string
   enabled: boolean
+  trigger_type: 'tag' | 'webhook'
   trigger_tag: string
+  webhook_key?: string
   from_email: string
   from_name: string
   reply_to?: string

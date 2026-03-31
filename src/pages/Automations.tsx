@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
+import { apiFetch } from '../lib/api'
 import { useClient } from '../context/ClientContext'
 import type { EmailSequence, SequenceStep, Template, Contact, SequenceEnrollment, SalesforceCampaign } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
@@ -897,8 +898,7 @@ function EditSequenceModal({
 
     setEnrolling(true)
     try {
-      const apiUrl = import.meta.env.VITE_API_URL || ''
-      const response = await fetch(`${apiUrl}/api/sequences/${sequence.id}/enroll-campaign-members`, {
+      const response = await apiFetch(`/api/sequences/${sequence.id}/enroll-campaign-members`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1042,10 +1042,8 @@ function EditSequenceModal({
       // If user chose to enroll existing members
       if (enrollExisting && formData.trigger_salesforce_campaign_ids.length > 0) {
         try {
-          const apiUrl = import.meta.env.VITE_API_URL || ''
-          const response = await fetch(`${apiUrl}/api/sequences/${sequence.id}/enroll-campaign-members`, {
+          const response = await apiFetch(`/api/sequences/${sequence.id}/enroll-campaign-members`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               campaignIds: formData.trigger_salesforce_campaign_ids,
               clientId,

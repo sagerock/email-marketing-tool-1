@@ -6,6 +6,7 @@ import Layout from './components/Layout'
 import Landing from './pages/Landing'
 import Login from './pages/auth/Login'
 import Signup from './pages/auth/Signup'
+import SetPassword from './pages/auth/SetPassword'
 import Contacts from './pages/Contacts'
 import Templates from './pages/Templates'
 import Campaigns from './pages/Campaigns'
@@ -28,6 +29,7 @@ function App() {
             <Route path="/welcome" element={<Landing />} />
             <Route path="/login" element={<Login />} />
             <Route path="/signup" element={<Signup />} />
+            <Route path="/set-password" element={<SetPassword />} />
             <Route path="/unsubscribe" element={<Unsubscribe />} />
             <Route path="/debug" element={<DebugAuth />} />
 

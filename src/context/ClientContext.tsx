@@ -9,20 +9,23 @@ interface ClientContextType {
   setSelectedClient: (client: Client | null) => void
   clients: Client[]
   loading: boolean
+  canSwitchClients: boolean
   refreshClients: () => Promise<void>
 }
 
 const ClientContext = createContext<ClientContextType | undefined>(undefined)
 
 export function ClientProvider({ children }: { children: ReactNode }) {
-  const { user, loading: authLoading } = useAuth()
+  const { user, loading: authLoading, adminUser, adminLoading, isClientAdmin, assignedClientId } = useAuth()
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
 
+  const canSwitchClients = !isClientAdmin
+
   const fetchClients = async () => {
-    // Don't fetch if not authenticated
-    if (!user) {
+    // Don't fetch if not authenticated or admin status unknown
+    if (!user || !adminUser) {
       setClients([])
       setSelectedClient(null)
       setLoading(false)
@@ -31,32 +34,35 @@ export function ClientProvider({ children }: { children: ReactNode }) {
 
     setLoading(true)
     try {
-      console.log('ClientContext - Fetching clients...')
-      const { data, error } = await supabase
+      let query = supabase
         .from('clients')
         .select('*')
         .order('created_at', { ascending: false })
 
+      // Client admins only see their assigned client
+      if (isClientAdmin && assignedClientId) {
+        query = query.eq('id', assignedClientId)
+      }
+
+      const { data, error } = await query
+
       if (error) throw error
-      console.log('ClientContext - Fetched', data?.length || 0, 'clients')
       setClients(data || [])
 
-      // Auto-select first client if none selected
+      // Auto-select client
       if (data && data.length > 0 && !selectedClient) {
-        // Try to restore from localStorage
-        const savedClientId = localStorage.getItem('selectedClientId')
-        if (savedClientId) {
-          const savedClient = data.find((c) => c.id === savedClientId)
-          if (savedClient) {
-            console.log('ClientContext - Restored client from localStorage:', savedClient.name)
-            setSelectedClient(savedClient)
+        if (isClientAdmin) {
+          // Client admins always get their assigned client
+          setSelectedClient(data[0])
+        } else {
+          // Super admins: restore from localStorage or pick first
+          const savedClientId = localStorage.getItem('selectedClientId')
+          if (savedClientId) {
+            const savedClient = data.find((c) => c.id === savedClientId)
+            setSelectedClient(savedClient || data[0])
           } else {
-            console.log('ClientContext - Auto-selecting first client:', data[0].name)
             setSelectedClient(data[0])
           }
-        } else {
-          console.log('ClientContext - Auto-selecting first client:', data[0].name)
-          setSelectedClient(data[0])
         }
       }
     } catch (error) {
@@ -66,20 +72,19 @@ export function ClientProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  // Only fetch clients when user is authenticated and auth is done loading
+  // Fetch clients when auth and admin status are resolved
   useEffect(() => {
-    if (!authLoading) {
-      console.log('ClientContext - Auth loading complete, user:', user?.email ?? 'None')
+    if (!authLoading && !adminLoading) {
       fetchClients()
     }
-  }, [user, authLoading])
+  }, [user, authLoading, adminUser, adminLoading])
 
-  // Save selected client to localStorage
+  // Save selected client to localStorage (only for super admins)
   useEffect(() => {
-    if (selectedClient) {
+    if (selectedClient && canSwitchClients) {
       localStorage.setItem('selectedClientId', selectedClient.id)
     }
-  }, [selectedClient])
+  }, [selectedClient, canSwitchClients])
 
   return (
     <ClientContext.Provider
@@ -88,6 +93,7 @@ export function ClientProvider({ children }: { children: ReactNode }) {
         setSelectedClient,
         clients,
         loading,
+        canSwitchClients,
         refreshClients: fetchClients,
       }}
     >

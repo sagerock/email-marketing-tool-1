@@ -9,7 +9,7 @@ import Input from '../components/ui/Input'
 import { BarChart3, TrendingUp, MousePointer, Mail, AlertCircle, Eye, X, RefreshCw, Download, Table, LayoutDashboard, Users, Tag as TagIcon, Flame, FileDown, Loader2, Sparkles } from 'lucide-react'
 import type { Contact } from '../types/index.js'
 
-const API_URL = import.meta.env.VITE_API_URL || ''
+import { apiFetch } from '../lib/api'
 
 // Extended campaign type with template data
 interface CampaignWithTemplate extends Campaign {
@@ -342,7 +342,7 @@ export default function Analytics() {
       // Fetch unique counts - opens via Supabase RPC, clicks via backend API (for large datasets)
       Promise.all([
         supabase.rpc('get_campaign_unique_opens', { p_campaign_id: campaignId }),
-        fetch(`${API_URL}/api/campaigns/${campaignId}/unique-clicks`)
+        apiFetch(`/api/campaigns/${campaignId}/unique-clicks`)
           .then(r => r.ok ? r.json() : null)
           .catch(() => null)
       ])
@@ -371,7 +371,7 @@ export default function Analytics() {
     setSendgridStats(null)
 
     try {
-      const response = await fetch(`${API_URL}/api/campaigns/${campaignId}/sendgrid-stats`)
+      const response = await apiFetch(`/api/campaigns/${campaignId}/sendgrid-stats`)
       const data = await response.json()
 
       if (!response.ok) {
@@ -402,7 +402,7 @@ export default function Analytics() {
 
     try {
       // Use backend API for large datasets (avoids Supabase RPC timeout)
-      const response = await fetch(`${API_URL}/api/campaigns/${campaignId}/link-stats`)
+      const response = await apiFetch(`/api/campaigns/${campaignId}/link-stats`)
 
       if (!response.ok) {
         throw new Error('Failed to fetch link stats')
@@ -431,7 +431,7 @@ export default function Analytics() {
     setSyncResult(null)
 
     try {
-      const response = await fetch(`${API_URL}/api/campaigns/${selectedCampaign}/sync-sendgrid`, {
+      const response = await apiFetch(`/api/campaigns/${selectedCampaign}/sync-sendgrid`, {
         method: 'POST',
       })
 
@@ -1047,7 +1047,7 @@ export default function Analytics() {
     }))
 
     try {
-      const response = await fetch(`${API_URL}/api/analyze-subscribers`, {
+      const response = await apiFetch(`/api/analyze-subscribers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
