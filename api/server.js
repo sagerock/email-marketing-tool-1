@@ -1931,6 +1931,163 @@ app.post('/api/analyze-subscribers', async (req, res) => {
 })
 
 /**
+ * AI Email Generation endpoint
+ * Generates production-ready HTML email using Claude based on user prompt
+ */
+const generateEmailRateLimit = { timestamps: [] }
+const { getDocumentHead, getSharedFooter, getEmailTypeDescription, SHARED_ASSETS } = require('./email-templates')
+
+app.post('/api/generate-email', authenticateUser, async (req, res) => {
+  // Rate limiting: 5 requests per minute
+  const now = Date.now()
+  generateEmailRateLimit.timestamps = generateEmailRateLimit.timestamps.filter(t => now - t < 60000)
+  if (generateEmailRateLimit.timestamps.length >= 5) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a minute.' })
+  }
+  generateEmailRateLimit.timestamps.push(now)
+
+  try {
+    const { emailType, prompt, heroImageUrl, articleImages, subjectHint, clientId } = req.body
+
+    if (!emailType || !prompt || !clientId) {
+      return res.status(400).json({ error: 'emailType, prompt, and clientId are required' })
+    }
+
+    if (!['pre-tradeshow', 'post-tradeshow', 'newsletter'].includes(emailType)) {
+      return res.status(400).json({ error: 'emailType must be pre-tradeshow, post-tradeshow, or newsletter' })
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+    }
+
+    const Anthropic = require('@anthropic-ai/sdk')
+    const anthropic = new Anthropic()
+
+    // Build the reference skeleton pieces
+    const documentHead = getDocumentHead('EMAIL_TITLE_PLACEHOLDER')
+    const sharedFooter = getSharedFooter()
+    const emailTypeDescription = getEmailTypeDescription(emailType)
+
+    // Determine which header to use
+    const headerUrl = emailType === 'post-tradeshow'
+      ? SHARED_ASSETS.headerBannerWithShop
+      : SHARED_ASSETS.headerBanner
+
+    const systemPrompt = `You are an expert email HTML developer specializing in cross-client-compatible HTML emails for Alconox, LLC (a specialty detergent company). You produce production-ready HTML that renders correctly across Outlook 2007-2019, Apple Mail, Gmail, Yahoo, and mobile clients.
+
+CRITICAL HTML RULES:
+- Use XHTML 1.0 Transitional doctype
+- Table-based layout ONLY (no div-based layout)
+- ALL styles must be inline (style="...")
+- Include MSO conditional comments for Outlook compatibility
+- 600px centered white content body (#FFFFFF) on #F6F6F6 background
+- Font: Arial, 'helvetica neue', helvetica, sans-serif
+- Body text: 14px, color #333333, line-height 21px
+- All images must have: display:block, border:0, outline:none, text-decoration:none
+- Use cellpadding and cellspacing attributes on tables
+- Every table must have: style="mso-table-lspace:0pt;mso-table-rspace:0pt;border-spacing:0px"
+
+EMAIL TYPE:
+${emailTypeDescription}
+
+DOCUMENT HEAD (use this exactly):
+${documentHead}
+
+HEADER BANNER IMAGE URL: ${headerUrl}
+The header banner should be a centered image link to https://alconox.com/ with width="560" and class="adapt-img" inside a 600px content body table.
+
+HERO IMAGE URL: ${heroImageUrl || 'Use a placeholder comment <!-- INSERT HERO IMAGE URL HERE -->'}
+${emailType === 'newsletter' && articleImages && articleImages.length > 0 ? `ARTICLE IMAGE URLS:\n${articleImages.map((url, i) => `Article ${i + 1}: ${url}`).join('\n')}` : ''}
+
+FOOTER (use this exactly after your content):
+${sharedFooter}
+
+MERGE TAGS (use where appropriate):
+- {{first_name}} - Recipient's first name (ONLY for post-tradeshow type)
+- {{last_name}} - Recipient's last name
+- {{email}} - Already in footer
+- {{unsubscribe_url}} - Already in footer
+- {{mailing_address}} - Already in footer
+- {{industry_link}} - Industry-specific URL, use in href attributes
+- {{campaign_name}} - Salesforce campaign name
+
+IMPORTANT: Return ONLY a valid JSON object with exactly these keys:
+{
+  "subject": "the email subject line",
+  "preview_text": "preview text for email clients (1-2 sentences)",
+  "html_content": "the complete HTML email from <!DOCTYPE to </html>"
+}
+
+Do NOT include any text before or after the JSON object. Do NOT use markdown code fences.`
+
+    const userPrompt = `Generate an Alconox email with these specifications:
+
+Type: ${emailType}
+${subjectHint ? `Subject line direction: ${subjectHint}` : ''}
+
+User's description:
+${prompt}
+
+Remember: Return ONLY the JSON object with subject, preview_text, and html_content.`
+
+    const response = await anthropic.messages.create({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 16384,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    })
+
+    const aiText = response.content[0]?.text || ''
+
+    // Parse JSON - try direct parse first, then regex extraction
+    let parsed
+    try {
+      parsed = JSON.parse(aiText)
+    } catch {
+      const jsonMatch = aiText.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        try {
+          parsed = JSON.parse(jsonMatch[0])
+        } catch {
+          return res.status(500).json({ error: 'Failed to parse AI response as JSON', raw: aiText.substring(0, 500) })
+        }
+      } else {
+        return res.status(500).json({ error: 'AI response did not contain valid JSON', raw: aiText.substring(0, 500) })
+      }
+    }
+
+    if (!parsed.html_content || !parsed.subject) {
+      return res.status(500).json({ error: 'AI response missing required fields (subject, html_content)' })
+    }
+
+    // Validate CAN-SPAM compliance
+    const warnings = []
+    const htmlLower = parsed.html_content.toLowerCase()
+    if (!htmlLower.includes('{{unsubscribe_url}}')) {
+      warnings.push('Missing {{unsubscribe_url}} - required by CAN-SPAM')
+    }
+    if (!htmlLower.includes('{{mailing_address}}')) {
+      warnings.push('Missing {{mailing_address}} - required by CAN-SPAM')
+    }
+    if (!htmlLower.includes('{{email}}')) {
+      warnings.push('Missing {{email}} merge tag')
+    }
+
+    res.json({
+      subject: parsed.subject,
+      preview_text: parsed.preview_text || '',
+      html_content: parsed.html_content,
+      warnings,
+    })
+
+  } catch (error) {
+    console.error('Generate email error:', error)
+    res.status(500).json({ error: 'Failed to generate email: ' + (error.message || 'Unknown error') })
+  }
+})
+
+/**
  * Gravity Forms webhook endpoint
  * Receives form submissions and adds email to contacts for Alconox client
  * Configure in Gravity Forms: Settings → Webhooks → Add New

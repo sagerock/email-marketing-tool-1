@@ -5,7 +5,8 @@ import type { Template, Folder } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, FileText, X, Pencil, Folder as FolderIcon, FolderOpen, FolderPlus, MoreVertical, ArrowRight } from 'lucide-react'
+import { Plus, FileText, X, Pencil, Folder as FolderIcon, FolderOpen, FolderPlus, MoreVertical, ArrowRight, Sparkles, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
+import { apiFetch } from '../lib/api'
 import { cn } from '../lib/utils'
 
 export default function Templates() {
@@ -24,6 +25,7 @@ export default function Templates() {
   const [showCreateFolderModal, setShowCreateFolderModal] = useState(false)
   const [editingFolder, setEditingFolder] = useState<Folder | null>(null)
   const [movingTemplate, setMovingTemplate] = useState<Template | null>(null)
+  const [showAIGenerateModal, setShowAIGenerateModal] = useState(false)
 
   useEffect(() => {
     fetchFolders()
@@ -279,10 +281,16 @@ export default function Templates() {
                 : 'Store and manage your email designs from Stripo or other editors'}
             </p>
           </div>
-          <Button onClick={() => setShowAddModal(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            Add Email Design
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setShowAIGenerateModal(true)}>
+              <Sparkles className="h-4 w-4 mr-2" />
+              Generate with AI
+            </Button>
+            <Button onClick={() => setShowAddModal(true)}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Email Design
+            </Button>
+          </div>
         </div>
 
         {/* Merge Tags Info - only show on "All" view */}
@@ -447,6 +455,21 @@ export default function Templates() {
           </div>
         )}
       </div>
+
+      {/* AI Generate Modal */}
+      {showAIGenerateModal && selectedClient && (
+        <AIGenerateModal
+          clientId={selectedClient.id}
+          folders={folders}
+          defaultFolderId={selectedFolderId}
+          onClose={() => setShowAIGenerateModal(false)}
+          onSuccess={() => {
+            setShowAIGenerateModal(false)
+            fetchTemplates()
+            fetchAllTemplates()
+          }}
+        />
+      )}
 
       {/* Add Template Modal */}
       {showAddModal && selectedClient && (
@@ -814,6 +837,391 @@ function MoveToFolderModal({
           <Button onClick={handleSubmit} disabled={submitting}>
             {submitting ? 'Moving...' : 'Move'}
           </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+type EmailType = 'pre-tradeshow' | 'post-tradeshow' | 'newsletter'
+type GeneratePhase = 'input' | 'loading' | 'preview'
+
+const EMAIL_TYPES: { value: EmailType; label: string; description: string }[] = [
+  { value: 'pre-tradeshow', label: 'Pre-Tradeshow', description: 'Announce your presence at an upcoming show' },
+  { value: 'post-tradeshow', label: 'Post-Tradeshow', description: 'Follow up with people you met at a show' },
+  { value: 'newsletter', label: 'Monthly Newsletter', description: 'TechNotes articles + product announcements' },
+]
+
+const LOADING_MESSAGES = [
+  'Analyzing your prompt...',
+  'Building HTML structure...',
+  'Styling for email clients...',
+  'Adding Outlook compatibility...',
+  'Finalizing email...',
+]
+
+function AIGenerateModal({
+  onClose,
+  onSuccess,
+  clientId,
+  folders,
+  defaultFolderId,
+}: {
+  onClose: () => void
+  onSuccess: () => void
+  clientId: string
+  folders: Folder[]
+  defaultFolderId: string | null
+}) {
+  const [phase, setPhase] = useState<GeneratePhase>('input')
+  const [emailType, setEmailType] = useState<EmailType>('pre-tradeshow')
+  const [prompt, setPrompt] = useState('')
+  const [heroImageUrl, setHeroImageUrl] = useState('')
+  const [articleImages, setArticleImages] = useState(['', '', ''])
+  const [subjectHint, setSubjectHint] = useState('')
+  const [folderId, setFolderId] = useState<string | null>(defaultFolderId)
+
+  // Generated result
+  const [generatedHtml, setGeneratedHtml] = useState('')
+  const [generatedSubject, setGeneratedSubject] = useState('')
+  const [generatedPreviewText, setGeneratedPreviewText] = useState('')
+  const [templateName, setTemplateName] = useState('')
+  const [warnings, setWarnings] = useState<string[]>([])
+
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [loadingMessage, setLoadingMessage] = useState(LOADING_MESSAGES[0])
+  const [showHtml, setShowHtml] = useState(false)
+
+  // Rotate loading messages
+  useEffect(() => {
+    if (phase !== 'loading') return
+    let idx = 0
+    const interval = setInterval(() => {
+      idx = (idx + 1) % LOADING_MESSAGES.length
+      setLoadingMessage(LOADING_MESSAGES[idx])
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [phase])
+
+  const handleGenerate = async () => {
+    setPhase('loading')
+    setError('')
+    setWarnings([])
+    try {
+      const response = await apiFetch('/api/generate-email', {
+        method: 'POST',
+        body: JSON.stringify({
+          emailType,
+          prompt,
+          heroImageUrl: heroImageUrl || undefined,
+          articleImages: emailType === 'newsletter' ? articleImages.filter(Boolean) : undefined,
+          subjectHint: subjectHint || undefined,
+          clientId,
+        }),
+      })
+      if (!response.ok) {
+        const err = await response.json()
+        throw new Error(err.error || 'Generation failed')
+      }
+      const data = await response.json()
+      setGeneratedHtml(data.html_content)
+      setGeneratedSubject(data.subject)
+      setGeneratedPreviewText(data.preview_text || '')
+      setWarnings(data.warnings || [])
+      setTemplateName(`${EMAIL_TYPES.find(t => t.value === emailType)?.label || emailType} - ${new Date().toLocaleDateString()}`)
+      setPhase('preview')
+    } catch (err: any) {
+      setError(err.message)
+      setPhase('input')
+    }
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const { error } = await supabase.from('templates').insert({
+        name: templateName,
+        subject: generatedSubject,
+        preview_text: generatedPreviewText,
+        html_content: generatedHtml,
+        folder_id: folderId,
+        client_id: clientId,
+      })
+      if (error) throw error
+      onSuccess()
+    } catch (err) {
+      console.error('Error saving template:', err)
+      alert('Failed to save template')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Phase: Input Form
+  if (phase === 'input') {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-purple-600" />
+              <h2 className="text-xl font-semibold">Generate Email with AI</h2>
+            </div>
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700">
+              {error}
+            </div>
+          )}
+
+          <div className="space-y-4">
+            {/* Email Type Selector */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Email Type</label>
+              <div className="grid grid-cols-3 gap-3">
+                {EMAIL_TYPES.map((type) => (
+                  <button
+                    key={type.value}
+                    type="button"
+                    onClick={() => setEmailType(type.value)}
+                    className={cn(
+                      'p-3 rounded-lg border-2 text-left transition-colors',
+                      emailType === type.value
+                        ? 'border-purple-600 bg-purple-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    )}
+                  >
+                    <div className="font-medium text-sm">{type.label}</div>
+                    <div className="text-xs text-gray-500 mt-1">{type.description}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Prompt */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Describe your email *
+              </label>
+              <textarea
+                required
+                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm min-h-[120px]"
+                placeholder={
+                  emailType === 'pre-tradeshow'
+                    ? 'e.g., Pre-show email for Pittcon 2026, March 7-11, San Antonio TX, booth 1125, targeting biotech researchers and lab managers...'
+                    : emailType === 'post-tradeshow'
+                    ? 'e.g., Follow-up for MD&M West attendees, offer 5% discount code MDM5, expires April 15...'
+                    : 'e.g., March newsletter featuring new industry pages, plus 3 recent TechNotes articles about PCR cleaning, shipping temperature, and silicone oil removal...'
+                }
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+              />
+            </div>
+
+            {/* Hero Image URL */}
+            <Input
+              label={`Hero Image URL${emailType !== 'newsletter' ? ' *' : ' (optional)'}`}
+              placeholder="https://sagerock-email-images.s3.us-east-2.amazonaws.com/..."
+              value={heroImageUrl}
+              onChange={(e) => setHeroImageUrl(e.target.value)}
+            />
+
+            {/* Article Images (newsletter only) */}
+            {emailType === 'newsletter' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Article Image URLs (optional)
+                </label>
+                <div className="space-y-2">
+                  {articleImages.map((url, idx) => (
+                    <Input
+                      key={idx}
+                      placeholder={`Article ${idx + 1} image URL`}
+                      value={url}
+                      onChange={(e) => {
+                        const newImages = [...articleImages]
+                        newImages[idx] = e.target.value
+                        setArticleImages(newImages)
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Subject Hint */}
+            <Input
+              label="Subject Line Hint (optional)"
+              placeholder="e.g., Meet us at booth 1125 - we'll bring you a gift!"
+              value={subjectHint}
+              onChange={(e) => setSubjectHint(e.target.value)}
+            />
+
+            {/* Folder Selector */}
+            {folders.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Save to Folder
+                </label>
+                <select
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  value={folderId || ''}
+                  onChange={(e) => setFolderId(e.target.value || null)}
+                >
+                  <option value="">Unfiled</option>
+                  {folders.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-4">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button
+                onClick={handleGenerate}
+                disabled={!prompt.trim()}
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                Generate Email
+              </Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // Phase: Loading
+  if (phase === 'loading') {
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div className="bg-white rounded-lg p-6 w-full max-w-md text-center">
+          <Loader2 className="h-12 w-12 text-purple-600 animate-spin mx-auto mb-4" />
+          <h2 className="text-lg font-semibold mb-2">Generating Your Email</h2>
+          <p className="text-sm text-gray-500">{loadingMessage}</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Phase: Preview
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-white rounded-lg p-6 w-full max-w-4xl max-h-[90vh] overflow-y-auto">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-purple-600" />
+            <h2 className="text-xl font-semibold">Preview Generated Email</h2>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {warnings.length > 0 && (
+          <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-md text-sm text-yellow-700">
+            <strong>Warnings:</strong>
+            <ul className="list-disc ml-4 mt-1">
+              {warnings.map((w, i) => <li key={i}>{w}</li>)}
+            </ul>
+          </div>
+        )}
+
+        {/* Editable metadata */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+          <Input
+            label="Template Name"
+            value={templateName}
+            onChange={(e) => setTemplateName(e.target.value)}
+          />
+          <Input
+            label="Subject Line"
+            value={generatedSubject}
+            onChange={(e) => setGeneratedSubject(e.target.value)}
+          />
+          <div className="md:col-span-2">
+            <Input
+              label="Preview Text"
+              value={generatedPreviewText}
+              onChange={(e) => setGeneratedPreviewText(e.target.value)}
+            />
+          </div>
+        </div>
+
+        {/* Folder Selector */}
+        {folders.length > 0 && (
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Save to Folder
+            </label>
+            <select
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              value={folderId || ''}
+              onChange={(e) => setFolderId(e.target.value || null)}
+            >
+              <option value="">Unfiled</option>
+              {folders.map((folder) => (
+                <option key={folder.id} value={folder.id}>
+                  {folder.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Email Preview */}
+        <div className="border border-gray-200 rounded-lg overflow-hidden mb-4">
+          <iframe
+            srcDoc={generatedHtml}
+            className="w-full h-[500px]"
+            title="Generated Email Preview"
+          />
+        </div>
+
+        {/* Collapsible HTML Editor */}
+        <div className="mb-4">
+          <button
+            type="button"
+            className="flex items-center gap-1 text-sm text-gray-600 hover:text-gray-800"
+            onClick={() => setShowHtml(!showHtml)}
+          >
+            {showHtml ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            {showHtml ? 'Hide' : 'Edit'} HTML
+          </button>
+          {showHtml && (
+            <textarea
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm min-h-[200px] font-mono mt-2"
+              value={generatedHtml}
+              onChange={(e) => setGeneratedHtml(e.target.value)}
+            />
+          )}
+        </div>
+
+        <div className="flex justify-between pt-4">
+          <Button
+            variant="outline"
+            onClick={() => setPhase('input')}
+          >
+            Regenerate
+          </Button>
+          <div className="flex gap-3">
+            <Button variant="outline" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? 'Saving...' : 'Save as Template'}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
