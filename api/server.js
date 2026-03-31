@@ -141,6 +141,9 @@ app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/ip-pools')) return next()
   // Skip auth for accept-invite (user doesn't have an account yet)
   if (req.path === '/auth/accept-invite') return next()
+  // Skip auth for internal server-to-server calls (cron → generate, reject → regenerate)
+  const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'
+  if (req.path === '/ai-followup/generate' && isLocalhost) return next()
 
   authenticateUser(req, res, (err) => {
     if (err) return // authenticateUser already sent the response
