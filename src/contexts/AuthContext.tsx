@@ -38,49 +38,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [adminLoading, setAdminLoading] = useState(true)
   const [adminCheckFailed, setAdminCheckFailed] = useState(false)
 
-  const checkAdminStatus = async (userId: string, retries = 2) => {
-    try {
-      for (let attempt = 0; attempt <= retries; attempt++) {
-        try {
-          const timeoutPromise = new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('Admin check timeout')), 8000)
-          )
+  const checkAdminStatus = async (userId: string) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const { data, error } = await supabase
+          .from('admin_users')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle()
 
-          const queryPromise = supabase
-            .from('admin_users')
-            .select('*')
-            .eq('user_id', userId)
-            .maybeSingle()
-
-          const { data, error } = await Promise.race([queryPromise, timeoutPromise]) as any
-
-          if (error) {
-            console.warn(`Admin check attempt ${attempt + 1} failed:`, error.message)
-            if (attempt < retries) {
-              await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
-              continue
-            }
-            setAdminUser(null)
-            setAdminCheckFailed(true)
-            return
-          }
-
-          setAdminUser(data)
-          setAdminCheckFailed(false)
-          return
-        } catch (error) {
-          console.warn(`Admin check attempt ${attempt + 1} error:`, error)
-          if (attempt < retries) {
+        if (error) {
+          console.warn(`Admin check attempt ${attempt + 1} failed:`, error.message)
+          if (attempt < 2) {
             await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
             continue
           }
-          console.error('All admin check attempts failed:', error)
           setAdminUser(null)
           setAdminCheckFailed(true)
+          setAdminLoading(false)
+          return
         }
+
+        setAdminUser(data)
+        setAdminCheckFailed(false)
+        setAdminLoading(false)
+        return
+      } catch (error) {
+        console.warn(`Admin check attempt ${attempt + 1} error:`, error)
+        if (attempt < 2) {
+          await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+          continue
+        }
+        console.error('All admin check attempts failed:', error)
+        setAdminUser(null)
+        setAdminCheckFailed(true)
+        setAdminLoading(false)
       }
-    } finally {
-      setAdminLoading(false)
     }
   }
 
@@ -92,35 +85,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   useEffect(() => {
-    // Get initial session
-    const initAuth = async () => {
-      try {
-        const { data: { session }, error } = await supabase.auth.getSession()
-
-        if (error) throw error
-
-        setSession(session)
-        setUser(session?.user ?? null)
-
-        if (session?.user) {
-          await checkAdminStatus(session.user.id)
-        } else {
-          setAdminLoading(false)
-        }
-
-        setLoading(false)
-      } catch (err) {
-        console.error('AuthContext - Failed to get session:', err)
-        setSession(null)
-        setUser(null)
-        setAdminLoading(false)
-        setLoading(false)
-      }
-    }
-
-    initAuth()
-
-    // Listen for auth changes
+    // Use onAuthStateChange as the single source of truth.
+    // It emits INITIAL_SESSION on startup (replaces getSession() call)
+    // and handles all subsequent auth changes.
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
@@ -128,20 +95,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null)
 
       if (session?.user) {
-        setAdminLoading(true)
         await checkAdminStatus(session.user.id)
       } else {
         setAdminUser(null)
         setAdminLoading(false)
       }
 
-      if (loading) {
-        setLoading(false)
-      }
+      setLoading(false)
     })
+
+    // Safety fallback: if no auth event fires within 5 seconds,
+    // stop loading so the user isn't stuck on the spinner forever.
+    const fallback = setTimeout(() => {
+      setLoading(prev => {
+        if (prev) {
+          console.warn('Auth fallback: no session event received in 5s, clearing loading state')
+          setAdminLoading(false)
+          return false
+        }
+        return prev
+      })
+    }, 5000)
 
     return () => {
       subscription.unsubscribe()
+      clearTimeout(fallback)
     }
   }, [])
 
