@@ -89,7 +89,9 @@ export default function Layout({ children }: LayoutProps) {
         <nav className="px-3 py-4 space-y-1 flex-1">
           {navigation.map((item) => {
             const Icon = item.icon
-            const isActive = location.pathname === item.href
+            const isActive = item.href === '/'
+              ? location.pathname === '/' || location.pathname.startsWith('/contacts/')
+              : location.pathname === item.href
             return (
               <Link
                 key={item.name}

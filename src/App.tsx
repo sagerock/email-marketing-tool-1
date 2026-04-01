@@ -17,6 +17,7 @@ import Unsubscribe from './pages/Unsubscribe'
 import Admin from './pages/Admin'
 import AIAgents from './pages/AIAgents'
 import BounceRecovery from './pages/BounceRecovery'
+import ContactDetail from './pages/ContactDetail'
 import DebugAuth from './pages/DebugAuth'
 
 function App() {
@@ -40,6 +41,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Contacts />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/contacts/:id"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <ContactDetail />
                   </Layout>
                 </ProtectedRoute>
               }
