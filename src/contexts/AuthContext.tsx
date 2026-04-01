@@ -99,18 +99,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // and handles all subsequent auth changes.
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
+    } = supabase.auth.onAuthStateChange((event, session) => {
       console.log('Auth event:', event, 'has session:', !!session, 'has user:', !!session?.user)
 
       setSession(session)
       setUser(session?.user ?? null)
-
-      // Clear loading immediately - we know whether there's a user or not
       setLoading(false)
 
       if (session?.user) {
+        // Don't await inside onAuthStateChange — supabase-js holds an internal
+        // lock during this callback. Awaiting a Supabase query here deadlocks
+        // because the query needs the same lock to read the auth token.
         setAdminLoading(true)
-        await checkAdminStatus(session.user.id)
+        checkAdminStatus(session.user.id)
       } else {
         setAdminUser(null)
         setAdminLoading(false)
