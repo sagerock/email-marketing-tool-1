@@ -10,15 +10,16 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
 
   useEffect(() => {
     const timeout = setTimeout(() => {
-      if (loading || adminLoading) {
+      if (loading || (user && adminLoading)) {
         setShowTimeout(true)
       }
     }, 10000)
 
     return () => clearTimeout(timeout)
-  }, [loading, adminLoading])
+  }, [loading, adminLoading, user])
 
-  if (loading || adminLoading) {
+  // Only wait on adminLoading if we actually have a user to check
+  if (loading || (user && adminLoading)) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">

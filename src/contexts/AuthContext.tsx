@@ -96,6 +96,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setSession(session)
       setUser(session?.user ?? null)
 
+      // Clear loading immediately - we know whether there's a user or not
+      setLoading(false)
+
       if (session?.user) {
         setAdminLoading(true)
         await checkAdminStatus(session.user.id)
@@ -103,17 +106,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setAdminUser(null)
         setAdminLoading(false)
       }
-
-      setLoading(false)
     })
 
     // Safety fallback: if no auth event fires within 5 seconds,
     // stop loading so the user isn't stuck on the spinner forever.
+    // Only clears loading (not adminLoading) to avoid clobbering an in-progress admin check.
     const fallback = setTimeout(() => {
       setLoading(prev => {
         if (prev) {
           console.warn('Auth fallback: no session event received in 5s, clearing loading state')
-          setAdminLoading(false)
           return false
         }
         return prev
