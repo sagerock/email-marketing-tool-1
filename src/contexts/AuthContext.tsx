@@ -21,6 +21,7 @@ interface AuthContextType {
   assignedClientId: string | null
   loading: boolean
   adminLoading: boolean
+  adminCheckFailed: boolean
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
@@ -35,32 +36,49 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [adminUser, setAdminUser] = useState<AdminUser | null>(null)
   const [loading, setLoading] = useState(true)
   const [adminLoading, setAdminLoading] = useState(true)
+  const [adminCheckFailed, setAdminCheckFailed] = useState(false)
 
-  const checkAdminStatus = async (userId: string) => {
+  const checkAdminStatus = async (userId: string, retries = 2) => {
     try {
-      // Add timeout to prevent hanging
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Admin check timeout')), 5000)
-      )
+      for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Admin check timeout')), 8000)
+          )
 
-      const queryPromise = supabase
-        .from('admin_users')
-        .select('*')
-        .eq('user_id', userId)
-        .maybeSingle()
+          const queryPromise = supabase
+            .from('admin_users')
+            .select('*')
+            .eq('user_id', userId)
+            .maybeSingle()
 
-      const { data, error } = await Promise.race([queryPromise, timeoutPromise]) as any
+          const { data, error } = await Promise.race([queryPromise, timeoutPromise]) as any
 
-      if (error) {
-        console.warn('Admin check failed:', error.message)
-        setAdminUser(null)
-        return
+          if (error) {
+            console.warn(`Admin check attempt ${attempt + 1} failed:`, error.message)
+            if (attempt < retries) {
+              await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+              continue
+            }
+            setAdminUser(null)
+            setAdminCheckFailed(true)
+            return
+          }
+
+          setAdminUser(data)
+          setAdminCheckFailed(false)
+          return
+        } catch (error) {
+          console.warn(`Admin check attempt ${attempt + 1} error:`, error)
+          if (attempt < retries) {
+            await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+            continue
+          }
+          console.error('All admin check attempts failed:', error)
+          setAdminUser(null)
+          setAdminCheckFailed(true)
+        }
       }
-
-      setAdminUser(data)
-    } catch (error) {
-      console.error('Error checking admin status:', error)
-      setAdminUser(null)
     } finally {
       setAdminLoading(false)
     }
@@ -163,6 +181,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     assignedClientId,
     loading,
     adminLoading,
+    adminCheckFailed,
     signIn,
     signUp,
     signOut,

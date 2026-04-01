@@ -1,11 +1,12 @@
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useEffect, useState } from 'react'
-import { ShieldX } from 'lucide-react'
+import { ShieldX, RefreshCw } from 'lucide-react'
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading, adminUser, adminLoading } = useAuth()
+  const { user, loading, adminUser, adminLoading, adminCheckFailed, refreshAdminStatus } = useAuth()
   const [showTimeout, setShowTimeout] = useState(false)
+  const [retrying, setRetrying] = useState(false)
 
   useEffect(() => {
     const timeout = setTimeout(() => {
@@ -46,7 +47,55 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
     return <Navigate to="/welcome" replace />
   }
 
-  // User is authenticated but has no admin record
+  // Admin check failed due to network/timeout - offer retry instead of blocking
+  if (!adminUser && adminCheckFailed) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-center max-w-md">
+          <RefreshCw className="h-16 w-16 text-yellow-400 mx-auto mb-4" />
+          <h2 className="text-xl font-semibold text-gray-900 mb-2">Connection Issue</h2>
+          <p className="text-gray-600 mb-6">
+            We couldn't verify your access. This is usually a temporary network issue.
+          </p>
+          <button
+            onClick={async () => {
+              setRetrying(true)
+              await refreshAdminStatus()
+              setRetrying(false)
+            }}
+            disabled={retrying}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 font-medium"
+          >
+            {retrying ? (
+              <>
+                <RefreshCw className="h-4 w-4 animate-spin" />
+                Retrying...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4" />
+                Try Again
+              </>
+            )}
+          </button>
+          <div className="mt-4">
+            <button
+              onClick={async () => {
+                const { supabase } = await import('../lib/supabase')
+                await supabase.auth.signOut()
+                window.location.href = '/login'
+              }}
+              className="text-gray-500 hover:text-gray-700 text-sm"
+            >
+              Sign out and try a different account
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // User is authenticated but genuinely has no admin record
   if (!adminUser) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
