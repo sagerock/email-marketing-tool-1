@@ -90,14 +90,41 @@ export default function Contacts() {
     if (!selectedClient) return
 
     try {
-      const { data, error } = await supabase
-        .from('tags')
-        .select('*')
-        .eq('client_id', selectedClient.id)
-        .order('name', { ascending: true })
+      // Fetch tags and live contact counts in parallel
+      const [tagsResult, contactsResult] = await Promise.all([
+        supabase
+          .from('tags')
+          .select('*')
+          .eq('client_id', selectedClient.id)
+          .order('name', { ascending: true }),
+        supabase
+          .from('contacts')
+          .select('tags')
+          .eq('client_id', selectedClient.id)
+      ])
 
-      if (error) throw error
-      setAvailableTags(data || [])
+      if (tagsResult.error) throw tagsResult.error
+      const tags = tagsResult.data || []
+
+      // Count contacts per tag from live data
+      const tagCounts: Record<string, number> = {}
+      if (contactsResult.data) {
+        for (const contact of contactsResult.data) {
+          if (contact.tags) {
+            for (const tag of contact.tags) {
+              tagCounts[tag] = (tagCounts[tag] || 0) + 1
+            }
+          }
+        }
+      }
+
+      // Override stored contact_count with live counts
+      const updatedTags = tags.map(tag => ({
+        ...tag,
+        contact_count: tagCounts[tag.name] || 0
+      }))
+
+      setAvailableTags(updatedTags)
     } catch (error) {
       console.error('Error fetching tags:', error)
     }
