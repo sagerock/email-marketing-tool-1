@@ -111,7 +111,7 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
               await supabase.auth.signOut()
               window.location.href = '/login'
             }}
-            className="text-blue-600 hover:text-blue-700 text-sm font-medium"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
           >
             Sign out and try a different account
           </button>
