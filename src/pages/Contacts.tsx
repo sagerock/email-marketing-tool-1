@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Contact, Tag } from '../types/index.js'
+import type { Contact, Tag, ContactNote, NoteType } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
-import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users, Eye, MousePointer, Tag as TagIcon, Loader2, Download } from 'lucide-react'
+import { Plus, Search, Upload, X, UserX, UserCheck, FileText, AlertCircle, CheckCircle2, Users, Eye, MousePointer, Tag as TagIcon, Loader2, Download, MessageSquare, Mail, Phone, Calendar } from 'lucide-react'
 
 export default function Contacts() {
   const { selectedClient } = useClient()
@@ -35,6 +35,12 @@ export default function Contacts() {
   const [bulkTagName, setBulkTagName] = useState('')
   const [bulkTagLoading, setBulkTagLoading] = useState(false)
   const [exportingCSV, setExportingCSV] = useState(false)
+  const [activityTab, setActivityTab] = useState<'activity' | 'notes'>('activity')
+  const [contactNotes, setContactNotes] = useState<ContactNote[]>([])
+  const [loadingNotes, setLoadingNotes] = useState(false)
+  const [newNoteContent, setNewNoteContent] = useState('')
+  const [newNoteType, setNewNoteType] = useState<NoteType>('note')
+  const [submittingNote, setSubmittingNote] = useState(false)
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -197,8 +203,10 @@ export default function Contacts() {
   // Fetch subscriber activity (opens and clicks with campaign info)
   const fetchSubscriberActivity = async (contact: Contact) => {
     setSelectedSubscriber(contact)
+    setActivityTab('activity')
     setLoadingSubscriberActivity(true)
     setSubscriberActivity([])
+    fetchContactNotes(contact)
 
     try {
       const { data, error } = await supabase
@@ -224,6 +232,53 @@ export default function Contacts() {
       console.error('Error fetching subscriber activity:', error)
     } finally {
       setLoadingSubscriberActivity(false)
+    }
+  }
+
+  const fetchContactNotes = async (contact: Contact) => {
+    setLoadingNotes(true)
+    setContactNotes([])
+
+    try {
+      const { data, error } = await supabase
+        .from('contact_notes')
+        .select('*')
+        .eq('contact_id', contact.id)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setContactNotes(data || [])
+    } catch (error) {
+      console.error('Error fetching notes:', error)
+    } finally {
+      setLoadingNotes(false)
+    }
+  }
+
+  const handleAddNote = async () => {
+    if (!selectedSubscriber || !newNoteContent.trim() || !selectedClient) return
+
+    setSubmittingNote(true)
+    try {
+      const { error } = await supabase
+        .from('contact_notes')
+        .insert({
+          contact_id: selectedSubscriber.id,
+          client_id: selectedClient.id,
+          note_type: newNoteType,
+          content: newNoteContent.trim(),
+          created_by: 'web',
+        })
+
+      if (error) throw error
+      setNewNoteContent('')
+      setNewNoteType('note')
+      fetchContactNotes(selectedSubscriber)
+    } catch (error) {
+      console.error('Error adding note:', error)
+      alert('Failed to add note')
+    } finally {
+      setSubmittingNote(false)
     }
   }
 
@@ -675,12 +730,14 @@ export default function Contacts() {
           <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">Subscriber Activity</h2>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {selectedSubscriber.first_name || selectedSubscriber.last_name
+                    ? `${selectedSubscriber.first_name || ''} ${selectedSubscriber.last_name || ''}`.trim()
+                    : 'Contact Details'}
+                </h2>
                 <p className="text-sm text-gray-600">{selectedSubscriber.email}</p>
-                {(selectedSubscriber.first_name || selectedSubscriber.last_name) && (
-                  <p className="text-sm text-gray-500">
-                    {`${selectedSubscriber.first_name || ''} ${selectedSubscriber.last_name || ''}`.trim()}
-                  </p>
+                {selectedSubscriber.company && (
+                  <p className="text-sm text-gray-500">{selectedSubscriber.company}</p>
                 )}
               </div>
               <button
@@ -717,58 +774,186 @@ export default function Contacts() {
               </div>
             </div>
 
-            {/* Activity List */}
+            {/* Tabs */}
+            <div className="flex border-b border-gray-200 shrink-0">
+              <button
+                onClick={() => setActivityTab('activity')}
+                className={`flex-1 px-4 py-3 text-sm font-medium text-center border-b-2 transition-colors ${
+                  activityTab === 'activity'
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <Eye className="h-4 w-4 inline mr-1.5" />
+                Activity
+              </button>
+              <button
+                onClick={() => setActivityTab('notes')}
+                className={`flex-1 px-4 py-3 text-sm font-medium text-center border-b-2 transition-colors ${
+                  activityTab === 'notes'
+                    ? 'border-blue-600 text-blue-600'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <MessageSquare className="h-4 w-4 inline mr-1.5" />
+                Notes {contactNotes.length > 0 && `(${contactNotes.length})`}
+              </button>
+            </div>
+
+            {/* Tab Content */}
             <div className="flex-1 overflow-y-auto px-6 py-4">
-              {loadingSubscriberActivity ? (
-                <div className="flex items-center justify-center py-8">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                  <span className="ml-2 text-gray-600">Loading activity...</span>
-                </div>
-              ) : subscriberActivity.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  <p>No activity recorded for this subscriber.</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {subscriberActivity.map((event, index) => (
-                    <div
-                      key={`${event.campaign_id}-${event.timestamp}-${index}`}
-                      className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50"
-                    >
-                      <div className={`p-2 rounded-full shrink-0 ${
-                        event.event_type === 'click' ? 'bg-green-100' : 'bg-blue-100'
-                      }`}>
-                        {event.event_type === 'click' ? (
-                          <MousePointer className="h-4 w-4 text-green-600" />
-                        ) : (
-                          <Eye className="h-4 w-4 text-blue-600" />
-                        )}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className={`text-xs font-medium px-2 py-0.5 rounded ${
-                            event.event_type === 'click'
-                              ? 'bg-green-100 text-green-700'
-                              : 'bg-blue-100 text-blue-700'
-                          }`}>
-                            {event.event_type === 'click' ? 'Click' : 'Open'}
-                          </span>
-                          <span className="text-xs text-gray-500">
-                            {new Date(event.timestamp).toLocaleString()}
-                          </span>
-                        </div>
-                        <p className="text-sm font-medium text-gray-900 mt-1">
-                          {event.campaign_name}
-                        </p>
-                        {event.url && (
-                          <p className="text-xs text-gray-500 mt-1 truncate" title={event.url}>
-                            {event.url}
-                          </p>
-                        )}
-                      </div>
+              {activityTab === 'activity' ? (
+                <>
+                  {loadingSubscriberActivity ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                      <span className="ml-2 text-gray-600">Loading activity...</span>
                     </div>
-                  ))}
-                </div>
+                  ) : subscriberActivity.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <p>No activity recorded for this subscriber.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {subscriberActivity.map((event, index) => (
+                        <div
+                          key={`${event.campaign_id}-${event.timestamp}-${index}`}
+                          className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50"
+                        >
+                          <div className={`p-2 rounded-full shrink-0 ${
+                            event.event_type === 'click' ? 'bg-green-100' : 'bg-blue-100'
+                          }`}>
+                            {event.event_type === 'click' ? (
+                              <MousePointer className="h-4 w-4 text-green-600" />
+                            ) : (
+                              <Eye className="h-4 w-4 text-blue-600" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                                event.event_type === 'click'
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-blue-100 text-blue-700'
+                              }`}>
+                                {event.event_type === 'click' ? 'Click' : 'Open'}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {new Date(event.timestamp).toLocaleString()}
+                              </span>
+                            </div>
+                            <p className="text-sm font-medium text-gray-900 mt-1">
+                              {event.campaign_name}
+                            </p>
+                            {event.url && (
+                              <p className="text-xs text-gray-500 mt-1 truncate" title={event.url}>
+                                {event.url}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
+                  {/* Add Note Form */}
+                  <div className="mb-4 p-4 bg-gray-50 rounded-lg border border-gray-200">
+                    <div className="flex gap-2 mb-3">
+                      {(['note', 'email', 'call', 'meeting'] as NoteType[]).map((type) => (
+                        <button
+                          key={type}
+                          onClick={() => setNewNoteType(type)}
+                          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${
+                            newNoteType === type
+                              ? 'bg-blue-100 text-blue-700 border border-blue-300'
+                              : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-100'
+                          }`}
+                        >
+                          {type === 'note' && <MessageSquare className="h-3 w-3" />}
+                          {type === 'email' && <Mail className="h-3 w-3" />}
+                          {type === 'call' && <Phone className="h-3 w-3" />}
+                          {type === 'meeting' && <Calendar className="h-3 w-3" />}
+                          {type.charAt(0).toUpperCase() + type.slice(1)}
+                        </button>
+                      ))}
+                    </div>
+                    <textarea
+                      value={newNoteContent}
+                      onChange={(e) => setNewNoteContent(e.target.value)}
+                      placeholder="Add a note..."
+                      rows={3}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none"
+                    />
+                    <div className="flex justify-end mt-2">
+                      <Button
+                        size="sm"
+                        onClick={handleAddNote}
+                        disabled={!newNoteContent.trim() || submittingNote}
+                      >
+                        {submittingNote ? 'Saving...' : 'Add Note'}
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Notes List */}
+                  {loadingNotes ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                      <span className="ml-2 text-gray-600">Loading notes...</span>
+                    </div>
+                  ) : contactNotes.length === 0 ? (
+                    <div className="text-center py-8 text-gray-500">
+                      <MessageSquare className="h-8 w-8 mx-auto text-gray-300 mb-2" />
+                      <p>No notes yet.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {contactNotes.map((note) => (
+                        <div
+                          key={note.id}
+                          className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50"
+                        >
+                          <div className={`p-2 rounded-full shrink-0 ${
+                            note.note_type === 'email' ? 'bg-blue-100' :
+                            note.note_type === 'call' ? 'bg-green-100' :
+                            note.note_type === 'meeting' ? 'bg-purple-100' :
+                            'bg-gray-100'
+                          }`}>
+                            {note.note_type === 'email' && <Mail className="h-4 w-4 text-blue-600" />}
+                            {note.note_type === 'call' && <Phone className="h-4 w-4 text-green-600" />}
+                            {note.note_type === 'meeting' && <Calendar className="h-4 w-4 text-purple-600" />}
+                            {note.note_type === 'note' && <MessageSquare className="h-4 w-4 text-gray-600" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded ${
+                                note.note_type === 'email' ? 'bg-blue-100 text-blue-700' :
+                                note.note_type === 'call' ? 'bg-green-100 text-green-700' :
+                                note.note_type === 'meeting' ? 'bg-purple-100 text-purple-700' :
+                                'bg-gray-100 text-gray-700'
+                              }`}>
+                                {note.note_type.charAt(0).toUpperCase() + note.note_type.slice(1)}
+                              </span>
+                              <span className="text-xs text-gray-500">
+                                {new Date(note.created_at).toLocaleString()}
+                              </span>
+                              {note.created_by && (
+                                <span className="text-xs text-gray-400">
+                                  by {note.created_by}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-sm text-gray-900 mt-1 whitespace-pre-wrap">
+                              {note.content}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

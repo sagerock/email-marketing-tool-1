@@ -346,3 +346,31 @@ export interface AIFollowupDraft {
   config?: AIFollowupConfig
   followup_contact?: AIFollowupContact
 }
+
+// CRM Types
+export type NoteType = 'note' | 'email' | 'call' | 'meeting'
+
+export interface ContactNote {
+  id: string
+  contact_id: string
+  client_id: string
+  note_type: NoteType
+  content: string
+  created_by?: string
+  created_at: string
+}
+
+export interface ContactTask {
+  id: string
+  contact_id: string
+  client_id: string
+  title: string
+  description?: string
+  due_date?: string
+  is_completed: boolean
+  completed_at?: string
+  created_by?: string
+  created_at: string
+  updated_at: string
+  contact?: Contact
+}
