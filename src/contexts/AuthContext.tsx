@@ -95,6 +95,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(session?.user ?? null)
 
       if (session?.user) {
+        setAdminLoading(true)
         await checkAdminStatus(session.user.id)
       } else {
         setAdminUser(null)
