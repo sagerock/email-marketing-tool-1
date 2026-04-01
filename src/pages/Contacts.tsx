@@ -155,6 +155,28 @@ export default function Contacts() {
     }
   }
 
+  const fetchAllContacts = async () => {
+    if (!selectedClient) return
+
+    setLoading(true)
+    setShowContacts(true)
+    try {
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('created_at', { ascending: false })
+        .limit(500)
+
+      if (error) throw error
+      setContacts(data || [])
+    } catch (error) {
+      console.error('Error fetching contacts:', error)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const searchContacts = async () => {
     if (!selectedClient || !searchTerm.trim()) {
       return
@@ -594,9 +616,15 @@ export default function Contacts() {
               <p className="text-gray-600 text-lg font-medium mb-2">
                 {totalCount.toLocaleString()} contacts total
               </p>
-              <p className="text-gray-500">
+              <p className="text-gray-500 mb-4">
                 Search or select a tag to view contacts
               </p>
+              {totalCount > 0 && totalCount <= 500 && (
+                <Button onClick={fetchAllContacts}>
+                  <Eye className="h-4 w-4 mr-2" />
+                  View All Contacts
+                </Button>
+              )}
             </div>
           ) : !showContacts ? (
             <div className="text-center py-12">
