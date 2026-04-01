@@ -41,11 +41,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const checkAdminStatus = async (userId: string) => {
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        const { data, error } = await supabase
+        console.log(`Admin check attempt ${attempt + 1} starting for user ${userId}`)
+
+        const queryPromise = supabase
           .from('admin_users')
           .select('*')
           .eq('user_id', userId)
           .maybeSingle()
+
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Admin check query timeout after 10s')), 10000)
+        )
+
+        const { data, error } = await Promise.race([queryPromise, timeoutPromise])
 
         if (error) {
           console.warn(`Admin check attempt ${attempt + 1} failed:`, error.message)
@@ -59,6 +67,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           return
         }
 
+        console.log(`Admin check succeeded:`, data ? 'admin found' : 'no admin record')
         setAdminUser(data)
         setAdminCheckFailed(false)
         setAdminLoading(false)
