@@ -1935,7 +1935,7 @@ app.post('/api/analyze-subscribers', async (req, res) => {
  * Generates production-ready HTML email using Claude based on user prompt
  */
 const generateEmailRateLimit = { timestamps: [] }
-const { getDocumentHead, getSharedFooter, getEmailTypeDescription, SHARED_ASSETS } = require('./email-templates')
+const { getDocumentHead, getSharedFooter, getEmailTypeDescription, SHARED_ASSETS, SHARED_HEAD_STYLES } = require('./email-templates')
 
 app.post('/api/generate-email', authenticateUser, async (req, res) => {
   // Rate limiting: 5 requests per minute
@@ -2084,6 +2084,242 @@ Remember: Return ONLY the JSON object with subject, preview_text, and html_conte
   } catch (error) {
     console.error('Generate email error:', error)
     res.status(500).json({ error: 'Failed to generate email: ' + (error.message || 'Unknown error') })
+  }
+})
+
+// ─── AI Email Builder ──────────────────────────────────────────────────────
+const emailBuilderRateLimit = { timestamps: [] }
+
+// Get lightweight template index for AI context
+app.get('/api/email-builder/templates', authenticateUser, async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const { data: templates, error: tErr } = await supabase
+      .from('templates')
+      .select('id, name, subject, preview_text, created_at')
+      .eq('client_id', clientId)
+      .order('updated_at', { ascending: false })
+      .limit(50)
+
+    if (tErr) throw tErr
+
+    const { data: campaigns, error: cErr } = await supabase
+      .from('campaigns')
+      .select('name, sent_at, template_id, subject')
+      .eq('client_id', clientId)
+      .eq('status', 'sent')
+      .order('sent_at', { ascending: false })
+      .limit(30)
+
+    if (cErr) throw cErr
+
+    res.json({ templates: templates || [], sentCampaigns: campaigns || [] })
+  } catch (error) {
+    console.error('Email builder templates error:', error)
+    res.status(500).json({ error: 'Failed to fetch templates' })
+  }
+})
+
+// Get full template HTML for reference
+app.get('/api/email-builder/template/:id', authenticateUser, async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const { data: template, error } = await supabase
+      .from('templates')
+      .select('id, name, subject, preview_text, html_content')
+      .eq('id', req.params.id)
+      .eq('client_id', clientId)
+      .single()
+
+    if (error) throw error
+    if (!template) return res.status(404).json({ error: 'Template not found' })
+
+    res.json(template)
+  } catch (error) {
+    console.error('Email builder template detail error:', error)
+    res.status(500).json({ error: 'Failed to fetch template' })
+  }
+})
+
+// Chat endpoint with SSE streaming
+app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
+  // Rate limiting: 10 requests per minute
+  const now = Date.now()
+  emailBuilderRateLimit.timestamps = emailBuilderRateLimit.timestamps.filter(t => now - t < 60000)
+  if (emailBuilderRateLimit.timestamps.length >= 10) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a minute.' })
+  }
+  emailBuilderRateLimit.timestamps.push(now)
+
+  try {
+    const { clientId, messages, referenceTemplateIds } = req.body
+
+    if (!clientId || !messages || !Array.isArray(messages) || messages.length === 0) {
+      return res.status(400).json({ error: 'clientId and messages are required' })
+    }
+
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+    }
+
+    const Anthropic = require('@anthropic-ai/sdk')
+    const anthropic = new Anthropic()
+
+    // Fetch template index for AI context
+    const { data: templateIndex } = await supabase
+      .from('templates')
+      .select('id, name, subject')
+      .eq('client_id', clientId)
+      .order('updated_at', { ascending: false })
+      .limit(30)
+
+    // Fetch reference templates if requested
+    let referenceContext = ''
+    if (referenceTemplateIds && referenceTemplateIds.length > 0) {
+      const ids = referenceTemplateIds.slice(0, 2) // max 2
+      const { data: refTemplates } = await supabase
+        .from('templates')
+        .select('name, subject, html_content')
+        .in('id', ids)
+        .eq('client_id', clientId)
+
+      if (refTemplates && refTemplates.length > 0) {
+        referenceContext = refTemplates.map(t =>
+          `<reference_email name="${t.name}" subject="${t.subject}">\n${t.html_content}\n</reference_email>`
+        ).join('\n\n')
+      }
+    }
+
+    const templateListStr = (templateIndex || []).map(t =>
+      `- "${t.name}" (subject: "${t.subject}", id: ${t.id})`
+    ).join('\n')
+
+    const systemPrompt = `You are an expert email HTML developer and design consultant. You help users iteratively build production-ready HTML emails through conversation.
+
+ROLE:
+- You are conversational and helpful. Discuss design choices, ask clarifying questions, suggest improvements.
+- When the user asks you to create or modify an email, produce the complete HTML.
+- When you produce or update HTML, ALWAYS include the full complete email HTML — never partial snippets.
+- Learn the client's brand style from any reference emails provided. Match their colors, fonts, header/footer patterns, and overall aesthetic.
+
+OUTPUT FORMAT:
+- For conversational responses (questions, suggestions, no HTML changes): just respond normally with helpful text.
+- When you generate or modify HTML, respond with your explanation FIRST, then include a JSON block fenced with triple backticks and "json" language tag:
+\`\`\`json
+{
+  "subject": "the email subject line",
+  "preview_text": "preview text for email clients (1-2 sentences)",
+  "html_content": "the complete HTML email from <!DOCTYPE to </html>"
+}
+\`\`\`
+- ALWAYS include the complete HTML from <!DOCTYPE> to </html> — never partial updates or diffs.
+
+CRITICAL EMAIL HTML RULES FOR CROSS-CLIENT COMPATIBILITY:
+- Use XHTML 1.0 Transitional doctype
+- Table-based layout ONLY (no div-based layout for structure)
+- ALL styles must be inline (style="...") — no external stylesheets
+- Include MSO conditional comments for Outlook compatibility: <!--[if mso]> and <!--[if gte mso 9]>
+- 600px max-width centered content body on a light background
+- Font stacks: Arial, 'helvetica neue', helvetica, sans-serif (or similar web-safe stacks)
+- All images must have: display:block, border:0, outline:none, text-decoration:none, and alt text
+- Use cellpadding and cellspacing attributes on tables
+- Every table should have: style="mso-table-lspace:0pt;mso-table-rspace:0pt;border-spacing:0px"
+- Include viewport meta tag: <meta content="width=device-width, initial-scale=1" name="viewport">
+- Include <meta name="x-apple-disable-message-reformatting"> to prevent Apple Mail reformatting
+- Use role="presentation" on layout tables, role="none" on structural tables
+- For buttons: use table-based buttons with VML fallback for Outlook, or border-based padding trick
+- Line heights: use px values, not unitless or em
+- Background colors: set on <td> elements, not <table> or <tr>
+- For responsive emails: include @media only screen and (max-width:600px) styles in a <style> block in <head>
+- Use !important in media queries to override inline styles on mobile
+- The <style> block in <head> is for responsive overrides only — primary styles must be inline
+
+RESPONSIVE EMAIL CSS PATTERN (include in <head>):
+${SHARED_HEAD_STYLES}
+
+DOCUMENT HEAD PATTERN (adapt title as needed):
+- Include proper XHTML doctype, charset UTF-8, viewport meta
+- Include Outlook XML namespace: xmlns:o="urn:schemas-microsoft-com:office:office"
+- Include MSO-specific noscript block for PixelsPerInch
+- Include Word document XML to disable advanced typography
+
+MERGE TAGS (the user's email platform supports these — use where appropriate):
+- {{first_name}} — Recipient's first name
+- {{last_name}} — Recipient's last name
+- {{email}} — Recipient's email address
+- {{unsubscribe_url}} — Unsubscribe link URL (use in href, required by CAN-SPAM)
+- {{mailing_address}} — Sender's physical mailing address (required by CAN-SPAM)
+- {{industry_link}} — Industry-specific URL based on contact's industry
+- {{campaign_name}} — Campaign or Salesforce campaign name
+
+CAN-SPAM COMPLIANCE:
+Every email MUST include:
+1. An unsubscribe link using {{unsubscribe_url}}
+2. A physical mailing address using {{mailing_address}}
+Remind the user if they ask you to remove these.
+
+${templateListStr ? `AVAILABLE PREVIOUS EMAILS (the user may reference these by name):\n${templateListStr}\n\nWhen the user references a previous email, they may provide its HTML as context. Use it as a starting point or inspiration as directed. Match the brand style (colors, fonts, layout patterns) from reference emails unless told otherwise.` : ''}
+
+DESIGN BEST PRACTICES:
+- Keep email width at 600px for maximum compatibility
+- Use web-safe fonts (Arial, Georgia, Verdana, Times New Roman)
+- Minimum font size: 14px for body, 12px for fine print
+- CTA buttons: minimum 44x44px touch target, high contrast colors
+- Images: always include width/height attributes and meaningful alt text
+- Preheader text: include as first hidden text in body for inbox preview
+- Dark mode: use color-scheme and supported-color-schemes meta tags where possible
+- Test with and without images — ensure content is readable with images blocked`
+
+    // Build message array for Claude
+    const claudeMessages = messages.slice(-10).map((msg, idx) => {
+      let content = msg.content
+      // Inject reference templates into the first user message
+      if (idx === 0 && msg.role === 'user' && referenceContext) {
+        content = `${referenceContext}\n\n${content}`
+      }
+      return { role: msg.role, content }
+    })
+
+    // Set up SSE streaming
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    })
+
+    const stream = anthropic.messages.stream({
+      model: 'claude-sonnet-4-6',
+      max_tokens: 16384,
+      system: systemPrompt,
+      messages: claudeMessages,
+    })
+
+    stream.on('text', (text) => {
+      res.write(`data: ${JSON.stringify({ type: 'text', text })}\n\n`)
+    })
+
+    stream.on('end', () => {
+      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
+      res.end()
+    })
+
+    stream.on('error', (error) => {
+      console.error('Email builder streaming error:', error)
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Generation failed' })}\n\n`)
+      res.end()
+    })
+
+  } catch (error) {
+    console.error('Email builder chat error:', error)
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Failed to process chat: ' + (error.message || 'Unknown error') })
+    } else {
+      res.end()
+    }
   }
 })
 

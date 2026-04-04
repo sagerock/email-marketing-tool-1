@@ -18,6 +18,7 @@ import Admin from './pages/Admin'
 import AIAgents from './pages/AIAgents'
 import BounceRecovery from './pages/BounceRecovery'
 import ContactDetail from './pages/ContactDetail'
+import EmailBuilder from './pages/EmailBuilder'
 import DebugAuth from './pages/DebugAuth'
 
 function App() {
@@ -121,6 +122,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <BounceRecovery />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/email-builder"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <EmailBuilder />
                   </Layout>
                 </ProtectedRoute>
               }

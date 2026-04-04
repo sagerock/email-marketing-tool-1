@@ -5,11 +5,13 @@ import type { Template, Folder } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
-import { Plus, FileText, X, Pencil, Folder as FolderIcon, FolderOpen, FolderPlus, MoreVertical, ArrowRight, Sparkles, Loader2, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plus, FileText, X, Pencil, Folder as FolderIcon, FolderOpen, FolderPlus, MoreVertical, ArrowRight, Sparkles, Loader2, ChevronDown, ChevronUp, MessageSquare } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../lib/api'
 import { cn } from '../lib/utils'
 
 export default function Templates() {
+  const navigate = useNavigate()
   const { selectedClient } = useClient()
   const [templates, setTemplates] = useState<Template[]>([])
   const [allTemplates, setAllTemplates] = useState<Template[]>([])
@@ -282,6 +284,10 @@ export default function Templates() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Button variant="outline" onClick={() => navigate('/email-builder')}>
+              <MessageSquare className="h-4 w-4 mr-2" />
+              AI Email Builder
+            </Button>
             <Button variant="outline" onClick={() => setShowAIGenerateModal(true)}>
               <Sparkles className="h-4 w-4 mr-2" />
               Generate with AI

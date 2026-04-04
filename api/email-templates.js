@@ -225,6 +225,7 @@ Do NOT use {{first_name}} - this goes to a general audience.`
 
 module.exports = {
   SHARED_ASSETS,
+  SHARED_HEAD_STYLES,
   getDocumentHead,
   getSharedFooter,
   getEmailTypeDescription,
