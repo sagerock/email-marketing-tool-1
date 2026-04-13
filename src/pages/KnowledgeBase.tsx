@@ -364,7 +364,7 @@ export default function KnowledgeBase() {
                       {item.is_active ? (
                         <Badge variant="success">Active</Badge>
                       ) : (
-                        <Badge variant="secondary">Inactive</Badge>
+                        <Badge variant="default">Inactive</Badge>
                       )}
                     </div>
                     {item.description && (
