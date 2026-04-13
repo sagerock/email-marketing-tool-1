@@ -55,19 +55,20 @@ Each model has unique strengths. GPT-5 is great for coding and reasoning. Claude
 
 **Model Comparison Guide:** A comprehensive educational resource accessible via the info icon next to the model selector. Features detailed model comparisons, token economics, citation and research techniques, AI optimization insights, and best practices for model selection and prompt engineering.
 
-## How to Get Started
+## How to Get Started — IMPORTANT: Include These Steps in Welcome Emails
 
 1. Watch the introductory video on YouTube: https://youtu.be/FS9-QgQoiYs
-2. Follow along with the series as new episodes are released
-3. Create your account on the platform — go to the login page and click "Sign Up"
-4. Enter your name, email, and a password to get started
-5. If you have questions or want hands-on help, reach out to Sage directly
+2. Sign up for the free course at: https://www.ai-engagement-hub.com/join
+3. When signing up, use course code: **FRESP26883** (this is the "Free Business Automation Course")
+4. At checkout, enter promo code: **BIZ100** for 100% off — the course is completely free
+5. Follow along with the series as new episodes are released
+6. If you have questions or want hands-on help, reach out to Sage directly
 
 ### Step-by-Step: Getting Started on the Platform
 
-1. **Create your account** — Go to the login page and click "Don't have an account? Sign up." Enter your full name, email, and a password (6+ characters). After signing up you'll land on your Dashboard.
+1. **Create your account** — Go to https://www.ai-engagement-hub.com/join and click "Don't have an account? Sign up." Enter your full name, email, and a password (6+ characters).
 
-2. **Join a course** — Click "Join Course" from the sidebar or dashboard. Enter the course code provided by your instructor or in the video series. Your enrollment request will be sent for approval.
+2. **Join the free course** — After signing up, enter course code **FRESP26883** on the join page. At checkout, use promo code **BIZ100** to get the course 100% free.
 
 3. **Create a project** — Once approved, go to your course and click "Projects," then "New Project." Give it a title and description. Projects are where all of your AI conversations live.
 
