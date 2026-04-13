@@ -3042,7 +3042,11 @@ app.post('/api/webhook/inbound-email', inboundUpload.any(), async (req, res) => 
     const contactId = contactIdMatch?.[1]
 
     if (!contactId) {
-      console.warn('⚠️ Inbound email: no contact ID in To address:', rawTo)
+      console.log('📨 General chatbot: no +uuid in To address, using general chatbot path')
+      // Handle as general chatbot email (async, respond to SendGrid immediately)
+      handleGeneralChatbotEmail(senderEmail, rawFrom, subject, bodyText, bodyHtml).catch(err => {
+        console.error('❌ General chatbot error:', err)
+      })
       return res.status(200).send('OK')
     }
 
@@ -3169,6 +3173,119 @@ async function loadKnowledgeBase(clientId) {
 }
 
 /**
+ * Handle inbound emails to ai@reply.sagerock.com (no +uuid).
+ * Resolves or creates the sender as a contact, generates an AI reply,
+ * and routes future replies through the UUID-based handler.
+ */
+async function handleGeneralChatbotEmail(senderEmail, rawFrom, subject, bodyText, bodyHtml) {
+  const clientId = process.env.PUBLIC_SIGNUP_CLIENT_ID
+  if (!clientId) {
+    console.error('❌ General chatbot: PUBLIC_SIGNUP_CLIENT_ID not configured')
+    return
+  }
+
+  // Parse display name from From header (e.g., "John Smith <john@example.com>")
+  const nameMatch = rawFrom?.match(/^"?([^"<]+)"?\s*</)
+  const displayName = nameMatch?.[1]?.trim() || ''
+  const nameParts = displayName.split(/\s+/)
+  const firstName = nameParts[0] || null
+  const lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null
+
+  // Use the plain text body, fall back to stripping HTML
+  const messageBody = bodyText?.trim() || bodyHtml?.replace(/<[^>]*>/g, ' ').trim() || ''
+  if (!messageBody) {
+    console.warn('⚠️ General chatbot: empty message body from:', senderEmail)
+    return
+  }
+
+  // Strip quoted reply text
+  const cleanBody = messageBody
+    .split(/\n/)
+    .filter(line => !line.startsWith('>'))
+    .join('\n')
+    .split(/On .+ wrote:/)[0]
+    .trim()
+
+  if (!cleanBody) {
+    console.warn('⚠️ General chatbot: only quoted text from:', senderEmail)
+    return
+  }
+
+  // Look up or create contact
+  let contact
+  const { data: existing } = await supabase
+    .from('contacts')
+    .select('*')
+    .eq('client_id', clientId)
+    .eq('email', senderEmail)
+    .single()
+
+  if (existing) {
+    contact = existing
+    console.log(`📇 General chatbot: found existing contact ${senderEmail}`)
+  } else {
+    const { data: created, error: createError } = await supabase
+      .from('contacts')
+      .insert({
+        client_id: clientId,
+        email: senderEmail,
+        first_name: firstName,
+        last_name: lastName,
+        tags: ['ai-chatbot'],
+        unsubscribed: false,
+      })
+      .select()
+      .single()
+
+    if (createError) {
+      console.error('❌ General chatbot: failed to create contact:', createError.message)
+      return
+    }
+    contact = created
+    console.log(`✅ General chatbot: created contact ${senderEmail} with tag ai-chatbot`)
+  }
+
+  // Log the inbound message
+  await supabase.from('email_conversations').insert({
+    client_id: contact.client_id,
+    contact_id: contact.id,
+    direction: 'inbound',
+    subject: subject || '(no subject)',
+    body: cleanBody,
+    ai_generated: false,
+    escalated: false,
+  })
+
+  console.log(`📝 General chatbot: logged inbound from ${senderEmail}: "${cleanBody.substring(0, 100)}..."`)
+
+  // Forward inbound message to Sage for visibility
+  try {
+    const fwdApiKey = process.env.CONTACT_SENDGRID_API_KEY
+    if (fwdApiKey) {
+      sgMail.setApiKey(fwdApiKey)
+      await sgMail.send({
+        to: 'sage@sagerock.com',
+        from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
+        subject: `📩 ${contact.first_name || senderEmail} emailed the AI chatbot: ${subject || '(no subject)'}`,
+        text: `From: ${contact.first_name || ''} ${contact.last_name || ''} (${senderEmail})\n\n${cleanBody}`,
+        html: `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
+          <p><strong>From:</strong> ${contact.first_name || ''} ${contact.last_name || ''} (${senderEmail})</p>
+          <p><small>New contact: ${!existing ? 'Yes (created with ai-chatbot tag)' : 'No (existing contact)'}</small></p>
+          <hr>
+          <p>${cleanBody.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>
+        </div>`,
+      })
+    }
+  } catch (fwdErr) {
+    console.warn('⚠️ General chatbot: failed to forward to Sage:', fwdErr.message)
+  }
+
+  // Generate and send AI reply (reuses existing function which handles
+  // knowledge base loading, conversation history, Claude, SendGrid, escalation)
+  await generateAndSendAiReply(contact, cleanBody, subject)
+}
+
+/**
  * Generate an AI reply to an inbound email and send it, or escalate to Sage
  */
 async function generateAndSendAiReply(contact, inboundMessage, originalSubject) {
@@ -3194,9 +3311,9 @@ async function generateAndSendAiReply(contact, inboundMessage, originalSubject) 
   const Anthropic = require('@anthropic-ai/sdk')
   const anthropic = new Anthropic()
 
-  const systemPrompt = `You are Sage's AI assistant at SageRock. You're having an email conversation with ${contact.first_name || 'a business owner'} (${contact.email}) who signed up for the AI for Business series.
+  const systemPrompt = `You are Sage's AI assistant at SageRock. You're having an email conversation with ${contact.first_name || 'someone'} (${contact.email}).
 
-Your job is to be helpful, answer their questions using the knowledge base, and guide them toward getting started with the course. Be conversational, warm, and genuine — like a helpful colleague, not a chatbot.
+Your job is to be helpful, answer their questions using the knowledge base, and be a genuinely useful resource. Be conversational, warm, and genuine — like a helpful colleague, not a chatbot.
 
 IMPORTANT RULES:
 - Return ONLY a JSON object with "subject", "body", and "escalate" fields
