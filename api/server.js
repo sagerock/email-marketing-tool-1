@@ -50,6 +50,8 @@ const corsOptions = {
       'http://localhost:5173', // Local development
       'http://localhost:3000',
       'https://mail.sagerock.com', // Production frontend
+      'https://sagerock.com',      // WordPress site (public signup form)
+      'https://www.sagerock.com',  // WordPress site (www variant)
     ]
 
     // Allow requests with no origin (like mobile apps or curl requests)
@@ -137,6 +139,8 @@ app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/webhook/')) return next()
   // Skip auth for contacts/upsert (uses API key auth)
   if (req.path === '/contacts/upsert') return next()
+  // Skip auth for public signup (rate-limited, no sensitive data)
+  if (req.path === '/public/signup') return next()
   // Skip auth for ip-pools (public)
   if (req.path.startsWith('/ip-pools')) return next()
   // Skip auth for accept-invite (user doesn't have an account yet)
@@ -4844,6 +4848,221 @@ app.post('/api/bounces/send-recovery', async (req, res) => {
 // Serve the built React app from the dist folder
 // This must come AFTER all API routes
 // ============================================================
+
+// ==========================================
+// Public signup endpoint (AI for Business lead gen)
+// Rate-limited, no auth required, triggers AI welcome email
+// ==========================================
+const publicSignupRateLimit = new Map() // IP -> { count, resetTime }
+
+app.post('/api/public/signup', async (req, res) => {
+  try {
+    // Rate limiting: 5 requests per IP per 15 minutes
+    const ip = req.ip || req.connection.remoteAddress
+    const now = Date.now()
+    const windowMs = 15 * 60 * 1000
+    const maxRequests = 5
+
+    const rateData = publicSignupRateLimit.get(ip) || { count: 0, resetTime: now + windowMs }
+    if (now > rateData.resetTime) {
+      rateData.count = 0
+      rateData.resetTime = now + windowMs
+    }
+    rateData.count++
+    publicSignupRateLimit.set(ip, rateData)
+
+    if (rateData.count > maxRequests) {
+      return res.status(429).json({ error: 'Too many requests. Please try again later.' })
+    }
+
+    // Validate input
+    const { email, first_name, source } = req.body
+
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Email is required' })
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Invalid email address' })
+    }
+
+    if (!first_name || typeof first_name !== 'string' || first_name.trim().length === 0) {
+      return res.status(400).json({ error: 'First name is required' })
+    }
+
+    const normalizedEmail = email.toLowerCase().trim()
+    const cleanName = first_name.trim()
+    const signupSource = (source || 'ai-for-business').trim()
+
+    // Look up the default client for public signups
+    const publicClientId = process.env.PUBLIC_SIGNUP_CLIENT_ID
+    if (!publicClientId) {
+      console.error('❌ PUBLIC_SIGNUP_CLIENT_ID not configured')
+      return res.status(500).json({ error: 'Signup is not configured' })
+    }
+
+    // Check if contact already exists
+    const { data: existingContact } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('client_id', publicClientId)
+      .eq('email', normalizedEmail)
+      .single()
+
+    let contact
+    let action
+    const tags = ['ai-for-business', 'youtube-lead']
+
+    if (existingContact) {
+      // Merge tags, update name if blank
+      const mergedTags = [...new Set([...(existingContact.tags || []), ...tags])]
+      const { data: updated, error: updateError } = await supabase
+        .from('contacts')
+        .update({
+          first_name: existingContact.first_name || cleanName,
+          tags: mergedTags,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingContact.id)
+        .select()
+        .single()
+
+      if (updateError) throw updateError
+      contact = updated
+      action = 'updated'
+      console.log(`📝 Public signup: updated contact ${normalizedEmail}`)
+    } else {
+      // Create new contact
+      const { data: created, error: createError } = await supabase
+        .from('contacts')
+        .insert({
+          client_id: publicClientId,
+          email: normalizedEmail,
+          first_name: cleanName,
+          tags,
+          unsubscribed: false,
+        })
+        .select()
+        .single()
+
+      if (createError) throw createError
+      contact = created
+      action = 'created'
+      console.log(`✅ Public signup: created contact ${normalizedEmail}`)
+    }
+
+    // Send AI-generated welcome email (async, don't block the response)
+    sendAiWelcomeEmail(contact, signupSource).catch(err => {
+      console.error('❌ Failed to send AI welcome email:', err)
+    })
+
+    res.json({ success: true, action })
+  } catch (error) {
+    console.error('❌ Public signup error:', error)
+    res.status(500).json({ error: 'Signup failed. Please try again.' })
+  }
+})
+
+/**
+ * Generate and send an AI-powered welcome email using Claude
+ */
+async function sendAiWelcomeEmail(contact, source) {
+  const fs = require('fs')
+  const knowledgeBasePath = path.join(__dirname, '..', 'knowledge', 'ai-for-business.md')
+
+  let knowledgeBase = ''
+  try {
+    knowledgeBase = fs.readFileSync(knowledgeBasePath, 'utf-8')
+  } catch (err) {
+    console.warn('⚠️ Knowledge base file not found, using defaults')
+    knowledgeBase = 'AI for Business video series by Sage at SageRock. Helps business owners learn to automate their business with AI.'
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('❌ ANTHROPIC_API_KEY not configured, skipping AI welcome email')
+    return
+  }
+
+  const Anthropic = require('@anthropic-ai/sdk')
+  const anthropic = new Anthropic()
+
+  const systemPrompt = `You are Sage's AI assistant at SageRock. A new person just signed up for the AI for Business video series — a free course teaching business owners how to use AI to automate their business operations.
+
+Your job is to write them a warm, personalized welcome email. Be conversational, friendly, and genuinely helpful — not salesy or corporate. Write like a real person, not a marketing bot.
+
+Use the knowledge base below for accurate details about the series, links, and next steps.
+
+IMPORTANT RULES:
+- Return ONLY a JSON object with "subject" and "body" fields
+- The body should be plain text (no HTML)
+- Keep it concise: 3-4 short paragraphs max
+- Sign off as "Sage's AI Assistant" or similar — be transparent that this is AI
+- Include relevant links and next steps from the knowledge base
+- Do NOT make up links, prices, or details not in the knowledge base
+
+KNOWLEDGE BASE:
+${knowledgeBase}`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: [{
+      role: 'user',
+      content: `New signup: ${contact.first_name} (${contact.email}). They signed up via: ${source}.`
+    }],
+  })
+
+  // Parse the AI response
+  const aiText = response.content[0].text
+  let parsed
+  try {
+    const jsonMatch = aiText.match(/\{[\s\S]*\}/)
+    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : aiText)
+  } catch (e) {
+    console.error('❌ Failed to parse AI welcome email response:', aiText)
+    return
+  }
+
+  // Send via SendGrid
+  const apiKey = process.env.CONTACT_SENDGRID_API_KEY
+  if (!apiKey) {
+    console.error('❌ CONTACT_SENDGRID_API_KEY not configured, cannot send welcome email')
+    return
+  }
+
+  sgMail.setApiKey(apiKey)
+
+  const htmlBody = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">${parsed.body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>').replace(/^/, '<p>').replace(/$/, '</p>')}</div>`
+
+  await sgMail.send({
+    to: contact.email,
+    from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
+    replyTo: { email: 'sage@sagerock.com', name: 'Sage Lewis' },
+    subject: parsed.subject,
+    text: parsed.body,
+    html: htmlBody,
+  })
+
+  console.log(`🤖 AI welcome email sent to ${contact.email} (subject: "${parsed.subject}")`)
+
+  // Log in email_conversations table (if it exists)
+  try {
+    await supabase.from('email_conversations').insert({
+      client_id: contact.client_id,
+      contact_id: contact.id,
+      direction: 'outbound',
+      subject: parsed.subject,
+      body: parsed.body,
+      ai_generated: true,
+      escalated: false,
+    })
+  } catch (logErr) {
+    // Table may not exist yet — don't fail the email send
+    console.warn('⚠️ Could not log to email_conversations:', logErr.message)
+  }
+}
 
 // ==========================================
 // Contact form (landing page)
