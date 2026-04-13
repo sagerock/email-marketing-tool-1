@@ -3007,6 +3007,247 @@ app.post('/api/webhook/sequence', async (req, res) => {
   }
 })
 
+// ============ INBOUND EMAIL (AI Reply-via-Email) ============
+// Processes replies to AI-generated emails via SendGrid Inbound Parse
+// MX record: reply.sagerock.com → mx.sendgrid.net
+// SendGrid Inbound Parse posts to this endpoint
+
+const multer = require('multer')
+const inboundUpload = multer() // memory storage, we only need the text fields
+
+app.post('/api/webhook/inbound-email', inboundUpload.any(), async (req, res) => {
+  try {
+    // SendGrid Inbound Parse sends multipart form data
+    const {
+      from: rawFrom,
+      to: rawTo,
+      subject,
+      text: bodyText,
+      html: bodyHtml,
+    } = req.body
+
+    console.log(`📨 Inbound email from: ${rawFrom}, to: ${rawTo}, subject: ${subject}`)
+
+    // Extract the sender's email from the "From" field (e.g., "Sage Lewis <sage@example.com>")
+    const fromEmailMatch = rawFrom?.match(/<([^>]+)>/) || [null, rawFrom?.trim()]
+    const senderEmail = fromEmailMatch[1]?.toLowerCase()?.trim()
+
+    if (!senderEmail) {
+      console.error('❌ Inbound email: could not parse sender email from:', rawFrom)
+      return res.status(200).send('OK') // Always 200 to SendGrid so it doesn't retry
+    }
+
+    // Extract contact ID from the "To" address (e.g., "ai+<uuid>@reply.sagerock.com")
+    const contactIdMatch = rawTo?.match(/ai\+([a-f0-9-]+)@reply\.sagerock\.com/i)
+    const contactId = contactIdMatch?.[1]
+
+    if (!contactId) {
+      console.warn('⚠️ Inbound email: no contact ID in To address:', rawTo)
+      return res.status(200).send('OK')
+    }
+
+    // Look up the contact
+    const { data: contact, error: contactError } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('id', contactId)
+      .single()
+
+    if (contactError || !contact) {
+      console.error('❌ Inbound email: contact not found for ID:', contactId)
+      return res.status(200).send('OK')
+    }
+
+    // Verify the sender matches the contact (security check)
+    if (contact.email !== senderEmail) {
+      console.warn(`⚠️ Inbound email: sender ${senderEmail} doesn't match contact ${contact.email}`)
+      return res.status(200).send('OK')
+    }
+
+    // Use the plain text body, fall back to stripping HTML
+    const messageBody = bodyText?.trim() || bodyHtml?.replace(/<[^>]*>/g, ' ').trim() || ''
+
+    if (!messageBody) {
+      console.warn('⚠️ Inbound email: empty message body from:', senderEmail)
+      return res.status(200).send('OK')
+    }
+
+    // Strip quoted reply text (lines starting with > or "On ... wrote:")
+    const cleanBody = messageBody
+      .split(/\n/)
+      .filter(line => !line.startsWith('>'))
+      .join('\n')
+      .split(/On .+ wrote:/)[0]
+      .trim()
+
+    if (!cleanBody) {
+      console.warn('⚠️ Inbound email: only quoted text, no new content from:', senderEmail)
+      return res.status(200).send('OK')
+    }
+
+    // Log the inbound message
+    await supabase.from('email_conversations').insert({
+      client_id: contact.client_id,
+      contact_id: contact.id,
+      direction: 'inbound',
+      subject: subject || '(no subject)',
+      body: cleanBody,
+      ai_generated: false,
+      escalated: false,
+    })
+
+    console.log(`📝 Logged inbound email from ${senderEmail}: "${cleanBody.substring(0, 100)}..."`)
+
+    // Generate AI reply (async, respond to SendGrid immediately)
+    generateAndSendAiReply(contact, cleanBody, subject).catch(err => {
+      console.error('❌ Failed to generate AI reply:', err)
+    })
+
+    res.status(200).send('OK')
+  } catch (error) {
+    console.error('❌ Inbound email webhook error:', error)
+    res.status(200).send('OK') // Always 200 so SendGrid doesn't retry
+  }
+})
+
+/**
+ * Generate an AI reply to an inbound email and send it, or escalate to Sage
+ */
+async function generateAndSendAiReply(contact, inboundMessage, originalSubject) {
+  const fs = require('fs')
+  const knowledgeBasePath = path.join(__dirname, '..', 'knowledge', 'ai-for-business.md')
+
+  let knowledgeBase = ''
+  try {
+    knowledgeBase = fs.readFileSync(knowledgeBasePath, 'utf-8')
+  } catch (err) {
+    console.warn('⚠️ Knowledge base file not found, using defaults')
+    knowledgeBase = 'AI for Business video series by Sage at SageRock.'
+  }
+
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error('❌ ANTHROPIC_API_KEY not configured, cannot generate AI reply')
+    return
+  }
+
+  // Load conversation history for context
+  const { data: history } = await supabase
+    .from('email_conversations')
+    .select('direction, body, created_at')
+    .eq('contact_id', contact.id)
+    .order('created_at', { ascending: true })
+    .limit(20)
+
+  const conversationContext = (history || [])
+    .map(msg => `[${msg.direction === 'outbound' ? 'AI Assistant' : contact.first_name || 'Contact'}]: ${msg.body}`)
+    .join('\n\n')
+
+  const Anthropic = require('@anthropic-ai/sdk')
+  const anthropic = new Anthropic()
+
+  const systemPrompt = `You are Sage's AI assistant at SageRock. You're having an email conversation with ${contact.first_name || 'a business owner'} (${contact.email}) who signed up for the AI for Business series.
+
+Your job is to be helpful, answer their questions using the knowledge base, and guide them toward getting started with the course. Be conversational, warm, and genuine — like a helpful colleague, not a chatbot.
+
+IMPORTANT RULES:
+- Return ONLY a JSON object with "subject", "body", and "escalate" fields
+- "body" should be plain text (no HTML)
+- "escalate" should be true if you genuinely cannot answer their question or they're asking for something that requires Sage personally (custom consulting, pricing for services, technical issues with their account, complaints, or anything outside the knowledge base)
+- If escalating, still write a friendly reply letting them know Sage will follow up personally
+- Keep responses concise: 2-3 paragraphs max
+- Do NOT make up information not in the knowledge base
+- Do NOT invent links, prices, or promises
+- Sign off casually — no need for a formal signature every time
+
+KNOWLEDGE BASE:
+${knowledgeBase}`
+
+  const userPrompt = `Conversation so far:
+${conversationContext}
+
+New message from ${contact.first_name || 'the contact'}:
+${inboundMessage}
+
+Write a reply. Return JSON with "subject", "body", and "escalate" fields.`
+
+  const response = await anthropic.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 1024,
+    system: systemPrompt,
+    messages: [{ role: 'user', content: userPrompt }],
+  })
+
+  const aiText = response.content[0].text
+  let parsed
+  try {
+    const jsonMatch = aiText.match(/\{[\s\S]*\}/)
+    parsed = JSON.parse(jsonMatch ? jsonMatch[0] : aiText)
+  } catch (e) {
+    console.error('❌ Failed to parse AI reply response:', aiText)
+    return
+  }
+
+  const replySubject = parsed.subject || `Re: ${originalSubject || 'AI for Business'}`
+  const shouldEscalate = parsed.escalate === true
+
+  // Send the AI reply via SendGrid
+  const apiKey = process.env.CONTACT_SENDGRID_API_KEY
+  if (!apiKey) {
+    console.error('❌ CONTACT_SENDGRID_API_KEY not configured, cannot send AI reply')
+    return
+  }
+
+  sgMail.setApiKey(apiKey)
+
+  const replyToEmail = `ai+${contact.id}@reply.sagerock.com`
+  const htmlBody = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">${parsed.body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>').replace(/^/, '<p>').replace(/$/, '</p>')}</div>`
+
+  await sgMail.send({
+    to: contact.email,
+    from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
+    replyTo: { email: replyToEmail, name: 'SageRock AI Assistant' },
+    subject: replySubject,
+    text: parsed.body,
+    html: htmlBody,
+  })
+
+  console.log(`🤖 AI reply sent to ${contact.email} (escalated: ${shouldEscalate})`)
+
+  // Log the outbound reply
+  await supabase.from('email_conversations').insert({
+    client_id: contact.client_id,
+    contact_id: contact.id,
+    direction: 'outbound',
+    subject: replySubject,
+    body: parsed.body,
+    ai_generated: true,
+    escalated: shouldEscalate,
+  })
+
+  // If escalating, notify Sage
+  if (shouldEscalate) {
+    await sgMail.send({
+      to: 'sage@sagerock.com',
+      from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
+      subject: `🔔 AI escalation: ${contact.first_name || contact.email} needs your help`,
+      text: `The AI assistant couldn't fully help ${contact.first_name || 'a contact'} (${contact.email}) and has escalated to you.\n\nTheir message:\n${inboundMessage}\n\nAI's reply (already sent):\n${parsed.body}\n\nFull conversation history is in the email_conversations table for contact ID: ${contact.id}`,
+      html: `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
+        <p><strong>The AI assistant couldn't fully help ${contact.first_name || 'a contact'} (${contact.email}) and has escalated to you.</strong></p>
+        <hr>
+        <p><strong>Their message:</strong></p>
+        <p>${inboundMessage.replace(/\n/g, '<br>')}</p>
+        <hr>
+        <p><strong>AI's reply (already sent):</strong></p>
+        <p>${parsed.body.replace(/\n/g, '<br>')}</p>
+        <hr>
+        <p><small>Contact ID: ${contact.id} | Reply directly to ${contact.email} if you want to take over the conversation.</small></p>
+      </div>`,
+    })
+
+    console.log(`📧 Escalation notification sent to sage@sagerock.com for contact ${contact.email}`)
+  }
+}
+
 // ============ SALESFORCE INTEGRATION ============
 // Uses OAuth 2.0 Client Credentials Flow (server-to-server, no user interaction)
 
@@ -5036,10 +5277,13 @@ ${knowledgeBase}`
 
   const htmlBody = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">${parsed.body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>').replace(/^/, '<p>').replace(/$/, '</p>')}</div>`
 
+  // Route replies through SendGrid Inbound Parse so the AI can respond
+  const replyToEmail = `ai+${contact.id}@reply.sagerock.com`
+
   await sgMail.send({
     to: contact.email,
     from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
-    replyTo: { email: 'sage@sagerock.com', name: 'Sage Lewis' },
+    replyTo: { email: replyToEmail, name: 'SageRock AI Assistant' },
     subject: parsed.subject,
     text: parsed.body,
     html: htmlBody,
