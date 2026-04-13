@@ -3098,6 +3098,27 @@ app.post('/api/webhook/inbound-email', inboundUpload.any(), async (req, res) => 
 
     console.log(`📝 Logged inbound email from ${senderEmail}: "${cleanBody.substring(0, 100)}..."`)
 
+    // Forward inbound message to Sage for visibility
+    try {
+      const fwdApiKey = process.env.CONTACT_SENDGRID_API_KEY
+      if (fwdApiKey) {
+        sgMail.setApiKey(fwdApiKey)
+        await sgMail.send({
+          to: 'sage@sagerock.com',
+          from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
+          subject: `📩 ${contact.first_name || senderEmail} replied: ${subject || '(no subject)'}`,
+          text: `From: ${contact.first_name || ''} (${senderEmail})\n\n${cleanBody}`,
+          html: `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">
+            <p><strong>From:</strong> ${contact.first_name || ''} (${senderEmail})</p>
+            <hr>
+            <p>${cleanBody.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>')}</p>
+          </div>`,
+        })
+      }
+    } catch (fwdErr) {
+      console.warn('⚠️ Failed to forward inbound email to Sage:', fwdErr.message)
+    }
+
     // Generate AI reply (async, respond to SendGrid immediately)
     generateAndSendAiReply(contact, cleanBody, subject).catch(err => {
       console.error('❌ Failed to generate AI reply:', err)
@@ -3204,6 +3225,7 @@ Write a reply. Return JSON with "subject", "body", and "escalate" fields.`
 
   await sgMail.send({
     to: contact.email,
+    bcc: [{ email: 'sage@sagerock.com' }],
     from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
     replyTo: { email: replyToEmail, name: 'SageRock AI Assistant' },
     subject: replySubject,
@@ -5282,6 +5304,7 @@ ${knowledgeBase}`
 
   await sgMail.send({
     to: contact.email,
+    bcc: [{ email: 'sage@sagerock.com' }],
     from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
     replyTo: { email: replyToEmail, name: 'SageRock AI Assistant' },
     subject: parsed.subject,
