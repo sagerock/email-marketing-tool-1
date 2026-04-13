@@ -3246,7 +3246,7 @@ async function handleGeneralChatbotEmail(senderEmail, rawFrom, subject, bodyText
   }
 
   // Log the inbound message
-  await supabase.from('email_conversations').insert({
+  const { error: logError } = await supabase.from('email_conversations').insert({
     client_id: contact.client_id,
     contact_id: contact.id,
     direction: 'inbound',
@@ -3255,6 +3255,7 @@ async function handleGeneralChatbotEmail(senderEmail, rawFrom, subject, bodyText
     ai_generated: false,
     escalated: false,
   })
+  if (logError) console.error('⚠️ General chatbot: failed to log inbound message:', logError.message)
 
   console.log(`📝 General chatbot: logged inbound from ${senderEmail}: "${cleanBody.substring(0, 100)}..."`)
 
