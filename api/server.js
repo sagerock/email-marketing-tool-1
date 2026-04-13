@@ -3132,19 +3132,47 @@ app.post('/api/webhook/inbound-email', inboundUpload.any(), async (req, res) => 
 })
 
 /**
+ * Load the active knowledge base for a client.
+ * Checks the database first, falls back to the file on disk.
+ */
+async function loadKnowledgeBase(clientId) {
+  // Try database first
+  if (clientId) {
+    try {
+      const { data } = await supabase
+        .from('knowledge_bases')
+        .select('content')
+        .eq('client_id', clientId)
+        .eq('is_active', true)
+        .single()
+
+      if (data?.content) {
+        console.log('📚 Loaded knowledge base from database')
+        return data.content
+      }
+    } catch (err) {
+      // Table might not exist yet or no active KB — fall through to file
+    }
+  }
+
+  // Fall back to file on disk
+  const fs = require('fs')
+  const knowledgeBasePath = path.join(__dirname, '..', 'knowledge', 'ai-for-business.md')
+  try {
+    const content = fs.readFileSync(knowledgeBasePath, 'utf-8')
+    console.log('📚 Loaded knowledge base from file')
+    return content
+  } catch (err) {
+    console.warn('⚠️ No knowledge base found, using defaults')
+    return 'AI for Business video series by Sage at SageRock. Helps business owners learn to automate their business with AI.'
+  }
+}
+
+/**
  * Generate an AI reply to an inbound email and send it, or escalate to Sage
  */
 async function generateAndSendAiReply(contact, inboundMessage, originalSubject) {
-  const fs = require('fs')
-  const knowledgeBasePath = path.join(__dirname, '..', 'knowledge', 'ai-for-business.md')
-
-  let knowledgeBase = ''
-  try {
-    knowledgeBase = fs.readFileSync(knowledgeBasePath, 'utf-8')
-  } catch (err) {
-    console.warn('⚠️ Knowledge base file not found, using defaults')
-    knowledgeBase = 'AI for Business video series by Sage at SageRock.'
-  }
+  const knowledgeBase = await loadKnowledgeBase(contact.client_id)
 
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error('❌ ANTHROPIC_API_KEY not configured, cannot generate AI reply')
@@ -5231,16 +5259,7 @@ app.post('/api/public/signup', async (req, res) => {
  * Generate and send an AI-powered welcome email using Claude
  */
 async function sendAiWelcomeEmail(contact, source) {
-  const fs = require('fs')
-  const knowledgeBasePath = path.join(__dirname, '..', 'knowledge', 'ai-for-business.md')
-
-  let knowledgeBase = ''
-  try {
-    knowledgeBase = fs.readFileSync(knowledgeBasePath, 'utf-8')
-  } catch (err) {
-    console.warn('⚠️ Knowledge base file not found, using defaults')
-    knowledgeBase = 'AI for Business video series by Sage at SageRock. Helps business owners learn to automate their business with AI.'
-  }
+  const knowledgeBase = await loadKnowledgeBase(contact.client_id)
 
   if (!process.env.ANTHROPIC_API_KEY) {
     console.error('❌ ANTHROPIC_API_KEY not configured, skipping AI welcome email')
@@ -5364,6 +5383,119 @@ app.post('/api/contact', async (req, res) => {
   } catch (error) {
     console.error('❌ Contact form error:', error)
     res.status(500).json({ error: 'Failed to send message' })
+  }
+})
+
+// ============================================================
+// Knowledge Base Endpoints
+// ============================================================
+
+// List knowledge bases for a client
+app.get('/api/knowledge-bases', async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const { data, error } = await supabase
+      .from('knowledge_bases')
+      .select('*')
+      .eq('client_id', clientId)
+      .order('created_at', { ascending: false })
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error fetching knowledge bases:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Create a knowledge base
+app.post('/api/knowledge-bases', async (req, res) => {
+  try {
+    const { clientId, name, description, content, is_active } = req.body
+    if (!clientId || !name) {
+      return res.status(400).json({ error: 'clientId and name are required' })
+    }
+
+    // If setting this one as active, deactivate others first
+    if (is_active) {
+      await supabase
+        .from('knowledge_bases')
+        .update({ is_active: false })
+        .eq('client_id', clientId)
+    }
+
+    const { data, error } = await supabase
+      .from('knowledge_bases')
+      .insert({
+        client_id: clientId,
+        name,
+        description: description || null,
+        content: content || '',
+        is_active: is_active || false,
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error creating knowledge base:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Update a knowledge base
+app.put('/api/knowledge-bases/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { name, description, content, is_active, clientId } = req.body
+
+    // If setting this one as active, deactivate others first
+    if (is_active && clientId) {
+      await supabase
+        .from('knowledge_bases')
+        .update({ is_active: false })
+        .eq('client_id', clientId)
+        .neq('id', id)
+    }
+
+    const updates = { updated_at: new Date().toISOString() }
+    if (name !== undefined) updates.name = name
+    if (description !== undefined) updates.description = description
+    if (content !== undefined) updates.content = content
+    if (is_active !== undefined) updates.is_active = is_active
+
+    const { data, error } = await supabase
+      .from('knowledge_bases')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single()
+
+    if (error) throw error
+    res.json(data)
+  } catch (error) {
+    console.error('Error updating knowledge base:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Delete a knowledge base
+app.delete('/api/knowledge-bases/:id', async (req, res) => {
+  try {
+    const { id } = req.params
+    const { error } = await supabase
+      .from('knowledge_bases')
+      .delete()
+      .eq('id', id)
+
+    if (error) throw error
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error deleting knowledge base:', error)
+    res.status(500).json({ error: error.message })
   }
 })
 

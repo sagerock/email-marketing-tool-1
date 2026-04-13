@@ -16,6 +16,7 @@ import Settings from './pages/Settings'
 import Unsubscribe from './pages/Unsubscribe'
 import Admin from './pages/Admin'
 import AIAgents from './pages/AIAgents'
+import KnowledgeBase from './pages/KnowledgeBase'
 import BounceRecovery from './pages/BounceRecovery'
 import ContactDetail from './pages/ContactDetail'
 import EmailBuilder from './pages/EmailBuilder'
@@ -112,6 +113,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <AIAgents />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/knowledge-base"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <KnowledgeBase />
                   </Layout>
                 </ProtectedRoute>
               }
