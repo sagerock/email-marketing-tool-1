@@ -330,6 +330,26 @@ export default function Settings() {
     }
   }
 
+  const downloadAccessReport = async () => {
+    if (!selectedClient) return
+    try {
+      const response = await apiFetch(`/api/salesforce/access-report?clientId=${selectedClient.id}`)
+      const text = await response.text()
+      const blob = new Blob([text], { type: 'text/markdown' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `salesforce-access-report-${selectedClient.name.replace(/\s+/g, '-').toLowerCase()}-${new Date().toISOString().slice(0, 10)}.md`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Error downloading access report:', error)
+      alert('Failed to generate access report')
+    }
+  }
+
   const listSalesforceObjects = async () => {
     if (!selectedClient) return
     try {
@@ -673,6 +693,12 @@ export default function Settings() {
                     onClick={listSalesforceObjects}
                   >
                     Scan Objects
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={downloadAccessReport}
+                  >
+                    Download Access Report
                   </Button>
                   <Button
                     variant="ghost"

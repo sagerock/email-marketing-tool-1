@@ -3719,6 +3719,127 @@ app.get('/api/salesforce/list-objects', async (req, res) => {
 })
 
 /**
+ * Generate a human-readable markdown report of Salesforce data accessible
+ * to the integration user. Designed to be shared with the client's SF admin
+ * so they can confirm which objects/fields drive sample-request automations.
+ */
+app.get('/api/salesforce/access-report', async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const conn = await getSalesforceConnection(clientId)
+    const global = await conn.describeGlobal()
+
+    const allObjects = global.sobjects
+      .filter(o => o.queryable)
+      .map(o => ({ name: o.name, label: o.label, custom: o.custom }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+
+    const groups = {
+      'Sample / Request / Opportunity': allObjects.filter(o => /sample|request|opportunity|quote|order/i.test(o.name)),
+      'Marketing Cloud Connect (et4ae5)': allObjects.filter(o => o.name.toLowerCase().startsWith('et4ae5__')),
+      'Pardot (pi)': allObjects.filter(o => o.name.toLowerCase().startsWith('pi__')),
+      'Email / Activity / Task': allObjects.filter(o => /email|activity|engagement|task|campaign/i.test(o.name)),
+      'Custom Objects': allObjects.filter(o => o.custom && !o.name.toLowerCase().startsWith('et4ae5__') && !o.name.toLowerCase().startsWith('pi__')),
+    }
+
+    const describeFields = async (name) => {
+      try {
+        const meta = await conn.sobject(name).describe()
+        return meta.fields
+          .filter(f => f.type !== 'address' && f.type !== 'location')
+          .map(f => ({ name: f.name, label: f.label, type: f.type, custom: f.custom, picklistValues: f.picklistValues?.map(p => p.value) || [] }))
+          .sort((a, b) => a.label.localeCompare(b.label))
+      } catch (e) {
+        return []
+      }
+    }
+
+    const leadFields = await describeFields('Lead')
+    const contactFields = await describeFields('Contact')
+
+    const lines = []
+    lines.push('# Salesforce Access Report')
+    lines.push('')
+    lines.push(`Generated: ${new Date().toISOString()}`)
+    lines.push(`Total queryable sobjects visible to integration user: **${allObjects.length}** (of ${global.sobjects.length} total)`)
+    lines.push('')
+    lines.push('## Questions for the Salesforce Admin')
+    lines.push('')
+    lines.push('We want to trigger email automations based on sample-request activity. To do that correctly, we need to know where that data lives in your Salesforce org. Please help us answer:')
+    lines.push('')
+    lines.push('1. **Where is the "sample request stage" tracked?**')
+    lines.push('   - A picklist field on the Lead/Contact (e.g., Status, or a custom field)?')
+    lines.push('   - An Opportunity record with a StageName like "Sample Requested / Sample Sent / Follow-up"?')
+    lines.push('   - A custom object (e.g., `Sample_Request__c` or similar)?')
+    lines.push('')
+    lines.push('2. **What are the possible stage values** (e.g., "Requested", "Shipped", "Delivered", "Follow-up Needed", "Converted to Sale")?')
+    lines.push('')
+    lines.push('3. **Which stage transitions should trigger an email?** For example: "When stage moves to Sample Shipped, send follow-up after 7 days."')
+    lines.push('')
+    lines.push('4. **Can the integration user be granted Read access to these objects/fields?** If the relevant object is a custom object or Opportunity, our integration user may not currently have permission to see it.')
+    lines.push('')
+    lines.push('5. **For logging AI-generated emails back to Salesforce**, which would you prefer:')
+    lines.push('   - `Task` records (shows on Activity Timeline, standard pattern)')
+    lines.push('   - `EmailMessage` records')
+    lines.push('   - A custom object')
+    lines.push('')
+    lines.push('6. **Marketing Cloud Connect** appears to be installed (we see `et4ae5__*` fields on Lead/Contact). Is it still actively in use? If not, can we access historical email engagement data from `et4ae5__IndividualEmailResult__c`?')
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+    lines.push('## Objects visible to our integration user, grouped by relevance')
+    lines.push('')
+    for (const [label, objs] of Object.entries(groups)) {
+      lines.push(`### ${label} (${objs.length})`)
+      lines.push('')
+      if (objs.length === 0) {
+        lines.push('_None visible to integration user._')
+      } else {
+        for (const o of objs) {
+          lines.push(`- \`${o.name}\` — ${o.label}${o.custom ? ' (custom)' : ''}`)
+        }
+      }
+      lines.push('')
+    }
+
+    const renderFields = (fields) => {
+      const out = []
+      for (const f of fields) {
+        const picklist = f.picklistValues.length ? ` — values: ${f.picklistValues.join(', ')}` : ''
+        out.push(`- **${f.label}** \`${f.name}\` (${f.type})${f.custom ? ' [custom]' : ''}${picklist}`)
+      }
+      return out.join('\n')
+    }
+
+    lines.push('---')
+    lines.push('')
+    lines.push(`## Lead fields (${leadFields.length})`)
+    lines.push('')
+    lines.push(renderFields(leadFields))
+    lines.push('')
+    lines.push(`## Contact fields (${contactFields.length})`)
+    lines.push('')
+    lines.push(renderFields(contactFields))
+    lines.push('')
+    lines.push('---')
+    lines.push('')
+    lines.push('## All queryable objects (alphabetical)')
+    lines.push('')
+    for (const o of allObjects) {
+      lines.push(`- \`${o.name}\` — ${o.label}${o.custom ? ' (custom)' : ''}`)
+    }
+
+    res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+    res.send(lines.join('\n'))
+  } catch (error) {
+    console.error('Error generating Salesforce access report:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Sync contacts from Salesforce
  * Pulls Leads and Contacts modified since last sync
  */
