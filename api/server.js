@@ -3659,6 +3659,66 @@ app.get('/api/salesforce/fields', async (req, res) => {
 })
 
 /**
+ * List Salesforce sobjects matching known marketing/email activity patterns.
+ * Helps detect Marketing Cloud Connect (et4ae5__*), Pardot (pi__*), and
+ * any email-related standard/custom objects present in the org.
+ */
+app.get('/api/salesforce/list-objects', async (req, res) => {
+  try {
+    const { clientId, filter } = req.query
+
+    if (!clientId) {
+      return res.status(400).json({ error: 'clientId is required' })
+    }
+
+    const conn = await getSalesforceConnection(clientId)
+    const global = await conn.describeGlobal()
+
+    const matchers = [
+      { label: 'Marketing Cloud Connect (et4ae5)', test: (n) => n.toLowerCase().startsWith('et4ae5__') },
+      { label: 'Pardot (pi)', test: (n) => n.toLowerCase().startsWith('pi__') },
+      { label: 'Email / Activity', test: (n) => /email|activity|engagement|task/i.test(n) },
+    ]
+
+    const grouped = {}
+    for (const m of matchers) grouped[m.label] = []
+
+    for (const obj of global.sobjects) {
+      for (const m of matchers) {
+        if (m.test(obj.name)) {
+          grouped[m.label].push({
+            name: obj.name,
+            label: obj.label,
+            custom: obj.custom,
+            queryable: obj.queryable,
+          })
+          break
+        }
+      }
+    }
+
+    // Optional row counts for MC Connect objects so we can see if there's real data
+    const countCandidates = grouped['Marketing Cloud Connect (et4ae5)']
+      .filter(o => o.queryable)
+      .slice(0, 10)
+    const counts = {}
+    for (const o of countCandidates) {
+      try {
+        const r = await conn.query(`SELECT COUNT() FROM ${o.name}`)
+        counts[o.name] = r.totalSize
+      } catch (e) {
+        counts[o.name] = `error: ${e.message}`
+      }
+    }
+
+    res.json({ totalObjects: global.sobjects.length, grouped, rowCounts: counts, filter: filter || null })
+  } catch (error) {
+    console.error('Error listing Salesforce objects:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Sync contacts from Salesforce
  * Pulls Leads and Contacts modified since last sync
  */
