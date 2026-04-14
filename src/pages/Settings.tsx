@@ -330,6 +330,27 @@ export default function Settings() {
     }
   }
 
+  const listSalesforceObjects = async () => {
+    if (!selectedClient) return
+    try {
+      const response = await apiFetch(`/api/salesforce/list-objects?clientId=${selectedClient.id}`)
+      const data = await response.json()
+      console.log('Salesforce objects:', data)
+      const lines: string[] = []
+      for (const [group, objs] of Object.entries(data.grouped || {})) {
+        lines.push(`\n=== ${group} (${(objs as any[]).length}) ===`)
+        for (const o of objs as any[]) {
+          const count = data.rowCounts?.[o.name]
+          lines.push(`${o.name}${o.custom ? ' [custom]' : ''}${count !== undefined ? ` — ${count} rows` : ''}`)
+        }
+      }
+      alert(`Salesforce object scan (full JSON in console):\n${lines.join('\n')}`)
+    } catch (error) {
+      console.error('Error listing Salesforce objects:', error)
+      alert('Failed to list Salesforce objects')
+    }
+  }
+
   const syncSalesforceCampaigns = async () => {
     if (!selectedClient) return
     setSyncingCampaigns(true)
@@ -646,6 +667,12 @@ export default function Settings() {
                     onClick={fetchSalesforceFields}
                   >
                     View Fields
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={listSalesforceObjects}
+                  >
+                    Scan Objects
                   </Button>
                   <Button
                     variant="ghost"
