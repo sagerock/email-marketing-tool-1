@@ -3875,8 +3875,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Leads
     const leadsQuery = syncSince
-      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null AND LastModifiedDate > ${syncSince}`
-      : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null`
+      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null AND LastModifiedDate > ${syncSince}`
+      : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Leads...`)
 
@@ -3907,6 +3907,12 @@ app.post('/api/salesforce/sync', async (req, res) => {
             source_code: lead.Source_code__c || null,
             source_code_history: lead.Source_Code_History__c || null,
             salesforce_created_date: lead.CreatedDate || null,
+            is_converted: lead.IsConverted ?? null,
+            converted_date: lead.ConvertedDate || null,
+            state: lead.State || null,
+            country: lead.Country || null,
+            job_function: lead.Job_Funtion__c || null,
+            product_classification: lead.Product_Classification__c ? lead.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
             updated_at: new Date().toISOString(),
           })
         }
@@ -3936,8 +3942,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Contacts — try with Account.Name first, fall back without if permission denied
     let contactsQuery
-    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate'
-    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate'
+    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c'
+    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c'
     let hasAccountAccess = true
 
     contactsQuery = syncSince
@@ -3987,6 +3993,10 @@ app.post('/api/salesforce/sync', async (req, res) => {
             source_code: contact.Source_Code1__c || null,
             source_code_history: contact.Source_Code_History__c || null,
             salesforce_created_date: contact.CreatedDate || null,
+            state: contact.MailingState || null,
+            country: contact.MailingCountry || null,
+            job_function: contact.Job_Function__c || null,
+            product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
             updated_at: new Date().toISOString(),
           })
         }
@@ -4359,6 +4369,146 @@ app.get('/api/salesforce/campaigns/:campaignId/members', async (req, res) => {
     console.error('Error fetching campaign members:', error)
     res.status(500).json({ error: error.message })
   }
+})
+
+/**
+ * Full backfill — syncs ALL contacts/leads from Salesforce with no date filter.
+ * Runs in the background so the HTTP response returns immediately.
+ * Progress is tracked in clients.salesforce_sync_status / salesforce_sync_message.
+ */
+app.post('/api/salesforce/backfill', async (req, res) => {
+  const { clientId } = req.body
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+  // Respond immediately — work happens in background
+  res.json({ success: true, message: 'Backfill started in background' })
+
+  ;(async () => {
+    try {
+      await supabase.from('clients').update({
+        salesforce_sync_status: 'syncing',
+        salesforce_sync_message: 'Full backfill starting...',
+      }).eq('id', clientId)
+
+      const conn = await getSalesforceConnection(clientId)
+      let totalSynced = 0
+      const syncStartTime = new Date().toISOString()
+      const BATCH_SIZE = 100
+
+      // Leads — no date filter
+      const leadsQuery = `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
+      let leads = await conn.query(leadsQuery)
+      console.log(`🔄 Backfill: ${leads.totalSize} total leads`)
+
+      while (true) {
+        const batchRecords = []
+        for (const lead of leads.records) {
+          if (!lead.Email) continue
+          batchRecords.push({
+            client_id: clientId,
+            email: lead.Email.toLowerCase().trim(),
+            first_name: lead.FirstName || null,
+            last_name: lead.LastName || null,
+            company: lead.Company || null,
+            salesforce_id: lead.Id,
+            record_type: 'lead',
+            industry: lead.Industry || null,
+            source_code: lead.Source_code__c || null,
+            source_code_history: lead.Source_Code_History__c || null,
+            salesforce_created_date: lead.CreatedDate || null,
+            is_converted: lead.IsConverted ?? null,
+            converted_date: lead.ConvertedDate || null,
+            state: lead.State || null,
+            country: lead.Country || null,
+            job_function: lead.Job_Funtion__c || null,
+            product_classification: lead.Product_Classification__c ? lead.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
+            updated_at: new Date().toISOString(),
+          })
+        }
+        for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
+          await upsertContactBatch(batchRecords.slice(i, i + BATCH_SIZE), clientId)
+        }
+        totalSynced += batchRecords.length
+        await addSourceCodeTags(batchRecords, clientId, 'lead')
+
+        await supabase.from('clients').update({
+          salesforce_sync_message: `Backfill in progress: ${totalSynced} records synced...`,
+        }).eq('id', clientId)
+
+        if (!leads.done && leads.nextRecordsUrl) {
+          leads = await conn.queryMore(leads.nextRecordsUrl)
+        } else break
+      }
+
+      // Contacts — no date filter
+      let hasAccountAccess = true
+      let contactsQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
+      let contacts
+      try {
+        contacts = await conn.query(contactsQuery)
+      } catch (err) {
+        if (err.message?.includes('Account') || err.message?.includes('relationship')) {
+          hasAccountAccess = false
+          contactsQuery = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
+          contacts = await conn.query(contactsQuery)
+        } else throw err
+      }
+      console.log(`🔄 Backfill: ${contacts.totalSize} total contacts`)
+
+      while (true) {
+        const batchRecords = []
+        for (const contact of contacts.records) {
+          if (!contact.Email) continue
+          batchRecords.push({
+            client_id: clientId,
+            email: contact.Email.toLowerCase().trim(),
+            first_name: contact.FirstName || null,
+            last_name: contact.LastName || null,
+            company: hasAccountAccess ? ((contact.Account && contact.Account.Name) || null) : null,
+            salesforce_id: contact.Id,
+            record_type: 'contact',
+            industry: contact.Industry__c || null,
+            source_code: contact.Source_Code1__c || null,
+            source_code_history: contact.Source_Code_History__c || null,
+            salesforce_created_date: contact.CreatedDate || null,
+            state: contact.MailingState || null,
+            country: contact.MailingCountry || null,
+            job_function: contact.Job_Function__c || null,
+            product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
+            updated_at: new Date().toISOString(),
+          })
+        }
+        for (let i = 0; i < batchRecords.length; i += BATCH_SIZE) {
+          await upsertContactBatch(batchRecords.slice(i, i + BATCH_SIZE), clientId)
+        }
+        totalSynced += batchRecords.length
+        await addSourceCodeTags(batchRecords, clientId, 'contact')
+
+        await supabase.from('clients').update({
+          salesforce_sync_message: `Backfill in progress: ${totalSynced} records synced...`,
+        }).eq('id', clientId)
+
+        if (!contacts.done && contacts.nextRecordsUrl) {
+          contacts = await conn.queryMore(contacts.nextRecordsUrl)
+        } else break
+      }
+
+      await supabase.from('clients').update({
+        salesforce_sync_status: 'success',
+        salesforce_sync_message: `Backfill complete: ${totalSynced} records synced`,
+        salesforce_sync_count: totalSynced,
+        last_salesforce_sync: syncStartTime,
+      }).eq('id', clientId)
+
+      console.log(`✅ Backfill complete: ${totalSynced} records`)
+    } catch (err) {
+      console.error('Backfill error:', err)
+      await supabase.from('clients').update({
+        salesforce_sync_status: 'error',
+        salesforce_sync_message: `Backfill failed: ${err.message}`,
+      }).eq('id', clientId)
+    }
+  })()
 })
 
 /**
@@ -7047,8 +7197,8 @@ app.listen(PORT, () => {
 
           // Sync Leads
           const leadsQuery = lastSync
-            ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
-            : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null`
+            ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
+            : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
 
           let leads = await conn.query(leadsQuery)
           console.log(`  📥 Found ${leads.totalSize} leads to sync`)
@@ -7069,6 +7219,12 @@ app.listen(PORT, () => {
                 source_code: lead.Source_code__c || null,
                 source_code_history: lead.Source_Code_History__c || null,
                 salesforce_created_date: lead.CreatedDate || null,
+                is_converted: lead.IsConverted ?? null,
+                converted_date: lead.ConvertedDate || null,
+                state: lead.State || null,
+                country: lead.Country || null,
+                job_function: lead.Job_Funtion__c || null,
+                product_classification: lead.Product_Classification__c ? lead.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
                 updated_at: new Date().toISOString(),
               })
             }
@@ -7093,16 +7249,16 @@ app.listen(PORT, () => {
           let cronHasAccountAccess = true
           try {
             cronContactsQuery = lastSync
-              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null`
+              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
             var contacts = await conn.query(cronContactsQuery)
           } catch (accountErr) {
             if (accountErr.message?.includes('Account') || accountErr.message?.includes('relationship')) {
               console.warn(`  ⚠️ No Account access for ${client.name}, falling back`)
               cronHasAccountAccess = false
               cronContactsQuery = lastSync
-                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null`
+                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
               var contacts = await conn.query(cronContactsQuery)
             } else {
               throw accountErr
@@ -7126,6 +7282,10 @@ app.listen(PORT, () => {
                 source_code: contact.Source_Code1__c || null,
                 source_code_history: contact.Source_Code_History__c || null,
                 salesforce_created_date: contact.CreatedDate || null,
+                state: contact.MailingState || null,
+                country: contact.MailingCountry || null,
+                job_function: contact.Job_Function__c || null,
+                product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
                 updated_at: new Date().toISOString(),
               })
             }
