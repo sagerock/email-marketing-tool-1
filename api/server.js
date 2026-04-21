@@ -148,6 +148,8 @@ app.use('/api', (req, res, next) => {
   // Skip auth for internal server-to-server calls (cron → generate, reject → regenerate)
   const isLocalhost = req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1'
   if (req.path === '/ai-followup/generate' && isLocalhost) return next()
+  if (req.path === '/salesforce/backfill' && isLocalhost) return next()
+  if (req.path === '/salesforce/backfill' && req.headers.authorization === `Bearer ${process.env.SUPABASE_SERVICE_KEY}`) return next()
 
   authenticateUser(req, res, (err) => {
     if (err) return // authenticateUser already sent the response
