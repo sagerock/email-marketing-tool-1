@@ -3875,8 +3875,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Leads
     const leadsQuery = syncSince
-      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null AND LastModifiedDate > ${syncSince}`
-      : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null`
+      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null AND LastModifiedDate > ${syncSince}`
+      : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Leads...`)
 
@@ -3906,6 +3906,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             industry: lead.Industry || null,
             source_code: lead.Source_code__c || null,
             source_code_history: lead.Source_Code_History__c || null,
+            salesforce_created_date: lead.CreatedDate || null,
             updated_at: new Date().toISOString(),
           })
         }
@@ -3935,8 +3936,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Contacts — try with Account.Name first, fall back without if permission denied
     let contactsQuery
-    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c'
-    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c'
+    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate'
+    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate'
     let hasAccountAccess = true
 
     contactsQuery = syncSince
@@ -3985,6 +3986,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             industry: contact.Industry__c || null,
             source_code: contact.Source_Code1__c || null,
             source_code_history: contact.Source_Code_History__c || null,
+            salesforce_created_date: contact.CreatedDate || null,
             updated_at: new Date().toISOString(),
           })
         }
@@ -7045,8 +7047,8 @@ app.listen(PORT, () => {
 
           // Sync Leads
           const leadsQuery = lastSync
-            ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
-            : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c FROM Lead WHERE Email != null`
+            ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
+            : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate FROM Lead WHERE Email != null`
 
           let leads = await conn.query(leadsQuery)
           console.log(`  📥 Found ${leads.totalSize} leads to sync`)
@@ -7066,6 +7068,7 @@ app.listen(PORT, () => {
                 industry: lead.Industry || null,
                 source_code: lead.Source_code__c || null,
                 source_code_history: lead.Source_Code_History__c || null,
+                salesforce_created_date: lead.CreatedDate || null,
                 updated_at: new Date().toISOString(),
               })
             }
@@ -7090,16 +7093,16 @@ app.listen(PORT, () => {
           let cronHasAccountAccess = true
           try {
             cronContactsQuery = lastSync
-              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null`
             var contacts = await conn.query(cronContactsQuery)
           } catch (accountErr) {
             if (accountErr.message?.includes('Account') || accountErr.message?.includes('relationship')) {
               console.warn(`  ⚠️ No Account access for ${client.name}, falling back`)
               cronHasAccountAccess = false
               cronContactsQuery = lastSync
-                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c FROM Contact WHERE Email != null`
+                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate FROM Contact WHERE Email != null`
               var contacts = await conn.query(cronContactsQuery)
             } else {
               throw accountErr
@@ -7122,6 +7125,7 @@ app.listen(PORT, () => {
                 industry: contact.Industry__c || null,
                 source_code: contact.Source_Code1__c || null,
                 source_code_history: contact.Source_Code_History__c || null,
+                salesforce_created_date: contact.CreatedDate || null,
                 updated_at: new Date().toISOString(),
               })
             }
