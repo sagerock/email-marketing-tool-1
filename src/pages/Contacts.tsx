@@ -78,35 +78,37 @@ export default function Contacts() {
     if (!selectedClient) return
 
     try {
-      // Fetch tags and live contact counts in parallel
-      const [tagsResult, contactsResult] = await Promise.all([
-        supabase
-          .from('tags')
-          .select('*')
-          .eq('client_id', selectedClient.id)
-          .order('name', { ascending: true }),
-        supabase
-          .from('contacts')
-          .select('tags')
-          .eq('client_id', selectedClient.id)
-      ])
+      const tagsResult = await supabase
+        .from('tags')
+        .select('*')
+        .eq('client_id', selectedClient.id)
+        .order('name', { ascending: true })
 
       if (tagsResult.error) throw tagsResult.error
       const tags = tagsResult.data || []
 
-      // Count contacts per tag from live data
+      // Paginate through all contacts to get accurate tag counts
       const tagCounts: Record<string, number> = {}
-      if (contactsResult.data) {
-        for (const contact of contactsResult.data) {
+      const batchSize = 1000
+      let offset = 0
+      while (true) {
+        const { data, error } = await supabase
+          .from('contacts')
+          .select('tags')
+          .eq('client_id', selectedClient.id)
+          .range(offset, offset + batchSize - 1)
+        if (error || !data || data.length === 0) break
+        for (const contact of data) {
           if (contact.tags) {
             for (const tag of contact.tags) {
               tagCounts[tag] = (tagCounts[tag] || 0) + 1
             }
           }
         }
+        if (data.length < batchSize) break
+        offset += batchSize
       }
 
-      // Override stored contact_count with live counts
       const updatedTags = tags.map(tag => ({
         ...tag,
         contact_count: tagCounts[tag.name] || 0
