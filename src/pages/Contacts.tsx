@@ -28,6 +28,7 @@ export default function Contacts() {
   const [bulkTagName, setBulkTagName] = useState('')
   const [bulkTagLoading, setBulkTagLoading] = useState(false)
   const [exportingCSV, setExportingCSV] = useState(false)
+  const [tagSearch, setTagSearch] = useState('')
 
   // Fetch total count and tags when client changes
   useEffect(() => {
@@ -445,17 +446,28 @@ export default function Contacts() {
                     </button>
                   )}
                 </div>
+                <div className="relative mb-2">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                  <Input
+                    placeholder="Search tags..."
+                    value={tagSearch}
+                    onChange={(e) => setTagSearch(e.target.value)}
+                    className="pl-9 h-8 text-sm"
+                  />
+                </div>
                 <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto">
-                  {availableTags.map((tag) => (
-                    <Badge
-                      key={tag.id}
-                      variant={selectedTags.includes(tag.name) ? 'info' : 'default'}
-                      className="cursor-pointer hover:opacity-80"
-                      onClick={() => toggleTag(tag.name)}
-                    >
-                      {tag.name} ({tag.contact_count.toLocaleString()})
-                    </Badge>
-                  ))}
+                  {availableTags
+                    .filter((tag) => tag.name.toLowerCase().includes(tagSearch.toLowerCase()))
+                    .map((tag) => (
+                      <Badge
+                        key={tag.id}
+                        variant={selectedTags.includes(tag.name) ? 'info' : 'default'}
+                        className="cursor-pointer hover:opacity-80"
+                        onClick={() => toggleTag(tag.name)}
+                      >
+                        {tag.name} ({tag.contact_count.toLocaleString()})
+                      </Badge>
+                    ))}
                 </div>
               </div>
             )}
