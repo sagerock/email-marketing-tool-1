@@ -78,40 +78,28 @@ export default function Contacts() {
     if (!selectedClient) return
 
     try {
-      const tagsResult = await supabase
-        .from('tags')
-        .select('*')
-        .eq('client_id', selectedClient.id)
-        .order('name', { ascending: true })
+      const [tagsResult, countResult] = await Promise.all([
+        supabase
+          .from('tags')
+          .select('*')
+          .eq('client_id', selectedClient.id)
+          .order('name', { ascending: true }),
+        supabase.rpc('get_tag_counts', { p_client_id: selectedClient.id })
+      ])
 
       if (tagsResult.error) throw tagsResult.error
       const tags = tagsResult.data || []
 
-      // Paginate through all contacts to get accurate tag counts
       const tagCounts: Record<string, number> = {}
-      const batchSize = 1000
-      let offset = 0
-      while (true) {
-        const { data, error } = await supabase
-          .from('contacts')
-          .select('tags')
-          .eq('client_id', selectedClient.id)
-          .range(offset, offset + batchSize - 1)
-        if (error || !data || data.length === 0) break
-        for (const contact of data) {
-          if (contact.tags) {
-            for (const tag of contact.tags) {
-              tagCounts[tag] = (tagCounts[tag] || 0) + 1
-            }
-          }
+      if (!countResult.error && countResult.data) {
+        for (const row of countResult.data as { tag_name: string; cnt: number }[]) {
+          tagCounts[row.tag_name] = Number(row.cnt)
         }
-        if (data.length < batchSize) break
-        offset += batchSize
       }
 
       const updatedTags = tags.map(tag => ({
         ...tag,
-        contact_count: tagCounts[tag.name] || 0
+        contact_count: tagCounts[tag.name] ?? tag.contact_count
       }))
 
       setAvailableTags(updatedTags)
