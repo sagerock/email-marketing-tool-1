@@ -25,6 +25,7 @@ export default function Contacts() {
   const [showContacts, setShowContacts] = useState(false)
   const [filteredTagCount, setFilteredTagCount] = useState<number | null>(null)
   const countRequestVersion = useRef(0)
+  const tagCountRequestVersion = useRef(0)
 
   const audienceActive = selectedAudience.length > 0 && selectedAudience.length < 3
   const anyFilterActive = selectedTags.length > 0 || audienceActive
@@ -78,6 +79,12 @@ export default function Contacts() {
     }
   }, [selectedTags, selectedAudience, selectedClient])
 
+  // Refetch tag counts when audience filter changes — counts shown on tags
+  // are scoped to the currently selected audience.
+  useEffect(() => {
+    if (selectedClient) refreshTagCounts()
+  }, [selectedAudience, selectedClient])
+
   const fetchTotalCount = async () => {
     if (!selectedClient) return
 
@@ -106,7 +113,10 @@ export default function Contacts() {
           .select('*')
           .eq('client_id', selectedClient.id)
           .order('name', { ascending: true }),
-        supabase.rpc('get_tag_counts', { p_client_id: selectedClient.id })
+        supabase.rpc('get_tag_counts', {
+          p_client_id: selectedClient.id,
+          p_audience_filter: audienceActive ? selectedAudience : null,
+        })
       ])
 
       if (tagsResult.error) throw tagsResult.error
@@ -121,12 +131,41 @@ export default function Contacts() {
 
       const updatedTags = tags.map(tag => ({
         ...tag,
-        contact_count: tagCounts[tag.name] ?? tag.contact_count
+        contact_count: tagCounts[tag.name] ?? 0
       }))
 
       setAvailableTags(updatedTags)
     } catch (error) {
       console.error('Error fetching tags:', error)
+    }
+  }
+
+  // Lightweight version: refresh only the count column on already-loaded tags.
+  // Used when the audience filter toggles — avoids re-fetching the tag list.
+  const refreshTagCounts = async () => {
+    if (!selectedClient) return
+    tagCountRequestVersion.current += 1
+    const thisVersion = tagCountRequestVersion.current
+
+    try {
+      const { data, error } = await supabase.rpc('get_tag_counts', {
+        p_client_id: selectedClient.id,
+        p_audience_filter: audienceActive ? selectedAudience : null,
+      })
+      if (error) throw error
+      // Ignore stale responses if a newer request was issued
+      if (thisVersion !== tagCountRequestVersion.current) return
+
+      const tagCounts: Record<string, number> = {}
+      for (const row of (data || []) as { tag_name: string; cnt: number }[]) {
+        tagCounts[row.tag_name] = Number(row.cnt)
+      }
+      setAvailableTags(prev => prev.map(tag => ({
+        ...tag,
+        contact_count: tagCounts[tag.name] ?? 0,
+      })))
+    } catch (error) {
+      console.error('Error refreshing tag counts:', error)
     }
   }
 
