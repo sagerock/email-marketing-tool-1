@@ -1280,8 +1280,8 @@ function CreateCampaignModal({
               </div>
               <p className="mt-1 text-xs text-gray-500">
                 {formData.audience_filter.length === 0 || formData.audience_filter.length === 3
-                  ? 'Sending to all audiences (Leads, Customers, and Dealers)'
-                  : `Sending only to: ${formData.audience_filter.map(s => s.charAt(0).toUpperCase() + s.slice(1) + 's').join(', ')}`}
+                  ? 'Sending to everyone (Leads, Customers, and Dealers)'
+                  : `Limited to: ${formData.audience_filter.map(s => s.charAt(0).toUpperCase() + s.slice(1) + 's').join(' + ')}`}
               </p>
             </div>
 
