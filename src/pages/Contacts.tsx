@@ -17,6 +17,7 @@ export default function Contacts() {
   const [availableTags, setAvailableTags] = useState<Tag[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedTags, setSelectedTags] = useState<string[]>([])
+  const [selectedAudience, setSelectedAudience] = useState<string[]>([])
   const [showAddModal, setShowAddModal] = useState(false)
   const [showImportModal, setShowImportModal] = useState(false)
   const [editingContact, setEditingContact] = useState<Contact | null>(null)
@@ -24,6 +25,27 @@ export default function Contacts() {
   const [showContacts, setShowContacts] = useState(false)
   const [filteredTagCount, setFilteredTagCount] = useState<number | null>(null)
   const countRequestVersion = useRef(0)
+
+  const audienceActive = selectedAudience.length > 0 && selectedAudience.length < 3
+  const anyFilterActive = selectedTags.length > 0 || audienceActive
+
+  const applyAudienceFilter = <T extends { or: (clause: string) => T }>(query: T): T => {
+    if (!audienceActive) return query
+    const orClauses: string[] = []
+    if (selectedAudience.includes('lead')) orClauses.push('record_type.eq.lead')
+    if (selectedAudience.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
+    if (selectedAudience.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+    return orClauses.length > 0 ? query.or(orClauses.join(',')) : query
+  }
+
+  const toggleAudience = (segment: 'lead' | 'customer' | 'dealer') => {
+    const current = selectedAudience.length === 0 ? ['lead', 'customer', 'dealer'] : selectedAudience
+    const next = current.includes(segment) ? current.filter((s) => s !== segment) : [...current, segment]
+    setSelectedAudience(next.length === 3 ? [] : next)
+  }
+
+  const isAudienceSelected = (segment: 'lead' | 'customer' | 'dealer') =>
+    selectedAudience.length === 0 || selectedAudience.includes(segment)
   const [showBulkTagInput, setShowBulkTagInput] = useState(false)
   const [bulkTagName, setBulkTagName] = useState('')
   const [bulkTagLoading, setBulkTagLoading] = useState(false)
@@ -43,18 +65,18 @@ export default function Contacts() {
     }
   }, [selectedClient])
 
-  // Reset contacts list and fetch count when tags change
+  // Reset contacts list and fetch count when filters change
   useEffect(() => {
     setContacts([])
     setShowContacts(false)
     setShowBulkTagInput(false)
     setBulkTagName('')
-    if (selectedTags.length > 0 && selectedClient) {
+    if (anyFilterActive && selectedClient) {
       fetchFilteredTagCount(selectedTags)
     } else {
       setFilteredTagCount(null)
     }
-  }, [selectedTags, selectedClient])
+  }, [selectedTags, selectedAudience, selectedClient])
 
   const fetchTotalCount = async () => {
     if (!selectedClient) return
@@ -109,7 +131,7 @@ export default function Contacts() {
   }
 
   const fetchFilteredTagCount = async (tags: string[]) => {
-    if (!selectedClient || tags.length === 0) {
+    if (!selectedClient || (tags.length === 0 && !audienceActive)) {
       setFilteredTagCount(null)
       return
     }
@@ -119,11 +141,16 @@ export default function Contacts() {
     const thisRequestVersion = countRequestVersion.current
 
     try {
-      const { count, error } = await supabase
+      let query = supabase
         .from('contacts')
         .select('*', { count: 'exact', head: true })
         .eq('client_id', selectedClient.id)
-        .filter('tags', 'ov', `{${tags.map(t => `"${t}"`).join(',')}}`)
+      if (tags.length > 0) {
+        query = query.filter('tags', 'ov', `{${tags.map(t => `"${t}"`).join(',')}}`)
+      }
+      query = applyAudienceFilter(query)
+
+      const { count, error } = await query
 
       if (error) throw error
 
@@ -137,19 +164,22 @@ export default function Contacts() {
   }
 
   const fetchFilteredContacts = async () => {
-    if (!selectedClient || selectedTags.length === 0) {
+    if (!selectedClient || !anyFilterActive) {
       setContacts([])
       return
     }
 
     setLoading(true)
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('contacts')
         .select('*')
         .eq('client_id', selectedClient.id)
-        .filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
-        .order('created_at', { ascending: false })
+      if (selectedTags.length > 0) {
+        query = query.filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
+      }
+      query = applyAudienceFilter(query)
+      const { data, error } = await query.order('created_at', { ascending: false })
 
       if (error) throw error
       setContacts(data || [])
@@ -166,12 +196,12 @@ export default function Contacts() {
     setLoading(true)
     setShowContacts(true)
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('contacts')
         .select('*')
         .eq('client_id', selectedClient.id)
-        .order('created_at', { ascending: false })
-        .limit(500)
+      query = applyAudienceFilter(query)
+      const { data, error } = await query.order('created_at', { ascending: false }).limit(500)
 
       if (error) throw error
       setContacts(data || [])
@@ -230,8 +260,8 @@ export default function Contacts() {
   // For backwards compatibility with modals that expect allTags as string[]
   const allTags = availableTags.map(t => t.name)
 
-  // Use actual filtered count from database query, or total count when no tags selected
-  const filteredCount = selectedTags.length > 0
+  // Use actual filtered count from database query, or total count when no filters
+  const filteredCount = anyFilterActive
     ? filteredTagCount
     : totalCount
 
@@ -253,16 +283,20 @@ export default function Contacts() {
   }
 
   const applyBulkTag = async () => {
-    if (!selectedClient || !bulkTagName.trim() || selectedTags.length === 0) return
+    if (!selectedClient || !bulkTagName.trim() || !anyFilterActive) return
 
     setBulkTagLoading(true)
     try {
-      // Fetch all emails matching the current tag filter
-      const { data: matchingContacts, error: fetchError } = await supabase
+      // Fetch all emails matching the current filters
+      let query = supabase
         .from('contacts')
         .select('email')
         .eq('client_id', selectedClient.id)
-        .filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
+      if (selectedTags.length > 0) {
+        query = query.filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
+      }
+      query = applyAudienceFilter(query)
+      const { data: matchingContacts, error: fetchError } = await query
 
       if (fetchError) throw fetchError
       if (!matchingContacts || matchingContacts.length === 0) return
@@ -310,7 +344,7 @@ export default function Contacts() {
   }
 
   const exportContactsCSV = async () => {
-    if (!selectedClient || selectedTags.length === 0) return
+    if (!selectedClient || !anyFilterActive) return
 
     setExportingCSV(true)
     try {
@@ -318,12 +352,15 @@ export default function Contacts() {
       let exportData = showContacts && contacts.length > 0 ? contacts : null
 
       if (!exportData) {
-        const { data, error } = await supabase
+        let query = supabase
           .from('contacts')
           .select('*')
           .eq('client_id', selectedClient.id)
-          .filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
-          .order('created_at', { ascending: false })
+        if (selectedTags.length > 0) {
+          query = query.filter('tags', 'ov', `{${selectedTags.map(t => `"${t}"`).join(',')}}`)
+        }
+        query = applyAudienceFilter(query)
+        const { data, error } = await query.order('created_at', { ascending: false })
 
         if (error) throw error
         exportData = data || []
@@ -356,7 +393,10 @@ export default function Contacts() {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      const tagSlug = selectedTags.map(t => t.replace(/[^a-zA-Z0-9]/g, '-')).join('_')
+      const tagSlug = [
+        ...selectedTags,
+        ...(audienceActive ? selectedAudience : []),
+      ].map(t => t.replace(/[^a-zA-Z0-9]/g, '-')).join('_') || 'filtered'
       const date = new Date().toISOString().split('T')[0]
       a.download = `contacts-${tagSlug}-${date}.csv`
       a.click()
@@ -422,13 +462,30 @@ export default function Contacts() {
               </Button>
             </div>
 
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Filter by audience:</p>
+              <div className="flex flex-wrap gap-3 p-3 border border-gray-200 rounded-md bg-gray-50">
+                {(['lead', 'customer', 'dealer'] as const).map((segment) => (
+                  <label key={segment} className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      className="rounded border-gray-300"
+                      checked={isAudienceSelected(segment)}
+                      onChange={() => toggleAudience(segment)}
+                    />
+                    <span className="capitalize">{segment}s</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
             {availableTags.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <p className="text-sm font-medium text-gray-700">Filter by tags:</p>
-                  {selectedTags.length > 0 && (
+                  {(selectedTags.length > 0 || audienceActive) && (
                     <button
-                      onClick={() => setSelectedTags([])}
+                      onClick={() => { setSelectedTags([]); setSelectedAudience([]) }}
                       className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
                     >
                       <X className="h-3 w-3" />
@@ -472,12 +529,12 @@ export default function Contacts() {
             <CardTitle>
               {showContacts && contacts.length > 0
                 ? `${filteredContacts.length.toLocaleString()} Contact${filteredContacts.length !== 1 ? 's' : ''}`
-                : selectedTags.length > 0
+                : anyFilterActive
                   ? `${filteredCount !== null ? filteredCount.toLocaleString() : '...'} Contact${filteredCount !== 1 ? 's' : ''}`
                   : `${totalCount.toLocaleString()} Contact${totalCount !== 1 ? 's' : ''}`
               }
             </CardTitle>
-            {selectedTags.length > 0 && (
+            {anyFilterActive && (
               <Button
                 variant="outline"
                 size="sm"
@@ -544,14 +601,14 @@ export default function Contacts() {
             <div className="text-center py-12 text-gray-500">
               No contacts found
             </div>
-          ) : selectedTags.length === 0 ? (
+          ) : !anyFilterActive ? (
             <div className="text-center py-12">
               <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
               <p className="text-gray-600 text-lg font-medium mb-2">
                 {totalCount.toLocaleString()} contacts total
               </p>
               <p className="text-gray-500 mb-4">
-                Search or select a tag to view contacts
+                Search, pick an audience, or select a tag to view contacts
               </p>
               {totalCount > 0 && totalCount <= 500 && (
                 <Button onClick={fetchAllContacts}>
@@ -564,10 +621,13 @@ export default function Contacts() {
             <div className="text-center py-12">
               <Users className="h-16 w-16 mx-auto text-gray-300 mb-4" />
               <p className="text-gray-600 text-lg font-medium mb-2">
-                {filteredCount !== null ? filteredCount.toLocaleString() : '...'} contacts with selected tag{selectedTags.length !== 1 ? 's' : ''}
+                {filteredCount !== null ? filteredCount.toLocaleString() : '...'} contacts matching your filter{(selectedTags.length + (audienceActive ? selectedAudience.length : 0)) > 1 ? 's' : ''}
               </p>
               <p className="text-gray-500 mb-4">
-                {selectedTags.join(', ')}
+                {[
+                  ...(audienceActive ? selectedAudience.map(s => s.charAt(0).toUpperCase() + s.slice(1) + 's') : []),
+                  ...selectedTags,
+                ].join(', ')}
               </p>
               <div className="flex gap-3 justify-center">
                 <Button onClick={() => { setShowContacts(true); fetchFilteredContacts(); }}>

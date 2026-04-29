@@ -471,6 +471,18 @@ export default function Campaigns() {
                               </div>
                             </div>
                           )}
+                          {campaign.audience_filter && campaign.audience_filter.length > 0 && campaign.audience_filter.length < 3 && (
+                            <div className="col-span-2">
+                              <p className="text-gray-500 mb-1">Audience</p>
+                              <div className="flex flex-wrap gap-1">
+                                {campaign.audience_filter.map((seg: string) => (
+                                  <Badge key={seg} variant="default" className="capitalize">
+                                    {seg}s
+                                  </Badge>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                         {campaign.send_breakdown && campaign.status === 'sent' && (
                           <div className="mt-3 p-3 bg-gray-50 rounded-lg text-sm">
@@ -492,6 +504,12 @@ export default function Campaigns() {
                                 <>
                                   <span>No matching tags:</span>
                                   <span className="text-red-600">−{campaign.send_breakdown.excluded_tag_filter.toLocaleString()}</span>
+                                </>
+                              )}
+                              {campaign.send_breakdown.excluded_audience_filter !== undefined && campaign.send_breakdown.excluded_audience_filter > 0 && (
+                                <>
+                                  <span>Not in audience:</span>
+                                  <span className="text-red-600">−{campaign.send_breakdown.excluded_audience_filter.toLocaleString()}</span>
                                 </>
                               )}
                               <span className="font-medium border-t border-gray-300 pt-1 mt-1">Sent to:</span>
@@ -676,6 +694,7 @@ export default function Campaigns() {
         status: 'draft',
         recipient_count: 0,
         filter_tags: campaign.filter_tags || null,
+        audience_filter: campaign.audience_filter || null,
         ip_pool: campaign.ip_pool || null,
         utm_params: campaign.utm_params || null,
         folder_id: campaign.folder_id || null,
@@ -745,6 +764,7 @@ function CreateCampaignModal({
     from_name: campaign?.from_name || '',
     reply_to: campaign?.reply_to || '',
     filter_tags: campaign?.filter_tags || ([] as string[]),
+    audience_filter: campaign?.audience_filter || ([] as string[]),
     scheduled_at: campaign?.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
     utm_params: campaign?.utm_params || '',
     folder_id: campaign?.folder_id || '',
@@ -802,6 +822,7 @@ function CreateCampaignModal({
         from_name: campaign.from_name || '',
         reply_to: campaign.reply_to || '',
         filter_tags: campaign.filter_tags || [],
+        audience_filter: campaign.audience_filter || [],
         scheduled_at: campaign.scheduled_at ? toLocalDateTimeString(new Date(campaign.scheduled_at)) : '',
         utm_params: campaign.utm_params || '',
         folder_id: campaign.folder_id || '',
@@ -810,16 +831,17 @@ function CreateCampaignModal({
     }
   }, [campaign])
 
-  // Fetch filtered count when tags or SF campaign changes
+  // Fetch filtered count when tags, SF campaign, or audience filter changes
   useEffect(() => {
-    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id) {
-      fetchFilteredCount(formData.filter_tags, formData.salesforce_campaign_id)
+    const audienceActive = formData.audience_filter.length > 0 && formData.audience_filter.length < 3
+    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id || audienceActive) {
+      fetchFilteredCount(formData.filter_tags, formData.salesforce_campaign_id, formData.audience_filter)
     } else {
       setFilteredTagCount(null)
     }
-  }, [formData.filter_tags, formData.salesforce_campaign_id])
+  }, [formData.filter_tags, formData.salesforce_campaign_id, formData.audience_filter])
 
-  const fetchFilteredCount = async (tags: string[], sfCampaignId: string) => {
+  const fetchFilteredCount = async (tags: string[], sfCampaignId: string, audienceFilter: string[]) => {
     // Increment version and capture it for this request
     countRequestVersion.current += 1
     const thisRequestVersion = countRequestVersion.current
@@ -862,6 +884,15 @@ function CreateCampaignModal({
       // Filter by tags if applicable
       if (tags.length > 0) {
         query = query.filter('tags', 'ov', `{${tags.map(t => `"${t}"`).join(',')}}`)
+      }
+
+      // Filter by audience (lead/customer/dealer) — only apply if a strict subset is selected
+      if (audienceFilter.length > 0 && audienceFilter.length < 3) {
+        const orClauses: string[] = []
+        if (audienceFilter.includes('lead')) orClauses.push('record_type.eq.lead')
+        if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
+        if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+        if (orClauses.length > 0) query = query.or(orClauses.join(','))
       }
 
       const { count, error } = await query
@@ -942,12 +973,32 @@ function CreateCampaignModal({
   }
 
   const getRecipientCount = () => {
+    const audienceActive = formData.audience_filter.length > 0 && formData.audience_filter.length < 3
     // If any filter is active, use the filtered count
-    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id) {
+    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id || audienceActive) {
       return filteredTagCount
     }
     // No filters, return total count
     return totalContactCount
+  }
+
+  const toggleAudience = (segment: 'lead' | 'customer' | 'dealer') => {
+    // Empty array means "all" — converting from all → toggling off one means we now exclude that one.
+    const current = formData.audience_filter.length === 0
+      ? ['lead', 'customer', 'dealer']
+      : formData.audience_filter
+    const next = current.includes(segment)
+      ? current.filter((s) => s !== segment)
+      : [...current, segment]
+    // If user re-selects everything, normalize back to empty (= all, no filter applied)
+    setFormData({
+      ...formData,
+      audience_filter: next.length === 3 ? [] : next,
+    })
+  }
+
+  const isAudienceSelected = (segment: 'lead' | 'customer' | 'dealer') => {
+    return formData.audience_filter.length === 0 || formData.audience_filter.includes(segment)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1208,6 +1259,31 @@ function CreateCampaignModal({
             <h3 className="text-sm font-semibold text-gray-900">
               Target Recipients
             </h3>
+
+            {/* Audience Filter (Leads / Customers / Dealers) */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Audience
+              </label>
+              <div className="flex flex-wrap gap-3 p-3 border border-gray-300 rounded-md bg-gray-50">
+                {(['lead', 'customer', 'dealer'] as const).map((segment) => (
+                  <label key={segment} className="flex items-center gap-2 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      className="rounded border-gray-300"
+                      checked={isAudienceSelected(segment)}
+                      onChange={() => toggleAudience(segment)}
+                    />
+                    <span className="capitalize">{segment}s</span>
+                  </label>
+                ))}
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                {formData.audience_filter.length === 0 || formData.audience_filter.length === 3
+                  ? 'Sending to all audiences (Leads, Customers, and Dealers)'
+                  : `Sending only to: ${formData.audience_filter.map(s => s.charAt(0).toUpperCase() + s.slice(1) + 's').join(', ')}`}
+              </p>
+            </div>
 
             {/* Salesforce Campaign Filter */}
             {salesforceCampaigns.length > 0 && (

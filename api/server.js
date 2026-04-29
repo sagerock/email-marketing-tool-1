@@ -713,6 +713,24 @@ async function sendCampaignById(campaignId) {
     breakdown.excluded_sf_campaign_filter = eligibleAfterBounceUnsub - sfCampaignContactIds.size
   }
 
+  // Audience filter exclusions (contacts not in any selected segment)
+  if (Array.isArray(campaign.audience_filter) && campaign.audience_filter.length > 0 && campaign.audience_filter.length < 3) {
+    const orClauses = []
+    if (campaign.audience_filter.includes('lead')) orClauses.push('record_type.eq.lead')
+    if (campaign.audience_filter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
+    if (campaign.audience_filter.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+    if (orClauses.length > 0) {
+      const { count: audienceCount } = await supabase.from('contacts')
+        .select('id', { count: 'exact', head: true })
+        .eq('client_id', campaign.client_id)
+        .eq('unsubscribed', false)
+        .neq('bounce_status', 'hard')
+        .or(orClauses.join(','))
+      const eligibleAfterBounceUnsub = breakdown.total_contacts - breakdown.excluded_unsubscribed - breakdown.excluded_hard_bounced
+      breakdown.excluded_audience_filter = eligibleAfterBounceUnsub - (audienceCount || 0)
+    }
+  }
+
   // Tag filter - we'll calculate after the send loop since it's interleaved with pagination
 
   console.log(`📧 Send breakdown: ${JSON.stringify(breakdown)}`)
@@ -817,13 +835,27 @@ async function sendCampaignById(campaignId) {
 
   console.log(`📧 Starting paginated send with ${PERSONALIZATIONS_BATCH_SIZE}-recipient batches`)
 
+  // Audience filter: subset of ['lead', 'customer', 'dealer']. Empty/null = all.
+  const audienceFilter = Array.isArray(campaign.audience_filter) ? campaign.audience_filter : []
+  const audienceActive = audienceFilter.length > 0 && audienceFilter.length < 3
+
   while (true) {
+    let baseQuery = supabase.from('contacts')
+      .select('id, email, first_name, last_name, unsubscribe_token, industry, tags, bounce_status')
+      .eq('unsubscribed', false)
+      .eq('client_id', campaign.client_id)
+      .neq('bounce_status', 'hard')
+
+    if (audienceActive) {
+      const orClauses = []
+      if (audienceFilter.includes('lead')) orClauses.push('record_type.eq.lead')
+      if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
+      if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+      if (orClauses.length > 0) baseQuery = baseQuery.or(orClauses.join(','))
+    }
+
     const { data: pageContacts, error } = await withRetry(
-      () => supabase.from('contacts').select('id, email, first_name, last_name, unsubscribe_token, industry, tags, bounce_status')
-        .eq('unsubscribed', false)
-        .eq('client_id', campaign.client_id)
-        .neq('bounce_status', 'hard')
-        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1),
+      () => baseQuery.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1),
       { label: `Fetch contacts page ${page + 1}` }
     )
 

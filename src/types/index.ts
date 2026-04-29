@@ -61,6 +61,7 @@ export interface Campaign {
   sent_at?: string
   recipient_count: number
   filter_tags?: string[]
+  audience_filter?: string[]
   ip_pool?: string
   utm_params?: string
   folder_id?: string
@@ -75,6 +76,7 @@ export interface Campaign {
     excluded_hard_bounced: number
     excluded_sf_campaign_filter?: number
     excluded_tag_filter?: number
+    excluded_audience_filter?: number
     final_recipients: number
   }
   created_at: string
