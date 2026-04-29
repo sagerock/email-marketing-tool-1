@@ -3944,8 +3944,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Contacts — try with Account.Name first, fall back without if permission denied
     let contactsQuery
-    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c'
-    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c'
+    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
+    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
     let hasAccountAccess = true
 
     contactsQuery = syncSince
@@ -3999,6 +3999,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             country: contact.MailingCountry || null,
             job_function: contact.Job_Function__c || null,
             product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
+            contact_type: contact.Type__c || null,
             updated_at: new Date().toISOString(),
           })
         }
@@ -4444,14 +4445,14 @@ app.post('/api/salesforce/backfill', async (req, res) => {
 
       // Contacts — no date filter
       let hasAccountAccess = true
-      let contactsQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
+      let contactsQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
       let contacts
       try {
         contacts = await conn.query(contactsQuery)
       } catch (err) {
         if (err.message?.includes('Account') || err.message?.includes('relationship')) {
           hasAccountAccess = false
-          contactsQuery = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
+          contactsQuery = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
           contacts = await conn.query(contactsQuery)
         } else throw err
       }
@@ -4477,6 +4478,7 @@ app.post('/api/salesforce/backfill', async (req, res) => {
             country: contact.MailingCountry || null,
             job_function: contact.Job_Function__c || null,
             product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
+            contact_type: contact.Type__c || null,
             updated_at: new Date().toISOString(),
           })
         }
@@ -7251,16 +7253,16 @@ app.listen(PORT, () => {
           let cronHasAccountAccess = true
           try {
             cronContactsQuery = lastSync
-              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
+              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
             var contacts = await conn.query(cronContactsQuery)
           } catch (accountErr) {
             if (accountErr.message?.includes('Account') || accountErr.message?.includes('relationship')) {
               console.warn(`  ⚠️ No Account access for ${client.name}, falling back`)
               cronHasAccountAccess = false
               cronContactsQuery = lastSync
-                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c FROM Contact WHERE Email != null`
+                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
               var contacts = await conn.query(cronContactsQuery)
             } else {
               throw accountErr
@@ -7288,6 +7290,7 @@ app.listen(PORT, () => {
                 country: contact.MailingCountry || null,
                 job_function: contact.Job_Function__c || null,
                 product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
+                contact_type: contact.Type__c || null,
                 updated_at: new Date().toISOString(),
               })
             }
