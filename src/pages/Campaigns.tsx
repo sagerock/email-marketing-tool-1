@@ -890,8 +890,8 @@ function CreateCampaignModal({
       if (audienceFilter.length > 0 && audienceFilter.length < 3) {
         const orClauses: string[] = []
         if (audienceFilter.includes('lead')) orClauses.push('record_type.eq.lead')
-        if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
-        if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+        if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer,or(account_type.is.null,account_type.neq.Dealer))')
+        if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,or(account_type.eq.Dealer,contact_type.eq.Dealer))')
         if (orClauses.length > 0) query = query.or(orClauses.join(','))
       }
 

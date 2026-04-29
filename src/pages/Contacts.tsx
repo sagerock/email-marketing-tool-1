@@ -34,8 +34,8 @@ export default function Contacts() {
     if (!audienceActive) return query
     const orClauses: string[] = []
     if (selectedAudience.includes('lead')) orClauses.push('record_type.eq.lead')
-    if (selectedAudience.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
-    if (selectedAudience.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+    if (selectedAudience.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer,or(account_type.is.null,account_type.neq.Dealer))')
+    if (selectedAudience.includes('dealer')) orClauses.push('and(record_type.eq.contact,or(account_type.eq.Dealer,contact_type.eq.Dealer))')
     return orClauses.length > 0 ? query.or(orClauses.join(',')) : query
   }
 

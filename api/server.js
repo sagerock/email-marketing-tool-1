@@ -717,8 +717,8 @@ async function sendCampaignById(campaignId) {
   if (Array.isArray(campaign.audience_filter) && campaign.audience_filter.length > 0 && campaign.audience_filter.length < 3) {
     const orClauses = []
     if (campaign.audience_filter.includes('lead')) orClauses.push('record_type.eq.lead')
-    if (campaign.audience_filter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
-    if (campaign.audience_filter.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+    if (campaign.audience_filter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer,or(account_type.is.null,account_type.neq.Dealer))')
+    if (campaign.audience_filter.includes('dealer')) orClauses.push('and(record_type.eq.contact,or(account_type.eq.Dealer,contact_type.eq.Dealer))')
     if (orClauses.length > 0) {
       const { count: audienceCount } = await supabase.from('contacts')
         .select('id', { count: 'exact', head: true })
@@ -849,8 +849,8 @@ async function sendCampaignById(campaignId) {
     if (audienceActive) {
       const orClauses = []
       if (audienceFilter.includes('lead')) orClauses.push('record_type.eq.lead')
-      if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer)')
-      if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Dealer)')
+      if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer,or(account_type.is.null,account_type.neq.Dealer))')
+      if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,or(account_type.eq.Dealer,contact_type.eq.Dealer))')
       if (orClauses.length > 0) baseQuery = baseQuery.or(orClauses.join(','))
     }
 
@@ -3976,7 +3976,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Contacts — try with Account.Name first, fall back without if permission denied
     let contactsQuery
-    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
+    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
     const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
     let hasAccountAccess = true
 
@@ -4032,6 +4032,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             job_function: contact.Job_Function__c || null,
             product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
             contact_type: contact.Type__c || null,
+            account_type: contact.Account?.Type === 'Dealers' ? 'Dealer' : (contact.Account?.Type || null),
             updated_at: new Date().toISOString(),
           })
         }
@@ -4477,7 +4478,7 @@ app.post('/api/salesforce/backfill', async (req, res) => {
 
       // Contacts — no date filter
       let hasAccountAccess = true
-      let contactsQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
+      let contactsQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
       let contacts
       try {
         contacts = await conn.query(contactsQuery)
@@ -4511,6 +4512,7 @@ app.post('/api/salesforce/backfill', async (req, res) => {
             job_function: contact.Job_Function__c || null,
             product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
             contact_type: contact.Type__c || null,
+            account_type: contact.Account?.Type === 'Dealers' ? 'Dealer' : (contact.Account?.Type || null),
             updated_at: new Date().toISOString(),
           })
         }
@@ -7285,8 +7287,8 @@ app.listen(PORT, () => {
           let cronHasAccountAccess = true
           try {
             cronContactsQuery = lastSync
-              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-              : `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
+              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+              : `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
             var contacts = await conn.query(cronContactsQuery)
           } catch (accountErr) {
             if (accountErr.message?.includes('Account') || accountErr.message?.includes('relationship')) {
@@ -7323,6 +7325,7 @@ app.listen(PORT, () => {
                 job_function: contact.Job_Function__c || null,
                 product_classification: contact.Product_Classification__c ? contact.Product_Classification__c.split(';').map(s => s.trim()).filter(Boolean) : null,
                 contact_type: contact.Type__c || null,
+                account_type: contact.Account?.Type === 'Dealers' ? 'Dealer' : (contact.Account?.Type || null),
                 updated_at: new Date().toISOString(),
               })
             }
