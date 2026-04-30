@@ -169,7 +169,57 @@ Revenue data lives elsewhere — most likely the WooCommerce store.
 
 ### Integration status
 
-No code path syncs Orders into Supabase yet. Next step: decide whether to denormalize purchase signals onto `contacts` (e.g., `last_order_date`, `top_product_codes` array) or create a `salesforce_orders` table for richer queries.
+No code path syncs Orders into Supabase yet. Sync design is bundled with the broader Opportunity work — see Roadmap below.
+
+---
+
+## Roadmap: Multi-Object Sync (Opportunity, Order, OrderItem, Sample_Request__c)
+
+### Permissions verified 2026-04-30
+
+The integration user (Email Marketing Integration permission set) now has Read access to:
+
+| Object | Records | Notes |
+|--------|---------|-------|
+| Opportunity | 425 (115 in `Follow-Up`) | Primary driver of AI follow-up emails |
+| Order | 149 | Fulfillment tracker, $0 amounts |
+| OrderItem | 239 | Product + quantity per order |
+| Sample_Request__c | 13,641 | Custom object |
+| Account.Name / Account.Type | 693 'Dealer' accounts | FLS now open |
+| EmailMessage | ✗ Not accessible | Needs admin follow-up — see below |
+
+### Why we're waiting until ~2026-05-08 to build the sync
+
+Cheyenne (cheyenne@cloudadoption.solutions) confirmed via email she's deploying a new set of fields on **Opportunity** the week of 2026-05-04 that will pre-summarize:
+- Email engagement (opens / clicks tied to the opportunity)
+- Sample test reports
+
+These are exactly the inputs needed for the AI follow-up email feature, which is the primary driver for syncing Opportunity into Supabase. Designing the schema before those fields exist would mean either:
+- Guessing at column shape and likely refactoring once the real fields land, or
+- Building a generic JSONB blob that defers all the design work anyway.
+
+The trade-off: we *could* build `salesforce_orders` / `salesforce_order_items` / `salesforce_sample_requests` now since those aren't affected by Cheyenne's changes. But that risks refactoring the sync pipeline (cron job, error handling, incremental-vs-full logic) once Opportunity is added. ~8 days is short — better to design the four-table sync as one cohesive piece.
+
+A scheduled remote agent was discussed for 2026-05-08 to inventory the new Opportunity fields automatically; ultimately decided to wait for Cheyenne's email instead.
+
+### Plan once new fields are deployed
+
+1. Get the new Opportunity field names from Cheyenne (or describe the object and diff against the 90-field baseline captured 2026-04-30).
+2. Design the schema for four new tables, all keyed by `salesforce_id` + `client_id`:
+   - `salesforce_opportunities`
+   - `salesforce_orders`
+   - `salesforce_order_items`
+   - `salesforce_sample_requests`
+3. Decide what's denormalized onto `contacts` for fast filtering (e.g., `last_order_date`, `has_open_opportunity`) vs. what stays in dedicated tables for richer queries.
+4. Extend the daily 6 AM UTC sync (or split into a parallel cron) to populate them. Use `LastModifiedDate` for incremental sync.
+5. Add a Settings UI button to trigger manual sync of the new objects (mirror existing `Sync Campaigns` button).
+6. Build the AI follow-up email feature on top of the synced Opportunity data + Cheyenne's logging plan: when sending, create an `EmailMessage` record with `RelatedToId = Opportunity.Id` so the email shows on the opp's activity timeline.
+
+### Open items needing admin follow-up
+
+- **EmailMessage object is inaccessible** despite Cheyenne's permission table showing Read+Create. Salesforce returns `sObject type 'EmailMessage' is not supported`. Required for logging AI emails back to Salesforce per the agreed pattern.
+- **Account.Type data hygiene**: 693 accounts have `Type='Dealer'` (singular), 27 have `Type='Dealers'` (plural). Our current sync code only maps `'Dealers'` → `account_type='Dealer'` in Supabase, missing the larger group. Either ask admin to normalize the picklist or extend our mapping to handle both.
+- **Account.Name backfill**: now that FLS is open, existing Contacts in Supabase that were synced before this change still have `company = NULL`. Next daily sync at 6 AM UTC should backfill them — verify after the run.
 
 ---
 
