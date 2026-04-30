@@ -112,32 +112,27 @@ Assigned to the Connected App's Run As user. Current grants:
 
 ---
 
-## Order/OrderItem Integration (In Progress)
+## Order/OrderItem Integration
 
-We are investigating whether Salesforce Orders can serve as a source for purchase history.
+Salesforce Orders are accessible and being evaluated as a source of purchase history for segmentation.
 
-**Objects involved:**
+**Objects accessible to the integration user:**
 
-| Object | API Name | Label | Status |
-|--------|----------|-------|--------|
-| Order | `Order` | Order | Permission pending |
-| Order Line Item | `OrderItem` | Order Product | Permission granted |
-| Price Book | `Pricebook2` | Price Book | Permission granted |
-| Price Book Entry | `PricebookEntry` | Price Book Entry | Permission granted |
+| Object | API Name | Label | Records (as of 2026-04-30) |
+|--------|----------|-------|----------------------------|
+| Order | `Order` | Order | 149 |
+| Order Line Item | `OrderItem` | Order Product | 239 |
+| Price Book | `Pricebook2` | Price Book | 1 (standard) |
+| Price Book Entry | `PricebookEntry` | Price Book Entry | 100 |
 
-**Current blocker:** OrderItem count and sample queries return empty. Likely cause is one of:
-1. `Order` object (parent of `OrderItem`) does not have Read permission on the Run As user — granting `OrderItem` without `Order` returns no rows
-2. Orders feature is not enabled at the org level (Setup → Order Settings → Enable Orders)
-3. No Order records exist in the org yet
+**Diagnostic endpoint:** `GET /api/salesforce/diagnose-orders?clientId={id}` — returns per-object describe results, row counts, and a plain-English diagnosis. Useful for verifying after permission changes.
 
-**Diagnostic endpoint:** `GET /api/salesforce/diagnose-orders?clientId={id}`
+**Known data quirks to investigate before relying on Orders for revenue segmentation:**
+- Sample records have `TotalAmount = 0` and `UnitPrice = 0`. May indicate warranty/sample replacement orders rather than revenue-generating sales — needs a wider sample to confirm.
+- `Order.Name` is null on sampled records. Salesforce uses `OrderNumber` (auto-incremented integer) as the human-readable identifier, not `Name`.
+- `Order.Status` values seen so far: `"Shipped"`. Other statuses likely exist (Draft, Activated, etc.) — worth pulling the full picklist via `describe('Order')` before building filters.
 
-Returns per-object describe results, row counts, and a plain-English diagnosis. Run this after the admin confirms Order permissions are set.
-
-**What we need from the admin:**
-- Confirm `Order` object Read access is included in the permission set (not just `OrderItem`)
-- Confirm Orders is enabled: Setup → Order Settings → "Enable Orders" checkbox
-- If orders are tracked differently (e.g., via a custom object or WooCommerce separately), let us know
+**Not yet integrated:** No code path syncs Orders into the `contacts` table or anywhere else yet. Next step is deciding which fields matter for segmentation (purchase recency, total spend, product categories) and either denormalizing onto contacts or creating a new `salesforce_orders` table.
 
 ---
 
