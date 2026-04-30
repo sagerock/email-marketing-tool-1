@@ -114,7 +114,7 @@ Assigned to the Connected App's Run As user. Current grants:
 
 ## Order/OrderItem Integration
 
-Salesforce Orders are accessible and being evaluated as a source of purchase history for segmentation.
+Salesforce Orders are accessible and have been characterized. Verified 2026-04-30.
 
 **Objects accessible to the integration user:**
 
@@ -127,12 +127,49 @@ Salesforce Orders are accessible and being evaluated as a source of purchase his
 
 **Diagnostic endpoint:** `GET /api/salesforce/diagnose-orders?clientId={id}` — returns per-object describe results, row counts, and a plain-English diagnosis. Useful for verifying after permission changes.
 
-**Known data quirks to investigate before relying on Orders for revenue segmentation:**
-- Sample records have `TotalAmount = 0` and `UnitPrice = 0`. May indicate warranty/sample replacement orders rather than revenue-generating sales — needs a wider sample to confirm.
-- `Order.Name` is null on sampled records. Salesforce uses `OrderNumber` (auto-incremented integer) as the human-readable identifier, not `Name`.
-- `Order.Status` values seen so far: `"Shipped"`. Other statuses likely exist (Draft, Activated, etc.) — worth pulling the full picklist via `describe('Order')` before building filters.
+### How Alconox actually uses Salesforce Orders
 
-**Not yet integrated:** No code path syncs Orders into the `contacts` table or anywhere else yet. Next step is deciding which fields matter for segmentation (purchase recency, total spend, product categories) and either denormalizing onto contacts or creating a new `salesforce_orders` table.
+Salesforce Orders is a **fulfillment / shipping tracker**, not a revenue or billing system.
+
+Evidence from the data:
+- **All 149 orders have `TotalAmount = $0`**, every `OrderItem.UnitPrice = $0`, every `OrderItem.TotalPrice = $0`. Universal across the dataset, not a sampling artifact.
+- **Status distribution:** 146 `Shipped`, 2 `Activated`, 1 `Draft` — essentially every order is a record of something that went out the door.
+- **Date range:** 2025-11-17 → 2026-04-28 (~5.5 months); sequential `OrderNumber` from `00000104` to `00000256`.
+- Products and quantities are real (e.g., Liquinox® S12018 — 35 lines, 57 units; Detonox® S23018 — 33 lines, 48 units).
+- Accounts linked to orders are real customers (Hackensack University Medical Center, Intel Corporation, Sanofi Swiftwater, Stallergenes Greer, etc.).
+
+Revenue data lives elsewhere — most likely the WooCommerce store.
+
+### What Orders are useful for
+
+| Use case | Viable? |
+|----------|---------|
+| Cross-sell / upsell ("ordered X but not Y") | ✓ |
+| Reorder reminders (`EffectiveDate` + product) | ✓ |
+| Product-affinity segments (medical-device vs. lab detergent customers) | ✓ |
+| Active-customer flagging (anyone with a recent shipped order) | ✓ |
+| Revenue / monetary segmentation (RFM, LTV, top spenders) | ✗ Data not present |
+| Average order value | ✗ Data not present |
+
+### Field reference
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `Order.Id` | Id | Primary key |
+| `Order.OrderNumber` | string | Auto-incremented; **use this** as user-facing ID |
+| `Order.Name` | string | **Always null** in this org — don't use |
+| `Order.Status` | picklist | Practical values: `Shipped`, `Activated`, `Draft` |
+| `Order.EffectiveDate` | date | Use for recency / reorder timing |
+| `Order.AccountId` | Id | Joins to Account.Name (real customer names) |
+| `Order.TotalAmount` | currency | **Always $0** in this org |
+| `OrderItem.OrderId` | Id | Parent order |
+| `OrderItem.Quantity` | number | Real units shipped |
+| `OrderItem.UnitPrice` / `TotalPrice` | currency | **Always $0** in this org |
+| `OrderItem.Product2Id` | Id | Joins to Product2.Name + Product2.ProductCode |
+
+### Integration status
+
+No code path syncs Orders into Supabase yet. Next step: decide whether to denormalize purchase signals onto `contacts` (e.g., `last_order_date`, `top_product_codes` array) or create a `salesforce_orders` table for richer queries.
 
 ---
 
