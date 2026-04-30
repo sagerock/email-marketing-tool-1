@@ -3753,6 +3753,90 @@ app.get('/api/salesforce/list-objects', async (req, res) => {
 })
 
 /**
+ * Diagnose Order/OrderItem access specifically.
+ * OrderItem (label: "Order Product") requires:
+ *  1. Orders feature enabled org-wide (Setup → Order Settings)
+ *  2. Order object read permission on the Run As user
+ *  3. OrderItem object read permission
+ * Returns counts + sample rows + clear error messages for each check.
+ */
+app.get('/api/salesforce/diagnose-orders', async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const conn = await getSalesforceConnection(clientId)
+    const results = {}
+
+    const tryQuery = async (label, soql) => {
+      try {
+        const r = await conn.query(soql)
+        return { ok: true, count: r.totalSize, sample: r.records.slice(0, 3) }
+      } catch (e) {
+        return { ok: false, error: e.message }
+      }
+    }
+
+    const tryDescribe = async (objectName) => {
+      try {
+        const meta = await conn.sobject(objectName).describe()
+        return { ok: true, fields: meta.fields.map(f => f.name) }
+      } catch (e) {
+        return { ok: false, error: e.message }
+      }
+    }
+
+    results.order_describe = await tryDescribe('Order')
+    results.orderitem_describe = await tryDescribe('OrderItem')
+    results.pricebook_describe = await tryDescribe('Pricebook2')
+    results.pricebookentry_describe = await tryDescribe('PricebookEntry')
+
+    results.order_count = await tryQuery('Order count', 'SELECT COUNT() FROM Order')
+    results.orderitem_count = await tryQuery('OrderItem count', 'SELECT COUNT() FROM OrderItem')
+    results.pricebook_count = await tryQuery('Pricebook2 count', 'SELECT COUNT() FROM Pricebook2')
+    results.pricebookentry_count = await tryQuery('PricebookEntry count', 'SELECT COUNT() FROM PricebookEntry')
+
+    if (results.order_count.ok && results.order_count.count > 0) {
+      results.order_sample = await tryQuery('Order sample', 'SELECT Id, Name, Status, TotalAmount, AccountId FROM Order LIMIT 3')
+    }
+
+    if (results.orderitem_count.ok && results.orderitem_count.count > 0) {
+      results.orderitem_sample = await tryQuery('OrderItem sample', 'SELECT Id, OrderId, Quantity, UnitPrice, TotalPrice, Product2Id FROM OrderItem LIMIT 3')
+    }
+
+    // Diagnose likely root cause
+    const diagnosis = []
+    if (!results.order_describe.ok) {
+      diagnosis.push('Order object is NOT accessible. The Run As user needs Read permission on the Order object (not just OrderItem).')
+    }
+    if (!results.orderitem_describe.ok) {
+      diagnosis.push('OrderItem object is NOT accessible. Check that the permission set grants Read on OrderItem.')
+    }
+    if (results.order_describe.ok && results.order_count.ok && results.order_count.count === 0) {
+      diagnosis.push('Order object is accessible but contains 0 records. Either Orders is not used in this org, or the feature is enabled but no orders exist yet.')
+    }
+    if (results.order_describe.ok && !results.order_count.ok) {
+      if (results.order_count.error?.toLowerCase().includes('not supported')) {
+        diagnosis.push('Orders feature is NOT enabled in this org. Go to Setup → Order Settings → check "Enable Orders".')
+      } else {
+        diagnosis.push(`Order query failed: ${results.order_count.error}`)
+      }
+    }
+    if (diagnosis.length === 0 && results.orderitem_count.ok && results.orderitem_count.count === 0) {
+      diagnosis.push('All permissions look correct but OrderItem has 0 records. The org may not use Salesforce Orders for purchases.')
+    }
+    if (diagnosis.length === 0 && results.orderitem_count.ok && results.orderitem_count.count > 0) {
+      diagnosis.push('OrderItem is accessible and has data. Integration is ready.')
+    }
+
+    res.json({ diagnosis, results })
+  } catch (error) {
+    console.error('Error diagnosing orders:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Generate a human-readable markdown report of Salesforce data accessible
  * to the integration user. Designed to be shared with the client's SF admin
  * so they can confirm which objects/fields drive sample-request automations.
