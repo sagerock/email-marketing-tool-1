@@ -85,6 +85,7 @@ export default function Analytics() {
   const [bounceFilter, setBounceFilter] = useState<'all' | 'hard' | 'soft'>('all')
   const [eventFilter, setEventFilter] = useState<'all' | 'open' | 'click'>('all')
   const [filteredEventContacts, setFilteredEventContacts] = useState<AnalyticsEvent[]>([])
+  const [eventContactIds, setEventContactIds] = useState<Record<string, string>>({})
   const [loadingFilteredEvents, setLoadingFilteredEvents] = useState(false)
   const [showTagModal, setShowTagModal] = useState(false)
   const [availableTags, setAvailableTags] = useState<Tag[]>([])
@@ -131,6 +132,29 @@ export default function Analytics() {
       fetchFilteredEvents(selectedCampaign, eventFilter)
     }
   }, [eventFilter, selectedCampaign])
+
+  useEffect(() => {
+    if (!selectedClient) return
+    const visible = eventFilter === 'all' ? events.slice(0, 50) : filteredEventContacts
+    const emails = Array.from(new Set(visible.map(e => e.email).filter(Boolean)))
+    if (emails.length === 0) {
+      setEventContactIds({})
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      const { data, error } = await supabase
+        .from('contacts')
+        .select('id, email')
+        .eq('client_id', selectedClient.id)
+        .in('email', emails)
+      if (cancelled || error || !data) return
+      const map: Record<string, string> = {}
+      for (const row of data) map[row.email] = row.id
+      setEventContactIds(map)
+    })()
+    return () => { cancelled = true }
+  }, [events, filteredEventContacts, eventFilter, selectedClient])
 
   const fetchFilteredEvents = async (campaignId: string, eventType: 'open' | 'click') => {
     setLoadingFilteredEvents(true)
@@ -2216,8 +2240,17 @@ export default function Analytics() {
                     <tbody className="divide-y divide-gray-200">
                       {displayEvents.map((event) => (
                         <tr key={event.id} className="hover:bg-gray-50">
-                          <td className="py-3 px-4 text-sm text-gray-900">
-                            {event.email}
+                          <td className="py-3 px-4 text-sm">
+                            {eventContactIds[event.email] ? (
+                              <Link
+                                to={`/contacts/${eventContactIds[event.email]}`}
+                                className="text-blue-600 hover:text-blue-800 hover:underline"
+                              >
+                                {event.email}
+                              </Link>
+                            ) : (
+                              <span className="text-gray-900">{event.email}</span>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-sm">
                             <span
