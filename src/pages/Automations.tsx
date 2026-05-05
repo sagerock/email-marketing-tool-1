@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { apiFetch } from '../lib/api'
 import { useClient } from '../context/ClientContext'
@@ -1972,7 +1973,15 @@ function EnrollContactsModal({
                     <p className="text-sm font-medium text-gray-900">
                       {contact.first_name} {contact.last_name}
                     </p>
-                    <p className="text-sm text-gray-600">{contact.email}</p>
+                    <p className="text-sm">
+                      <Link
+                        to={`/contacts/${contact.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="text-blue-600 hover:text-blue-800 hover:underline"
+                      >
+                        {contact.email}
+                      </Link>
+                    </p>
                   </div>
                   {contact.tags && contact.tags.length > 0 && (
                     <div className="flex gap-1">
