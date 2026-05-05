@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
 import type { Campaign, AnalyticsEvent, Tag } from '../types/index.js'
@@ -1420,7 +1421,14 @@ export default function Analytics() {
                               }}
                             />
                           </td>
-                          <td className="py-3 px-4 text-sm text-blue-600 hover:text-blue-800">{contact.email}</td>
+                          <td className="py-3 px-4 text-sm">
+                            <Link
+                              to={`/contacts/${contact.id}`}
+                              className="text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              {contact.email}
+                            </Link>
+                          </td>
                           <td className="py-3 px-4 text-sm text-gray-600">
                             {contact.first_name || contact.last_name
                               ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
@@ -1538,7 +1546,14 @@ export default function Analytics() {
                           <tbody className="divide-y divide-gray-200">
                             {filteredBounces.map((contact) => (
                               <tr key={contact.id} className="hover:bg-gray-50">
-                                <td className="py-3 px-4 text-sm text-gray-900">{contact.email}</td>
+                                <td className="py-3 px-4 text-sm">
+                                  <Link
+                                    to={`/contacts/${contact.id}`}
+                                    className="text-blue-600 hover:text-blue-800 hover:underline"
+                                  >
+                                    {contact.email}
+                                  </Link>
+                                </td>
                                 <td className="py-3 px-4 text-sm text-gray-600">
                                   {contact.first_name || contact.last_name
                                     ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
@@ -1612,7 +1627,14 @@ export default function Analytics() {
                       <tbody className="divide-y divide-gray-200">
                         {contacts.map((contact) => (
                           <tr key={contact.id} className="hover:bg-gray-50">
-                            <td className="py-2 px-4 text-sm text-gray-900">{contact.email}</td>
+                            <td className="py-2 px-4 text-sm">
+                              <Link
+                                to={`/contacts/${contact.id}`}
+                                className="text-blue-600 hover:text-blue-800 hover:underline"
+                              >
+                                {contact.email}
+                              </Link>
+                            </td>
                             <td className="py-2 px-4 text-sm text-gray-600">
                               {contact.first_name || contact.last_name
                                 ? `${contact.first_name || ''} ${contact.last_name || ''}`.trim()
@@ -2496,7 +2518,14 @@ export default function Analytics() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900">Subscriber Activity</h2>
-                <p className="text-sm text-gray-600">{selectedSubscriber.email}</p>
+                <p className="text-sm">
+                  <Link
+                    to={`/contacts/${selectedSubscriber.id}`}
+                    className="text-blue-600 hover:text-blue-800 hover:underline"
+                  >
+                    {selectedSubscriber.email}
+                  </Link>
+                </p>
                 {(selectedSubscriber.first_name || selectedSubscriber.last_name) && (
                   <p className="text-sm text-gray-500">
                     {`${selectedSubscriber.first_name || ''} ${selectedSubscriber.last_name || ''}`.trim()}
