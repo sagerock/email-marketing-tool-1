@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Link } from 'react-router-dom'
 import { useClient } from '../context/ClientContext'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import Button from '../components/ui/Button'
@@ -370,7 +371,13 @@ export default function BounceRecovery() {
                       />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium truncate">{contact.email}</span>
+                          <Link
+                            to={`/contacts/${contact.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-sm font-medium truncate text-blue-600 hover:text-blue-800 hover:underline"
+                          >
+                            {contact.email}
+                          </Link>
                           {contact.first_name && (
                             <span className="text-xs text-gray-500">
                               ({contact.first_name} {contact.last_name || ''})
