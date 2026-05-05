@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
 import type { AIFollowupConfig, AIFollowupDraft, AIFollowupContact } from '../types/index.js'
@@ -472,7 +473,17 @@ export default function AIAgents() {
                             <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
                               <span>{(draft as any).contact?.first_name} {(draft as any).contact?.last_name}</span>
                               <span className="text-gray-300">|</span>
-                              <span>{(draft as any).contact?.email}</span>
+                              {(draft as any).contact?.id ? (
+                                <Link
+                                  to={`/contacts/${(draft as any).contact.id}`}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="text-blue-600 hover:text-blue-800 hover:underline"
+                                >
+                                  {(draft as any).contact?.email}
+                                </Link>
+                              ) : (
+                                <span>{(draft as any).contact?.email}</span>
+                              )}
                               {(draft as any).contact?.company && (
                                 <>
                                   <span className="text-gray-300">|</span>
@@ -535,7 +546,17 @@ export default function AIAgents() {
                                     <strong>From:</strong> {(draft as any).config?.from_name} &lt;{(draft as any).config?.from_email}&gt;
                                   </div>
                                   <div className="text-sm text-gray-500 mb-1">
-                                    <strong>To:</strong> {(draft as any).contact?.email}
+                                    <strong>To:</strong>{' '}
+                                    {(draft as any).contact?.id ? (
+                                      <Link
+                                        to={`/contacts/${(draft as any).contact.id}`}
+                                        className="text-blue-600 hover:text-blue-800 hover:underline"
+                                      >
+                                        {(draft as any).contact?.email}
+                                      </Link>
+                                    ) : (
+                                      (draft as any).contact?.email
+                                    )}
                                   </div>
                                   <div className="text-sm text-gray-500 mb-3">
                                     <strong>Subject:</strong> {draft.subject}
@@ -654,7 +675,18 @@ export default function AIAgents() {
                               <div className="font-medium text-gray-900">
                                 {(fc as any).contact?.first_name} {(fc as any).contact?.last_name}
                               </div>
-                              <div className="text-xs text-gray-500">{(fc as any).contact?.email}</div>
+                              <div className="text-xs">
+                                {(fc as any).contact?.id ? (
+                                  <Link
+                                    to={`/contacts/${(fc as any).contact.id}`}
+                                    className="text-blue-600 hover:text-blue-800 hover:underline"
+                                  >
+                                    {(fc as any).contact?.email}
+                                  </Link>
+                                ) : (
+                                  <span className="text-gray-500">{(fc as any).contact?.email}</span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-4 py-3 text-gray-600">{(fc as any).config?.name || '—'}</td>
                             <td className="px-4 py-3">{statusBadge(fc.status)}</td>
@@ -748,7 +780,17 @@ export default function AIAgents() {
                                   From: {draft.config?.from_name} &lt;{draft.config?.from_email}&gt;
                                 </div>
                                 <div className="text-xs text-gray-400 mb-3">
-                                  To: {draft.contact?.email}
+                                  To:{' '}
+                                  {draft.contact?.id ? (
+                                    <Link
+                                      to={`/contacts/${draft.contact.id}`}
+                                      className="text-blue-600 hover:text-blue-800 hover:underline"
+                                    >
+                                      {draft.contact?.email}
+                                    </Link>
+                                  ) : (
+                                    draft.contact?.email
+                                  )}
                                 </div>
                                 <div className="text-sm font-medium mb-2">{draft.subject}</div>
                                 <div
