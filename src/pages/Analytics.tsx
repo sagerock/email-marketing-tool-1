@@ -1421,7 +1421,7 @@ export default function Analytics() {
                               }}
                             />
                           </td>
-                          <td className="py-3 px-4 text-sm">
+                          <td className="py-3 px-4 text-sm" onClick={(e) => e.stopPropagation()}>
                             <Link
                               to={`/contacts/${contact.id}`}
                               className="text-blue-600 hover:text-blue-800 hover:underline"
