@@ -2215,6 +2215,27 @@ app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
       .order('updated_at', { ascending: false })
       .limit(30)
 
+    // Fetch the client's brand reference template (if configured)
+    let brandReferenceContext = ''
+    const { data: clientRow } = await supabase
+      .from('clients')
+      .select('brand_reference_template_id')
+      .eq('id', clientId)
+      .single()
+
+    if (clientRow?.brand_reference_template_id) {
+      const { data: brandTemplate } = await supabase
+        .from('templates')
+        .select('name, subject, html_content')
+        .eq('id', clientRow.brand_reference_template_id)
+        .eq('client_id', clientId)
+        .single()
+
+      if (brandTemplate?.html_content) {
+        brandReferenceContext = `<brand_reference name="${brandTemplate.name}" subject="${brandTemplate.subject || ''}">\n${brandTemplate.html_content}\n</brand_reference>`
+      }
+    }
+
     // Fetch reference templates if requested
     let referenceContext = ''
     if (referenceTemplateIds && referenceTemplateIds.length > 0) {
@@ -2300,7 +2321,8 @@ Every email MUST include:
 2. A physical mailing address using {{mailing_address}}
 Remind the user if they ask you to remove these.
 
-${templateListStr ? `AVAILABLE PREVIOUS EMAILS (the user may reference these by name):\n${templateListStr}\n\nWhen the user references a previous email, they may provide its HTML as context. Use it as a starting point or inspiration as directed. Match the brand style (colors, fonts, layout patterns) from reference emails unless told otherwise.` : ''}
+${brandReferenceContext ? `BRAND REFERENCE:
+The user message may include a <brand_reference> block containing the client's current canonical brand template. Treat it as the default visual style: match its colors, fonts, header/footer, button styling, layout structure, and overall aesthetic in any email you produce, unless the user explicitly asks for a different style. The brand reference is a style guide, not the email content — copy its structure and styling, not its words.\n` : ''}${templateListStr ? `AVAILABLE PREVIOUS EMAILS (the user may reference these by name):\n${templateListStr}\n\nWhen the user references a previous email, they may provide its HTML as a <reference_email> block. Use it as a starting point or inspiration as directed.` : ''}
 
 DESIGN BEST PRACTICES:
 - Keep email width at 600px for maximum compatibility
@@ -2315,9 +2337,10 @@ DESIGN BEST PRACTICES:
     // Build message array for Claude
     const claudeMessages = messages.slice(-10).map((msg, idx) => {
       let content = msg.content
-      // Inject reference templates into the first user message
-      if (idx === 0 && msg.role === 'user' && referenceContext) {
-        content = `${referenceContext}\n\n${content}`
+      // Inject brand reference + paperclipped references into the first user message
+      if (idx === 0 && msg.role === 'user') {
+        const prefix = [brandReferenceContext, referenceContext].filter(Boolean).join('\n\n')
+        if (prefix) content = `${prefix}\n\n${content}`
       }
       return { role: msg.role, content }
     })

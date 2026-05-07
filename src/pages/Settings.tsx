@@ -1399,12 +1399,23 @@ function EditClientModal({
     mailing_address: client.mailing_address || '',
     default_utm_params: client.default_utm_params || '',
     default_reply_to_email: client.default_reply_to_email || '',
+    brand_reference_template_id: client.brand_reference_template_id || '',
   })
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>(
     client.verified_senders || []
   )
   const [newSender, setNewSender] = useState({ email: '', name: '' })
   const [submitting, setSubmitting] = useState(false)
+  const [templateOptions, setTemplateOptions] = useState<Array<{ id: string; name: string }>>([])
+
+  useEffect(() => {
+    supabase
+      .from('templates')
+      .select('id, name')
+      .eq('client_id', client.id)
+      .order('name')
+      .then(({ data }) => setTemplateOptions(data || []))
+  }, [client.id])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -1420,6 +1431,7 @@ function EditClientModal({
           mailing_address: formData.mailing_address || null,
           default_utm_params: formData.default_utm_params || null,
           default_reply_to_email: formData.default_reply_to_email || null,
+          brand_reference_template_id: formData.brand_reference_template_id || null,
           verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
         })
         .eq('id', client.id)
@@ -1520,6 +1532,27 @@ function EditClientModal({
           <p className="-mt-3 text-xs text-gray-500">
             This email will be pre-filled as the reply-to address for new campaigns. Can be changed per campaign.
           </p>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Brand Reference Template (optional)
+            </label>
+            <select
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+              value={formData.brand_reference_template_id}
+              onChange={(e) =>
+                setFormData({ ...formData, brand_reference_template_id: e.target.value })
+              }
+            >
+              <option value="">None</option>
+              {templateOptions.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-gray-500">
+              The AI Email Builder will use this template's HTML as the default brand style guide (header, footer, colors, fonts, layout) when generating emails for this client.
+            </p>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">

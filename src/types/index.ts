@@ -108,6 +108,7 @@ export interface Client {
   default_utm_params?: string
   default_reply_to_email?: string
   verified_senders?: VerifiedSender[]
+  brand_reference_template_id?: string | null
   created_at: string
   updated_at: string
   // Salesforce integration fields
