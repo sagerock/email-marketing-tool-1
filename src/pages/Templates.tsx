@@ -7,7 +7,6 @@ import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import { Plus, FileText, X, Pencil, Folder as FolderIcon, FolderOpen, FolderPlus, MoreVertical, ArrowRight, MessageSquare } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { apiFetch } from '../lib/api'
 import { cn } from '../lib/utils'
 
 export default function Templates() {
