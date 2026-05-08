@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import type { User, Session } from '@supabase/supabase-js'
 
@@ -37,6 +37,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [adminLoading, setAdminLoading] = useState(true)
   const [adminCheckFailed, setAdminCheckFailed] = useState(false)
+  const lastCheckedUserId = useRef<string | null>(null)
 
   const checkAdminStatus = async (userId: string) => {
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -107,12 +108,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoading(false)
 
       if (session?.user) {
-        // Don't await inside onAuthStateChange — supabase-js holds an internal
-        // lock during this callback. Awaiting a Supabase query here deadlocks
-        // because the query needs the same lock to read the auth token.
-        setAdminLoading(true)
-        checkAdminStatus(session.user.id)
+        // Only re-check admin status when the user actually changes. TOKEN_REFRESHED
+        // fires on tab focus; flipping adminLoading on every event makes ProtectedRoute
+        // swap to a spinner and unmount the active route, destroying open modal state.
+        // Don't await — supabase-js holds an internal lock during this callback and
+        // awaiting a Supabase query here deadlocks.
+        if (lastCheckedUserId.current !== session.user.id) {
+          lastCheckedUserId.current = session.user.id
+          setAdminLoading(true)
+          checkAdminStatus(session.user.id)
+        }
       } else {
+        lastCheckedUserId.current = null
         setAdminUser(null)
         setAdminLoading(false)
       }
