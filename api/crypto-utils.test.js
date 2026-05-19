@@ -6,7 +6,7 @@ const assert = require('node:assert/strict')
 // Will fail until crypto-utils.js exists
 const { encrypt, decrypt } = require('./crypto-utils')
 
-const TEST_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRrZXk=' // 32-byte base64
+const TEST_KEY = 'dGVzdGtleXRlc3RrZXl0ZXN0a2V5dGVzdGtleXRrZXk=' // pragma: allowlist secret
 
 test('encrypt produces a non-plaintext string', () => {
   const result = encrypt('SG.mysendgridkey', TEST_KEY)
