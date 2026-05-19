@@ -22,6 +22,29 @@ const { createClient } = require('@supabase/supabase-js')
 const jsforce = require('jsforce')
 const puppeteer = require('puppeteer')
 require('dotenv').config()
+const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
+
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
+
+function decryptClient(client) {
+  if (!client) return client
+  if (!ENCRYPTION_KEY) {
+    console.error('⚠️  ENCRYPTION_KEY not set - credentials will not be decrypted')
+    return client
+  }
+  const FIELDS = ['sendgrid_api_key', 'salesforce_client_id', 'salesforce_client_secret']
+  const result = { ...client }
+  for (const field of FIELDS) {
+    if (result[field]) {
+      try {
+        result[field] = decryptValue(result[field], ENCRYPTION_KEY)
+      } catch (e) {
+        console.error(`⚠️  Failed to decrypt ${field} for client ${client.id}: ${e.message}`)
+      }
+    }
+  }
+  return result
+}
 
 // Retry helper for transient network errors (e.g. TLS connection resets)
 async function withRetry(fn, { retries = 3, delay = 1000, label = 'operation' } = {}) {
@@ -634,13 +657,14 @@ async function sendCampaignById(campaignId) {
   }
 
   // 2. Fetch client to get API key
-  const { data: client, error: clientError } = await withRetry(
+  const { data: clientRaw, error: clientError } = await withRetry(
     () => supabase.from('clients').select('*').eq('id', campaign.client_id).single(),
     { label: 'Fetch client' }
   )
 
   if (clientError) throw clientError
 
+  const client = decryptClient(clientRaw)
   console.log('📧 Sending campaign for client:', client.name, '| IP Pool:', client.ip_pool || '(none)')
 
   // Create a dedicated SendGrid client instance for this send
@@ -978,7 +1002,7 @@ app.post('/api/send-test-email', async (req, res) => {
 
     // 2. Fetch client to get API key
     console.log('🔑 Fetching client:', campaign.client_id)
-    const { data: client, error: clientError } = await supabase
+    const { data: clientRaw, error: clientError } = await supabase
       .from('clients')
       .select('*')
       .eq('id', campaign.client_id)
@@ -989,6 +1013,7 @@ app.post('/api/send-test-email', async (req, res) => {
       throw new Error(`Client not found: ${clientError.message}`)
     }
 
+    const client = decryptClient(clientRaw)
     console.log('✅ Client found:', client.name, '| IP Pool:', client.ip_pool || '(none)')
 
     if (!client.sendgrid_api_key) {
@@ -1444,16 +1469,17 @@ app.get('/api/sendgrid/ip-pools', async (req, res) => {
     const { clientId } = req.query
 
     // Fetch client API key
-    const { data: client } = await supabase
+    const { data: clientRaw } = await supabase
       .from('clients')
       .select('sendgrid_api_key')
       .eq('id', clientId)
       .single()
 
-    if (!client) {
+    if (!clientRaw) {
       return res.status(404).json({ error: 'Client not found' })
     }
 
+    const client = decryptClient(clientRaw)
     sgClient.setApiKey(client.sendgrid_api_key)
 
     const request = {
@@ -1487,6 +1513,8 @@ app.post('/api/campaigns/:id/sync-sendgrid', async (req, res) => {
     if (campaignError || !campaign) {
       return res.status(404).json({ error: 'Campaign not found' })
     }
+
+    if (campaign.client) campaign.client = decryptClient(campaign.client)
 
     if (!campaign.client?.sendgrid_api_key) {
       return res.status(400).json({ error: 'No SendGrid API key configured for this client' })
@@ -1650,6 +1678,8 @@ app.get('/api/campaigns/:id/sendgrid-stats', async (req, res) => {
     if (campaignError || !campaign) {
       return res.status(404).json({ error: 'Campaign not found' })
     }
+
+    if (campaign.client) campaign.client = decryptClient(campaign.client)
 
     if (!campaign.client?.sendgrid_api_key) {
       return res.status(400).json({ error: 'No SendGrid API key configured for this client' })
@@ -2637,12 +2667,13 @@ app.post('/api/sequences/process', async (req, res) => {
         }
 
         // Get client for API key
-        const { data: client } = await supabase
+        const { data: clientRaw } = await supabase
           .from('clients')
           .select('*')
           .eq('id', sequence.client_id)
           .single()
 
+        const client = decryptClient(clientRaw)
         if (!client || !client.sendgrid_api_key) {
           throw new Error('Client or API key not found')
         }
@@ -3363,13 +3394,13 @@ app.post('/api/salesforce/connect', async (req, res) => {
       return res.status(400).json({ error: tokenData.error_description || tokenData.error || 'Failed to authenticate with Salesforce' })
     }
 
-    // Connection successful - store credentials
+    // Connection successful - store credentials (encrypted)
     const { error: updateError } = await supabase
       .from('clients')
       .update({
         salesforce_instance_url: normalizedUrl,
-        salesforce_client_id: salesforceClientId,
-        salesforce_client_secret: salesforceClientSecret,
+        salesforce_client_id: ENCRYPTION_KEY ? encryptValue(salesforceClientId, ENCRYPTION_KEY) : salesforceClientId,
+        salesforce_client_secret: ENCRYPTION_KEY ? encryptValue(salesforceClientSecret, ENCRYPTION_KEY) : salesforceClientSecret,
         salesforce_connected_at: new Date().toISOString(),
         salesforce_sync_status: 'idle',
       })
@@ -3470,12 +3501,13 @@ app.get('/api/salesforce/status', async (req, res) => {
  * Returns { accessToken, instanceUrl }
  */
 async function getSalesforceAccessToken(clientId) {
-  const { data: client, error } = await supabase
+  const { data: clientRaw, error } = await supabase
     .from('clients')
     .select('salesforce_instance_url, salesforce_client_id, salesforce_client_secret')
     .eq('id', clientId)
     .single()
 
+  const client = decryptClient(clientRaw)
   if (error || !client.salesforce_client_id || !client.salesforce_client_secret) {
     throw new Error('Salesforce not connected for this client')
   }
@@ -5156,16 +5188,17 @@ app.post('/api/contacts/sync-bounce-types', async (req, res) => {
     }
 
     // Get client's SendGrid API key
-    const { data: client, error: clientError } = await supabase
+    const { data: clientRaw, error: clientError } = await supabase
       .from('clients')
       .select('sendgrid_api_key')
       .eq('id', clientId)
       .single()
 
-    if (clientError || !client) {
+    if (clientError || !clientRaw) {
       return res.status(404).json({ error: 'Client not found' })
     }
 
+    const client = decryptClient(clientRaw)
     console.log(`📧 Syncing bounce types from SendGrid for client ${clientId}`)
 
     // Fetch bounces from SendGrid (hard bounces)
@@ -5368,15 +5401,17 @@ app.post('/api/bounces/recover', async (req, res) => {
     }
 
     // Get client's SendGrid API key
-    const { data: client, error: clientError } = await supabase
+    const { data: clientRaw, error: clientError } = await supabase
       .from('clients')
       .select('sendgrid_api_key')
       .eq('id', clientId)
       .single()
 
-    if (clientError || !client) {
+    if (clientError || !clientRaw) {
       return res.status(404).json({ error: 'Client not found' })
     }
+
+    const client = decryptClient(clientRaw)
 
     // Get contact emails
     const { data: contacts, error: contactsError } = await supabase
@@ -5461,15 +5496,17 @@ app.post('/api/bounces/send-recovery', async (req, res) => {
     }
 
     // Get client
-    const { data: client, error: clientError } = await supabase
+    const { data: clientRaw, error: clientError } = await supabase
       .from('clients')
       .select('sendgrid_api_key, from_email, from_name, mailing_address, ip_pool')
       .eq('id', clientId)
       .single()
 
-    if (clientError || !client) {
+    if (clientError || !clientRaw) {
       return res.status(404).json({ error: 'Client not found' })
     }
+
+    const client = decryptClient(clientRaw)
 
     // Get template
     const { data: template, error: templateError } = await supabase
@@ -6251,12 +6288,13 @@ app.post('/api/ai-followup/drafts/:id/approve', async (req, res) => {
     if (draft.contact?.unsubscribed) return res.status(400).json({ error: 'Contact has unsubscribed' })
 
     // Fetch client SendGrid API key
-    const { data: client } = await supabase
+    const { data: clientRaw } = await supabase
       .from('clients')
       .select('sendgrid_api_key')
       .eq('id', draft.client_id)
       .single()
 
+    const client = decryptClient(clientRaw)
     if (!client?.sendgrid_api_key) {
       return res.status(400).json({ error: 'Client does not have a SendGrid API key configured' })
     }
@@ -6906,12 +6944,13 @@ app.listen(PORT, () => {
           }
 
           // Get client for API key
-          const { data: client } = await supabase
+          const { data: clientRaw } = await supabase
             .from('clients')
             .select('*')
             .eq('id', sequence.client_id)
             .single()
 
+          const client = decryptClient(clientRaw)
           if (!client || !client.sendgrid_api_key) {
             throw new Error('Client or API key not found')
           }
