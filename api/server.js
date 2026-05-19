@@ -4142,8 +4142,8 @@ app.get('/api/salesforce/lookup', async (req, res) => {
 
     const conn = await getSalesforceConnection(clientId)
 
-    // Sanitize email to prevent SOQL injection
-    const sanitizedEmail = email.replace(/'/g, "\\'").replace(/\\/g, '\\\\')
+    // Sanitize email to prevent SOQL injection (backslashes must be escaped before quotes)
+    const sanitizedEmail = email.replace(/\\/g, '\\\\').replace(/'/g, "\\'")
 
     // Query Leads and Contacts in parallel
     let contactQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastModifiedDate FROM Contact WHERE Email = '${sanitizedEmail}'`
