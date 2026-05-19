@@ -23,6 +23,7 @@ const jsforce = require('jsforce')
 const puppeteer = require('puppeteer')
 require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
+const { webhookLimiter, upsertLimiter } = require('./rate-limiters')
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
 
@@ -1192,7 +1193,7 @@ app.get('/api/campaign-progress/:id', async (req, res) => {
  * SendGrid webhook endpoint for event tracking
  * Configure this URL in SendGrid: https://your-domain.com/api/webhook/sendgrid
  */
-app.post('/api/webhook/sendgrid', async (req, res) => {
+app.post('/api/webhook/sendgrid', webhookLimiter, async (req, res) => {
   try {
     const events = req.body
 
@@ -2269,7 +2270,7 @@ DESIGN BEST PRACTICES:
  * Optional: add &tag=yourtagname to specify a tag (defaults to "discountform")
  */
 // New multi-tenant Gravity Forms webhook (routes by AI agent webhook key)
-app.post('/api/webhook/gravity-forms/:webhookKey', async (req, res) => {
+app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, res) => {
   try {
     const { webhookKey } = req.params
 
@@ -2408,7 +2409,7 @@ app.post('/api/webhook/gravity-forms/:webhookKey', async (req, res) => {
 })
 
 // Legacy Gravity Forms webhook (Alconox-specific, kept for backward compatibility)
-app.post('/api/webhook/gravity-forms', async (req, res) => {
+app.post('/api/webhook/gravity-forms', webhookLimiter, async (req, res) => {
   try {
     console.log('⚠️ Deprecated: Using legacy Gravity Forms webhook. Migrate to /api/webhook/gravity-forms/:webhookKey')
     // Validate API key from query parameter
@@ -2503,7 +2504,7 @@ app.post('/api/webhook/gravity-forms', async (req, res) => {
  * Creates or updates a contact and merges tags
  * Used by external integrations (Make.com, Zapier, etc.)
  */
-app.post('/api/contacts/upsert', async (req, res) => {
+app.post('/api/contacts/upsert', upsertLimiter, async (req, res) => {
   try {
     // Check API key authentication
     const authHeader = req.headers.authorization
@@ -2854,7 +2855,7 @@ app.post('/api/sequences/process', async (req, res) => {
  * Webhook handler for sequence analytics
  * This extends the existing webhook to handle sequence events
  */
-app.post('/api/webhook/sequence', async (req, res) => {
+app.post('/api/webhook/sequence', webhookLimiter, async (req, res) => {
   try {
     const events = req.body
 
@@ -2948,7 +2949,7 @@ app.post('/api/webhook/sequence', async (req, res) => {
 const multer = require('multer')
 const inboundUpload = multer() // memory storage, we only need the text fields
 
-app.post('/api/webhook/inbound-email', inboundUpload.any(), async (req, res) => {
+app.post('/api/webhook/inbound-email', webhookLimiter, inboundUpload.any(), async (req, res) => {
   try {
     // SendGrid Inbound Parse sends multipart form data
     const {
