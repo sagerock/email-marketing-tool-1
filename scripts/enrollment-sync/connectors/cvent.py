@@ -43,7 +43,7 @@ def _paginate(token: str, path: str, base_params: dict) -> list:
         next_tok = d.get("paging", {}).get("nextToken")
         if not next_tok:
             break
-        time.sleep(0.6)
+        time.sleep(2.0)
     return results
 
 
