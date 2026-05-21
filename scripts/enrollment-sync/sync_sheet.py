@@ -103,7 +103,7 @@ def main() -> None:
 
     print("Writing to Google Sheet...")
     ws = get_sheet(SHEET_ID)
-    ws.update(f"C2:F{1 + len(PROGRAM_ROW_ORDER)}", rows)
+    ws.update(values=rows, range_name=f"C2:F{1 + len(PROGRAM_ROW_ORDER)}")
 
     print(f"Sheet updated. ({updated_at})")
 
