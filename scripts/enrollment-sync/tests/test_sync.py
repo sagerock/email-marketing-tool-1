@@ -32,9 +32,7 @@ MOCK_ENROLLMENTS = [
 @patch("sync.cvent.fetch_attendees", return_value=MOCK_ATTENDEES)
 @patch("sync.cvent.get_token", return_value="fake-token")
 def test_dry_run_makes_no_db_calls(mock_token, mock_attendees, mock_enrollments):
-    sb = MagicMock()
-    sync.sync_cvent_session(sb, MOCK_CONFIG, "session-uuid-1", dry_run=True)
-    sb.table.assert_not_called()
+    sync.sync_cvent_session(None, MOCK_CONFIG, "session-uuid-1", dry_run=True)
 
 
 @patch("sync.cvent.fetch_session_enrollments", return_value=MOCK_ENROLLMENTS)

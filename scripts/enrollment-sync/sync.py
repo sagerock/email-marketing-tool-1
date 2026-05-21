@@ -61,7 +61,11 @@ def sync_cvent_session(sb, config: dict, session_id: str, dry_run: bool = False)
             print(f"  WARNING: attendee {att_id} not found in event roster, skipping")
             continue
 
-        status = STATUS_MAP.get(enr.get("status"), "registered")
+        raw_status = enr.get("status")
+        status = STATUS_MAP.get(raw_status)
+        if status is None:
+            print(f"  WARNING: unknown status '{raw_status}' for attendee {att_id}, skipping")
+            continue
         name = f"{att['firstName']} {att['lastName']}"
 
         if dry_run:
