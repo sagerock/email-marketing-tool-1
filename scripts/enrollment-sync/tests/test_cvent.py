@@ -35,7 +35,7 @@ def test_fetch_session_enrollments_paginates(mock_get, mock_sleep):
     ]
     result = cvent.fetch_session_enrollments("fake-token", "session-123")
     assert len(result) == 2
-    mock_sleep.assert_called_once_with(0.6)
+    mock_sleep.assert_called_once_with(2.0)
 
 
 @patch("connectors.cvent.requests.get")

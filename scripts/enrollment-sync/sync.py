@@ -2,9 +2,6 @@ import argparse
 import json
 import os
 from pathlib import Path
-from dotenv import load_dotenv
-
-load_dotenv(Path(__file__).parent / ".env")
 
 import db
 from connectors import cvent
@@ -20,22 +17,32 @@ STATUS_MAP = {
 
 def load_config(client_name: str) -> dict:
     path = CONFIG_DIR / f"{client_name}.json"
-    if not path.exists():
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
         raise FileNotFoundError(f"No config found for client '{client_name}' at {path}")
-    with open(path) as f:
-        return json.load(f)
 
 
-def sync_cvent_session(sb, config: dict, session_id: str, dry_run: bool = False) -> None:
+def sync_cvent_session(
+    sb,
+    config: dict,
+    session_id: str,
+    dry_run: bool = False,
+    token: str | None = None,
+    all_attendees: dict | None = None,
+) -> None:
     session_config = config["sessions"][session_id]
     event_id = config["cvent_event_id"]
     client_id = config["client_id"]
 
-    print(f"  Authenticating with Cvent...")
-    token = cvent.get_token()
+    if token is None:
+        print(f"  Authenticating with Cvent...")
+        token = cvent.get_token()
 
-    print(f"  Fetching attendees for event {event_id}...")
-    all_attendees = cvent.fetch_attendees(token, event_id)
+    if all_attendees is None:
+        print(f"  Fetching attendees for event {event_id}...")
+        all_attendees = cvent.fetch_attendees(token, event_id)
 
     print(f"  Fetching enrollments for session {session_id}...")
     enrollments = cvent.fetch_session_enrollments(token, session_id)
@@ -115,12 +122,24 @@ def main() -> None:
         if not session_ids or session_ids == [None]:
             parser.error("Provide --program-id or --all-sessions")
 
-        for session_id in session_ids:
-            if session_id not in config["sessions"]:
-                print(f"WARNING: session {session_id} not in config, skipping")
-                continue
+        valid_ids = [s for s in session_ids if s in config["sessions"]]
+        for s in session_ids:
+            if s not in config["sessions"]:
+                print(f"WARNING: session {s} not in config, skipping")
+
+        print("Authenticating with Cvent...")
+        token = cvent.get_token()
+        print(f"Fetching attendees for event {config['cvent_event_id']}...")
+        all_attendees = cvent.fetch_attendees(token, config["cvent_event_id"])
+
+        for session_id in valid_ids:
             print(f"\nSyncing: {config['sessions'][session_id]['name']}")
-            sync_cvent_session(sb, config, session_id, dry_run=args.dry_run)
+            sync_cvent_session(
+                sb, config, session_id,
+                dry_run=args.dry_run,
+                token=token,
+                all_attendees=all_attendees,
+            )
 
 
 if __name__ == "__main__":
