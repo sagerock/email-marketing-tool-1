@@ -3,10 +3,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 from supabase import create_client, Client
 
-load_dotenv(Path(__file__).parent / ".env")
-
 
 def get_supabase() -> Client:
+    load_dotenv(Path(__file__).parent / ".env")
     return create_client(
         os.environ["SUPABASE_URL"],
         os.environ["SUPABASE_SERVICE_KEY"],
@@ -26,26 +25,26 @@ def upsert_program(
     client_id: str,
     name: str,
     year: int,
-    format: str,
+    program_format: str,
     platform: str,
     platform_id: str,
     tag: str,
     instructor: str | None = None,
-    start_date=None,
-    end_date=None,
+    start_date: str | None = None,
+    end_date: str | None = None,
 ) -> str:
     result = sb.table("programs").upsert(
         {
             "client_id": client_id,
             "name": name,
             "year": year,
-            "format": format,
+            "format": program_format,
             "platform": platform,
             "platform_id": platform_id,
             "tag": tag,
             "instructor": instructor,
-            "start_date": str(start_date) if start_date else None,
-            "end_date": str(end_date) if end_date else None,
+            "start_date": start_date,
+            "end_date": end_date,
         },
         on_conflict="client_id,platform,platform_id",
     ).execute()
@@ -58,7 +57,7 @@ def upsert_enrollment(
     program_id: str,
     contact_id: str,
     status: str,
-    enrolled_at,
+    enrolled_at: str | None,
     platform_enrollment_id: str,
     raw_data: dict,
 ) -> None:
