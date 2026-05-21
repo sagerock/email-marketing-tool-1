@@ -11,6 +11,7 @@ returns table(
 language sql
 stable
 security definer
+set search_path = public
 as $$
   select p.name, p.format, count(e.id)::bigint
   from programs p
@@ -22,4 +23,4 @@ as $$
   order by p.name, p.format
 $$;
 
-grant execute on function get_program_enrollment_counts to authenticated, service_role;
+grant execute on function get_program_enrollment_counts(uuid, int) to authenticated, service_role;
