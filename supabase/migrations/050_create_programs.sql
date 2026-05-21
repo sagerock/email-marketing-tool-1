@@ -12,11 +12,10 @@ create table programs (
   end_date date,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  unique (client_id, platform_id)
+  unique (client_id, platform, platform_id)
 );
 
-create index programs_client_id_idx on programs(client_id);
-create index programs_year_idx on programs(year);
+create index programs_client_id_year_idx on programs(client_id, year);
 
 create or replace function update_programs_updated_at()
 returns trigger language plpgsql as $$
@@ -32,7 +31,14 @@ create trigger programs_updated_at
 
 alter table programs enable row level security;
 
-create policy "client_isolation" on programs
-  using (client_id = (
-    select client_id from admin_users where user_id = auth.uid()
-  ));
+create policy "select_policy" on programs
+  for select using (can_access_client(client_id));
+
+create policy "insert_policy" on programs
+  for insert with check (can_access_client(client_id));
+
+create policy "update_policy" on programs
+  for update using (can_access_client(client_id));
+
+create policy "delete_policy" on programs
+  for delete using (can_access_client(client_id));

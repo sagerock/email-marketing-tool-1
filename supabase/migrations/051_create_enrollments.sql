@@ -16,6 +16,8 @@ create index enrollments_contact_id_idx on enrollments(contact_id);
 create index enrollments_program_id_idx on enrollments(program_id);
 create index enrollments_client_id_idx on enrollments(client_id);
 create index enrollments_status_idx on enrollments(status);
+create index enrollments_program_id_status_idx on enrollments(program_id, status);
+create unique index enrollments_platform_enrollment_id_key on enrollments(client_id, platform_enrollment_id) where platform_enrollment_id is not null;
 
 create or replace function update_enrollments_updated_at()
 returns trigger language plpgsql as $$
@@ -31,7 +33,14 @@ create trigger enrollments_updated_at
 
 alter table enrollments enable row level security;
 
-create policy "client_isolation" on enrollments
-  using (client_id = (
-    select client_id from admin_users where user_id = auth.uid()
-  ));
+create policy "select_policy" on enrollments
+  for select using (can_access_client(client_id));
+
+create policy "insert_policy" on enrollments
+  for insert with check (can_access_client(client_id));
+
+create policy "update_policy" on enrollments
+  for update using (can_access_client(client_id));
+
+create policy "delete_policy" on enrollments
+  for delete using (can_access_client(client_id));
