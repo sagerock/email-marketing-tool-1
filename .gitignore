@@ -31,6 +31,10 @@ dist-ssr
 # Python scripts with credentials
 *.py
 
+# But allow __init__.py and structured Python in enrollment-sync
+!scripts/enrollment-sync/**/__init__.py
+!scripts/enrollment-sync/**/*.py
+
 # Data files
 *.csv
 
