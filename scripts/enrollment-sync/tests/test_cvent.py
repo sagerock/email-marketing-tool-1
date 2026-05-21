@@ -26,14 +26,16 @@ def test_fetch_session_enrollments_returns_non_deleted(mock_get):
     assert result[0]["id"] == "enr-1"
 
 
+@patch("connectors.cvent.time.sleep")
 @patch("connectors.cvent.requests.get")
-def test_fetch_session_enrollments_paginates(mock_get):
+def test_fetch_session_enrollments_paginates(mock_get, mock_sleep):
     mock_get.side_effect = [
         _mock_response([{"id": "enr-1", "attendee": {"id": "att-1"}, "status": "Registered"}], next_token="page2"),
         _mock_response([{"id": "enr-2", "attendee": {"id": "att-2"}, "status": "Registered"}], next_token=None),
     ]
     result = cvent.fetch_session_enrollments("fake-token", "session-123")
     assert len(result) == 2
+    mock_sleep.assert_called_once_with(0.6)
 
 
 @patch("connectors.cvent.requests.get")
