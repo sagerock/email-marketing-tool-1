@@ -144,6 +144,11 @@ def main() -> None:
                 all_attendees=all_attendees,
             )
 
+        if not args.dry_run and sb is not None:
+            print("\nRefreshing tag counts...")
+            db.refresh_tag_counts(sb, config["client_id"])
+            print("Done.")
+
 
 if __name__ == "__main__":
     main()

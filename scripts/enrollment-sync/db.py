@@ -75,8 +75,24 @@ def upsert_enrollment(
     ).execute()
 
 
-def apply_tag(sb: Client, contact_id: str, tag: str) -> None:
-    result = sb.table("contacts").select("tags").eq("id", contact_id).single().execute()
+def apply_tag(sb: Client, contact_id: str, tag: str, client_id: str | None = None) -> None:
+    result = sb.table("contacts").select("tags,client_id").eq("id", contact_id).single().execute()
     current_tags = result.data.get("tags") or []
+    resolved_client_id = client_id or result.data.get("client_id")
     if tag not in current_tags:
         sb.table("contacts").update({"tags": current_tags + [tag]}).eq("id", contact_id).execute()
+    # Ensure tag exists in the mail tool's tags catalog (count refreshed separately)
+    if resolved_client_id:
+        sb.table("tags").upsert(
+            {"name": tag, "client_id": resolved_client_id, "contact_count": 0},
+            on_conflict="name,client_id",
+            ignore_duplicates=True,
+        ).execute()
+
+
+def refresh_tag_counts(sb: Client, client_id: str) -> None:
+    """Recount all tag contacts for a client so the mail tool UI stays accurate."""
+    tags = sb.table("tags").select("id,name").eq("client_id", client_id).execute().data
+    for tag_row in tags:
+        result = sb.table("contacts").select("id", count="exact").eq("client_id", client_id).contains("tags", [tag_row["name"]]).execute()
+        sb.table("tags").update({"contact_count": result.count}).eq("id", tag_row["id"]).execute()
