@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
@@ -38,6 +38,8 @@ interface Folder {
 
 export default function EmailBuilder() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const editTemplateId = searchParams.get('templateId')
   const { selectedClient } = useClient()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -73,12 +75,39 @@ export default function EmailBuilder() {
   // CAN-SPAM warnings
   const [complianceWarnings, setComplianceWarnings] = useState<string[]>([])
 
+  // Edit mode state
+  const [editTemplateName, setEditTemplateName] = useState<string | null>(null)
+
   // Fetch template index and folders on mount
   useEffect(() => {
     if (!selectedClient) return
     fetchTemplateIndex()
     fetchFolders()
   }, [selectedClient])
+
+  // Load existing template when editTemplateId is in URL
+  useEffect(() => {
+    if (!editTemplateId || !selectedClient) return
+    supabase
+      .from('templates')
+      .select('id, name, subject, preview_text, html_content')
+      .eq('id', editTemplateId)
+      .eq('client_id', selectedClient.id)
+      .single()
+      .then(({ data, error }) => {
+        if (error || !data) return
+        setCurrentHtml(data.html_content || '')
+        setCurrentSubject(data.subject || '')
+        setCurrentPreviewText(data.preview_text || '')
+        setEditTemplateName(data.name)
+        setMessages([{
+          id: 'edit-init',
+          role: 'assistant',
+          content: `I've loaded your "${data.name}" template. What would you like to change?`,
+          htmlContent: data.html_content || undefined,
+        }])
+      })
+  }, [editTemplateId, selectedClient])
 
   // Auto-scroll to bottom of messages
   useEffect(() => {
@@ -275,15 +304,26 @@ export default function EmailBuilder() {
     if (!saveName || !currentHtml || !selectedClient) return
     setSaving(true)
     try {
-      const { error } = await supabase.from('templates').insert({
-        name: saveName,
-        subject: saveSubject,
-        preview_text: savePreviewText,
-        html_content: currentHtml,
-        folder_id: saveFolderId,
-        client_id: selectedClient.id,
-      })
-      if (error) throw error
+      if (editTemplateId) {
+        const { error } = await supabase.from('templates').update({
+          name: saveName,
+          subject: saveSubject,
+          preview_text: savePreviewText,
+          html_content: currentHtml,
+          updated_at: new Date().toISOString(),
+        }).eq('id', editTemplateId)
+        if (error) throw error
+      } else {
+        const { error } = await supabase.from('templates').insert({
+          name: saveName,
+          subject: saveSubject,
+          preview_text: savePreviewText,
+          html_content: currentHtml,
+          folder_id: saveFolderId,
+          client_id: selectedClient.id,
+        })
+        if (error) throw error
+      }
       setShowSaveForm(false)
       navigate('/templates')
     } catch (err) {
@@ -295,7 +335,7 @@ export default function EmailBuilder() {
   }
 
   const openSaveForm = () => {
-    setSaveName(currentSubject || 'Untitled Email')
+    setSaveName(editTemplateName || currentSubject || 'Untitled Email')
     setSaveSubject(currentSubject)
     setSavePreviewText(currentPreviewText)
     setSaveFolderId(null)
@@ -324,13 +364,20 @@ export default function EmailBuilder() {
     <div className="flex flex-col h-[calc(100vh-2rem)]">
       {/* Top Bar */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
-        <button
-          onClick={() => navigate('/templates')}
-          className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to Email Designs
-        </button>
+        <div className="flex items-center gap-4">
+          <button
+            onClick={() => navigate('/templates')}
+            className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to Email Designs
+          </button>
+          {editTemplateName && (
+            <span className="text-sm text-gray-500">
+              Editing: <span className="font-medium text-gray-800">{editTemplateName}</span>
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {complianceWarnings.length > 0 && (
             <div className="flex items-center gap-1 text-amber-600 text-xs">
@@ -345,7 +392,7 @@ export default function EmailBuilder() {
             disabled={!currentHtml}
           >
             <Save className="h-4 w-4 mr-1" />
-            Save as Template
+            {editTemplateId ? 'Save Changes' : 'Save as Template'}
           </Button>
         </div>
       </div>
@@ -381,21 +428,23 @@ export default function EmailBuilder() {
                 className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm"
               />
             </div>
-            <div className="w-40">
-              <label className="block text-xs font-medium text-gray-700 mb-1">Folder</label>
-              <select
-                value={saveFolderId || ''}
-                onChange={e => setSaveFolderId(e.target.value || null)}
-                className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm"
-              >
-                <option value="">Unfiled</option>
-                {folders.map(f => (
-                  <option key={f.id} value={f.id}>{f.name}</option>
-                ))}
-              </select>
-            </div>
+            {!editTemplateId && (
+              <div className="w-40">
+                <label className="block text-xs font-medium text-gray-700 mb-1">Folder</label>
+                <select
+                  value={saveFolderId || ''}
+                  onChange={e => setSaveFolderId(e.target.value || null)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm"
+                >
+                  <option value="">Unfiled</option>
+                  {folders.map(f => (
+                    <option key={f.id} value={f.id}>{f.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
             <Button size="sm" onClick={handleSave} disabled={saving || !saveName}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Save'}
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : editTemplateId ? 'Update Template' : 'Save'}
             </Button>
             <button onClick={() => setShowSaveForm(false)} className="text-gray-400 hover:text-gray-600 pb-1">
               <X className="h-4 w-4" />

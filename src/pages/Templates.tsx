@@ -430,6 +430,16 @@ export default function Templates() {
                           variant="ghost"
                           onClick={(e) => {
                             e.stopPropagation()
+                            navigate(`/email-builder?templateId=${template.id}`)
+                          }}
+                        >
+                          Edit with AI
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={(e) => {
+                            e.stopPropagation()
                             setEditingTemplate(template)
                           }}
                         >
