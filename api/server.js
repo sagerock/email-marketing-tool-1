@@ -27,7 +27,7 @@ const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils
 const { webhookLimiter, upsertLimiter } = require('./rate-limiters')
 const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
-const { filenameFromUrl } = require('./media-scan')
+const { filenameFromUrl, scanClientHtml } = require('./media-scan')
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
 
@@ -6889,6 +6889,21 @@ app.delete('/api/media', async (req, res) => {
     return res.status(500).json({ error: 'S3 delete failed' })
   }
   res.status(204).end()
+})
+
+// POST /api/media/scan
+// Body: { client_id }
+// Scans templates + sequence_steps HTML for image URLs and caches them.
+app.post('/api/media/scan', async (req, res) => {
+  const clientId = req.body.client_id
+  if (!clientId) return res.status(400).json({ error: 'client_id is required' })
+  try {
+    const result = await scanClientHtml(supabase, clientId)
+    res.json(result)
+  } catch (err) {
+    console.error('[media] scan failed', err)
+    res.status(500).json({ error: err.message })
+  }
 })
 
 // Serve static files from the dist directory
