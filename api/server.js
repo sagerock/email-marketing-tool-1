@@ -6753,31 +6753,36 @@ app.get('/api/media', async (req, res) => {
   const s3Items = []
   let continuationToken = undefined
   let pageCount = 0
-  do {
-    const out = await s3.send(new ListObjectsV2Command({
-      Bucket: BUCKET,
-      Prefix: prefix,
-      ContinuationToken: continuationToken,
-    }))
-    for (const obj of out.Contents || []) {
-      const basename = obj.Key.split('/').pop() || ''
-      if (basename.startsWith('stripothumbnailurl')) continue
-      s3Items.push({
-        key: obj.Key,
-        url: publicUrlForKey(obj.Key),
-        filename: basename,
-        size: obj.Size,
-        last_modified: obj.LastModified,
-        source: 's3',
-      })
-    }
-    continuationToken = out.NextContinuationToken
-    pageCount++
-    if (pageCount > 5) {
-      console.warn(`[media] ${clientId}: hit pagination cap (5 pages, ~5000 objects)`)
-      break
-    }
-  } while (continuationToken)
+  try {
+    do {
+      const out = await s3.send(new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }))
+      for (const obj of out.Contents || []) {
+        const basename = obj.Key.split('/').pop() || ''
+        if (basename.startsWith('stripothumbnailurl')) continue
+        s3Items.push({
+          key: obj.Key,
+          url: publicUrlForKey(obj.Key),
+          filename: basename,
+          size: obj.Size,
+          last_modified: obj.LastModified,
+          source: 's3',
+        })
+      }
+      continuationToken = out.NextContinuationToken
+      pageCount++
+      if (pageCount > 5) {
+        console.warn(`[media] ${clientId}: hit pagination cap (5 pages, ~5000 objects)`)
+        break
+      }
+    } while (continuationToken)
+  } catch (err) {
+    console.error('[media] S3 list failed', err)
+    return res.status(500).json({ error: 'S3 list failed: ' + (err.message || 'unknown') })
+  }
 
   // Fetch discovered URLs and dedupe against S3 items
   const s3UrlSet = new Set(s3Items.map((i) => i.url))
