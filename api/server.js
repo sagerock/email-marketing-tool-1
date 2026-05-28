@@ -6801,6 +6801,63 @@ app.get('/api/media', async (req, res) => {
   res.json({ items: [...s3Items, ...discoveredItems], needs_setup: false })
 })
 
+const ALLOWED_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 // 5 MB
+
+const mediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+  fileFilter: (req, file, cb) => {
+    if (ALLOWED_IMAGE_MIMES.has(file.mimetype)) cb(null, true)
+    else cb(new Error('Unsupported image type'))
+  },
+})
+
+function safeFilename(name) {
+  const path = require('node:path')
+  const base = path.basename(name).toLowerCase()
+  return base.replace(/[^a-z0-9.-]/g, '-').replace(/-+/g, '-').slice(0, 80) || 'image'
+}
+
+// POST /api/media/upload
+// multipart/form-data with fields: client_id, file
+app.post('/api/media/upload', mediaUpload.single('file'), async (req, res) => {
+  const clientId = req.body.client_id
+  if (!clientId) return res.status(400).json({ error: 'client_id is required' })
+  if (!req.file) return res.status(400).json({ error: 'file is required' })
+
+  const { data: client, error: clientErr } = await supabase
+    .from('clients')
+    .select('s3_prefix')
+    .eq('id', clientId)
+    .single()
+  if (clientErr) return res.status(500).json({ error: clientErr.message })
+  if (!client?.s3_prefix) {
+    return res.status(400).json({ error: 'Client has no s3_prefix configured' })
+  }
+
+  const key = `${client.s3_prefix}/${Date.now()}-${safeFilename(req.file.originalname)}`
+  try {
+    await s3.send(new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Body: req.file.buffer,
+      ContentType: req.file.mimetype,
+    }))
+  } catch (err) {
+    console.error('[media] upload failed', err)
+    return res.status(500).json({ error: 'S3 upload failed' })
+  }
+
+  res.json({ key, url: publicUrlForKey(key) })
+})
+
+// multer error handler — catches file-too-large and bad mimetype
+app.use('/api/media/upload', (err, req, res, next) => {
+  if (err) return res.status(400).json({ error: err.message })
+  next()
+})
+
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
 
