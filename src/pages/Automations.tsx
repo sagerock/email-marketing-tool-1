@@ -444,6 +444,12 @@ function CreateSequenceModal({
       return
     }
 
+    const hasMissingDate = sequenceSteps.some(s => s.timing_anchor === 'fixed_date' && !s.fixed_send_at)
+    if (hasMissingDate) {
+      alert('Please set a date for all "On a specific date" steps')
+      return
+    }
+
     setSubmitting(true)
     try {
       // Create sequence
@@ -1211,7 +1217,7 @@ function EditSequenceModal({
                           {step.timing_anchor === 'fixed_date' ? (
                             <input
                               type="datetime-local"
-                              className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              className={`rounded-md border px-2 py-1 text-sm ${!step.fixed_send_at ? 'border-orange-400 bg-orange-50' : 'border-gray-300'}`}
                               value={step.fixed_send_at ? toLocalDatetimeInput(step.fixed_send_at) : ''}
                               onChange={(e) => updateStep(step.id, 'fixed_send_at', e.target.value ? new Date(e.target.value).toISOString() : null)}
                             />

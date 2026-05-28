@@ -2613,6 +2613,9 @@ app.post('/api/contacts/upsert', upsertLimiter, async (req, res) => {
  * Process scheduled sequence emails
  * This should be called periodically (e.g., every minute via cron)
  */
+// NOTE: This endpoint is dead code — the cron handler (cron PART 2) handles all
+// sequence email processing. This endpoint is kept for reference only and does not
+// implement the full skip-chain logic. Do not call directly.
 app.post('/api/sequences/process', async (req, res) => {
   try {
     const now = new Date().toISOString()
@@ -4716,6 +4719,11 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
 
               const now = new Date().toISOString()
 
+              const firstStepScheduledFor =
+                firstStep.timing_anchor === 'fixed_date' && firstStep.fixed_send_at
+                  ? firstStep.fixed_send_at
+                  : now
+
               // Batch create enrollments
               const enrollmentsToCreate = contactsToEnroll.map(contactId => ({
                 sequence_id: sequence.id,
@@ -4723,7 +4731,7 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
                 status: 'active',
                 current_step: 0,
                 trigger_campaign_id: campaign.id,
-                next_email_scheduled_at: now,
+                next_email_scheduled_at: firstStepScheduledFor,
               }))
 
               let enrollmentsToSchedule = []
@@ -4757,7 +4765,7 @@ app.post('/api/salesforce/sync-campaigns', async (req, res) => {
                   enrollment_id: enrollment.id,
                   step_id: firstStep.id,
                   contact_id: enrollment.contact_id,
-                  scheduled_for: now,
+                  scheduled_for: firstStepScheduledFor,
                   status: 'pending',
                 }))
 
