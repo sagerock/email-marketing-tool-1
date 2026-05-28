@@ -29,7 +29,7 @@ function computeNextSendTime(step, now) {
   // Default: 'previous_step' relative timing (also handles missing timing_anchor)
   const next = new Date(now)
   next.setDate(next.getDate() + (step.delay_days || 0))
-  next.setHours(next.getHours() + (step.delay_hours || 0))
+  next.setTime(next.getTime() + (step.delay_hours || 0) * 60 * 60 * 1000)
   return next
 }
 

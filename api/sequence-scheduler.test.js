@@ -20,7 +20,7 @@ test('relative step: schedules at now + delay_days + delay_hours', () => {
   const result = computeNextSendTime(step, NOW)
   const expected = new Date(NOW)
   expected.setDate(expected.getDate() + 2)
-  expected.setHours(expected.getHours() + 6)
+  expected.setTime(expected.getTime() + 6 * 60 * 60 * 1000)
   assert.deepEqual(result, expected)
 })
 
@@ -30,6 +30,13 @@ test('relative step: missing timing_anchor defaults to relative', () => {
   const expected = new Date(NOW)
   expected.setDate(expected.getDate() + 7)
   assert.deepEqual(result, expected)
+})
+
+test('relative step: zero delay returns now (copy)', () => {
+  const step = { timing_anchor: 'previous_step', delay_days: 0, delay_hours: 0 }
+  const result = computeNextSendTime(step, NOW)
+  assert.deepEqual(result, NOW)
+  assert.notEqual(result, NOW) // must be a copy, not the same reference
 })
 
 test('fixed_date step: date 7 days out returns that date', () => {
