@@ -7545,14 +7545,18 @@ app.listen(PORT, () => {
 
                     if (contactsToEnroll.length === 0) continue
 
-                    const now = new Date().toISOString()
+                    const now = new Date()
+                    const firstStepScheduledFor =
+                      firstStep.timing_anchor === 'fixed_date' && firstStep.fixed_send_at
+                        ? new Date(firstStep.fixed_send_at)
+                        : now
                     const enrollmentsToCreate = contactsToEnroll.map(contactId => ({
                       sequence_id: sequence.id,
                       contact_id: contactId,
                       status: 'active',
                       current_step: 0,
                       trigger_campaign_id: campaign.id,
-                      next_email_scheduled_at: now,
+                      next_email_scheduled_at: firstStepScheduledFor.toISOString(),
                     }))
 
                     let enrollmentsToSchedule = []
@@ -7581,7 +7585,7 @@ app.listen(PORT, () => {
                         enrollment_id: enrollment.id,
                         step_id: firstStep.id,
                         contact_id: enrollment.contact_id,
-                        scheduled_for: now,
+                        scheduled_for: firstStepScheduledFor.toISOString(),
                         status: 'pending',
                       }))
 
