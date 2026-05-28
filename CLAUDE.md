@@ -279,6 +279,10 @@ VITE_API_URL=              # Leave empty for same-origin (unified deployment)
 BASE_URL=                  # App URL for unsubscribe links
 PORT=3001                  # Railway sets this automatically
 NODE_ENV=production
+AWS_ACCESS_KEY_ID=         # IAM user with PutObject/DeleteObject/ListBucket on sagerock-email-images
+AWS_SECRET_ACCESS_KEY=
+AWS_REGION=us-east-2
+S3_MEDIA_BUCKET=sagerock-email-images
 ```
 
 Note: SendGrid API keys and Salesforce credentials are stored per-client in the `clients` database table, not in environment variables.
