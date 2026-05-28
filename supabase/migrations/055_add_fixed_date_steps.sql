@@ -3,6 +3,6 @@
 -- fixed_send_at: the specific datetime to send (only used when timing_anchor = 'fixed_date')
 
 ALTER TABLE sequence_steps
-  ADD COLUMN timing_anchor TEXT NOT NULL DEFAULT 'previous_step'
+  ADD COLUMN IF NOT EXISTS timing_anchor TEXT NOT NULL DEFAULT 'previous_step'
     CHECK (timing_anchor IN ('previous_step', 'fixed_date')),
-  ADD COLUMN fixed_send_at TIMESTAMPTZ;
+  ADD COLUMN IF NOT EXISTS fixed_send_at TIMESTAMPTZ;
