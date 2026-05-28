@@ -6858,6 +6858,39 @@ app.use('/api/media/upload', (err, req, res, next) => {
   next()
 })
 
+// DELETE /api/media?client_id=X&key=...
+// Only allowed when key starts with the client's s3_prefix.
+app.delete('/api/media', async (req, res) => {
+  const clientId = req.query.client_id
+  const key = req.query.key
+  if (!clientId || !key) {
+    return res.status(400).json({ error: 'client_id and key are required' })
+  }
+
+  const { data: client, error: clientErr } = await supabase
+    .from('clients')
+    .select('s3_prefix')
+    .eq('id', clientId)
+    .single()
+  if (clientErr) return res.status(500).json({ error: clientErr.message })
+  if (!client?.s3_prefix) {
+    return res.status(400).json({ error: 'Client has no s3_prefix configured' })
+  }
+
+  const expectedPrefix = client.s3_prefix.endsWith('/') ? client.s3_prefix : client.s3_prefix + '/'
+  if (!key.startsWith(expectedPrefix)) {
+    return res.status(403).json({ error: 'Key is outside this client\'s prefix' })
+  }
+
+  try {
+    await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }))
+  } catch (err) {
+    console.error('[media] delete failed', err)
+    return res.status(500).json({ error: 'S3 delete failed' })
+  }
+  res.status(204).end()
+})
+
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
 
