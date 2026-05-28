@@ -7055,6 +7055,7 @@ app.listen(PORT, () => {
             .single()
 
           if (nextStep) {
+            // now is an ISO string in this cron handler; wrap to Date for computeNextSendTime
             const scheduledFor = computeNextSendTime(nextStep, new Date(now))
 
             if (scheduledFor === null) {
@@ -7070,6 +7071,7 @@ app.listen(PORT, () => {
                 .single()
 
               if (stepAfterSkipped) {
+                // now is an ISO string in this cron handler; wrap to Date for computeNextSendTime
                 const nextNextSendTime = computeNextSendTime(stepAfterSkipped, new Date(now))
                 if (nextNextSendTime !== null) {
                   await supabase.from('scheduled_emails').upsert({
@@ -7089,6 +7091,8 @@ app.listen(PORT, () => {
                     })
                     .eq('id', enrollment.id)
                 } else {
+                  // Skip chain is one level deep by design: if the step after the skipped step
+                  // is also past/too-close, we complete the enrollment rather than scanning further.
                   // Step after skipped is also skipped — complete enrollment
                   await supabase
                     .from('sequence_enrollments')
@@ -7106,6 +7110,8 @@ app.listen(PORT, () => {
                     .eq('id', sequence.id)
                 }
               } else {
+                // Skip chain is one level deep by design: if the step after the skipped step
+                // is also past/too-close, we complete the enrollment rather than scanning further.
                 // No step after skipped — complete enrollment
                 await supabase
                   .from('sequence_enrollments')
