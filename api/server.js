@@ -25,6 +25,9 @@ const puppeteer = require('puppeteer')
 require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
 const { webhookLimiter, upsertLimiter } = require('./rate-limiters')
+const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
+const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
+const { filenameFromUrl } = require('./media-scan')
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
 
@@ -6729,6 +6732,74 @@ async function checkAiFollowupEnrollment(batchRecords, clientId) {
     console.error('⚠️ AI followup enrollment check error:', error.message)
   }
 }
+
+// GET /api/media?client_id=X
+// Returns merged list of S3 objects under the client's prefix plus discovered URLs.
+app.get('/api/media', async (req, res) => {
+  const clientId = req.query.client_id
+  if (!clientId) return res.status(400).json({ error: 'client_id is required' })
+
+  // Look up client prefix
+  const { data: client, error: clientErr } = await supabase
+    .from('clients')
+    .select('s3_prefix')
+    .eq('id', clientId)
+    .single()
+  if (clientErr) return res.status(500).json({ error: clientErr.message })
+  if (!client?.s3_prefix) return res.json({ items: [], needs_setup: true })
+
+  // List S3 objects under the prefix
+  const prefix = client.s3_prefix.endsWith('/') ? client.s3_prefix : client.s3_prefix + '/'
+  const s3Items = []
+  let continuationToken = undefined
+  let pageCount = 0
+  do {
+    const out = await s3.send(new ListObjectsV2Command({
+      Bucket: BUCKET,
+      Prefix: prefix,
+      ContinuationToken: continuationToken,
+    }))
+    for (const obj of out.Contents || []) {
+      const basename = obj.Key.split('/').pop() || ''
+      if (basename.startsWith('stripothumbnailurl')) continue
+      s3Items.push({
+        key: obj.Key,
+        url: publicUrlForKey(obj.Key),
+        filename: basename,
+        size: obj.Size,
+        last_modified: obj.LastModified,
+        source: 's3',
+      })
+    }
+    continuationToken = out.NextContinuationToken
+    pageCount++
+    if (pageCount > 5) {
+      console.warn(`[media] ${clientId}: hit pagination cap (5 pages, ~5000 objects)`)
+      break
+    }
+  } while (continuationToken)
+
+  // Fetch discovered URLs and dedupe against S3 items
+  const s3UrlSet = new Set(s3Items.map((i) => i.url))
+  const { data: discovered, error: discErr } = await supabase
+    .from('discovered_media_urls')
+    .select('url, filename, last_scanned_at')
+    .eq('client_id', clientId)
+  if (discErr) return res.status(500).json({ error: discErr.message })
+
+  const discoveredItems = (discovered || [])
+    .filter((d) => !s3UrlSet.has(d.url))
+    .map((d) => ({
+      key: '',
+      url: d.url,
+      filename: d.filename || filenameFromUrl(d.url),
+      size: null,
+      last_modified: d.last_scanned_at,
+      source: 'discovered',
+    }))
+
+  res.json({ items: [...s3Items, ...discoveredItems], needs_setup: false })
+})
 
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
