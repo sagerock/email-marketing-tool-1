@@ -4,7 +4,8 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2 } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon } from 'lucide-react'
+import MediaPicker from '../components/media/MediaPicker'
 import { cn } from '../lib/utils'
 
 interface ChatMessage {
@@ -77,6 +78,9 @@ export default function EmailBuilder() {
 
   // Edit mode state
   const [editTemplateName, setEditTemplateName] = useState<string | null>(null)
+
+  // Media picker state
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   // Fetch template index and folders on mount
   useEffect(() => {
@@ -642,6 +646,16 @@ export default function EmailBuilder() {
             </div>
             <div className="flex items-center gap-1 ml-4 flex-shrink-0">
               <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                className="px-2 py-1 hover:bg-gray-100 rounded flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+                title="Insert image (copies URL to clipboard)"
+              >
+                <ImageIcon className="w-4 h-4" />
+                Images
+              </button>
+              <div className="w-px h-5 bg-gray-200 mx-1" />
+              <button
                 onClick={() => setPreviewMode('desktop')}
                 className={cn(
                   'p-1.5 rounded transition-colors',
@@ -695,6 +709,14 @@ export default function EmailBuilder() {
           </div>
         </div>
       </div>
+
+      {selectedClient && (
+        <MediaPicker
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          clientId={selectedClient.id}
+        />
+      )}
     </div>
   )
 }
