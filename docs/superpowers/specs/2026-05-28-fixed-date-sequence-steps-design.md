@@ -128,7 +128,7 @@ Tests to write (TDD — tests first):
 2. **Fixed-date step, future date** — `fixed_send_at` 7 days out, `scheduled_for` equals `fixed_send_at`
 3. **Fixed-date step, past date** — `fixed_send_at` yesterday, step is skipped
 4. **Fixed-date step, within 3 days** — `fixed_send_at` 2 days out, step is skipped
-5. **Fixed-date step, exactly 3 days** — boundary: `fixed_send_at` exactly 72h out, step is skipped (< not ≤)
+5. **Fixed-date step, exactly 3 days** — boundary: `fixed_send_at` exactly 72h out, step schedules normally (`<` is strict, so `fixedAt === cutoff` is not skipped)
 6. **Skipped fixed-date step, last step** — enrollment marked completed
 7. **Skipped fixed-date step, has next step** — next step is scheduled from now
 8. **Null fixed_send_at** — treated as past, skipped
