@@ -4889,6 +4889,10 @@ app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) 
     }
 
     const now = new Date().toISOString()
+    const firstStepScheduledFor =
+      firstStep.timing_anchor === 'fixed_date' && firstStep.fixed_send_at
+        ? firstStep.fixed_send_at
+        : now
 
     // Create enrollments and get IDs back atomically (prevents race condition)
     const enrollmentsToCreate = subscribedContactIds.map(contactId => ({
@@ -4897,7 +4901,7 @@ app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) 
       status: 'active',
       current_step: 0,
       enrolled_at: now,
-      next_email_scheduled_at: now, // Send first email immediately
+      next_email_scheduled_at: firstStepScheduledFor,
     }))
 
     const { data: newEnrollments, error: enrollError } = await supabase
@@ -4913,7 +4917,7 @@ app.post('/api/sequences/:sequenceId/enroll-campaign-members', async (req, res) 
         enrollment_id: enrollment.id,
         step_id: firstStep.id,
         contact_id: enrollment.contact_id,
-        scheduled_for: now,
+        scheduled_for: firstStepScheduledFor,
         status: 'pending',
         attempts: 0,
       }))
@@ -6809,6 +6813,10 @@ app.listen(PORT, () => {
           if (!firstStep) continue
 
           const now = new Date()
+          const firstStepScheduledFor =
+            firstStep.timing_anchor === 'fixed_date' && firstStep.fixed_send_at
+              ? new Date(firstStep.fixed_send_at)
+              : now
 
           // Create enrollments and get IDs back atomically (prevents race condition)
           const enrollments = newContactIds.map(contactId => ({
@@ -6816,7 +6824,7 @@ app.listen(PORT, () => {
             contact_id: contactId,
             status: 'active',
             current_step: 0,
-            next_email_scheduled_at: now.toISOString(),
+            next_email_scheduled_at: firstStepScheduledFor.toISOString(),
           }))
 
           let enrollmentsToSchedule = []
@@ -6850,7 +6858,7 @@ app.listen(PORT, () => {
               enrollment_id: enrollment.id,
               step_id: firstStep.id,
               contact_id: enrollment.contact_id,
-              scheduled_for: now.toISOString(),
+              scheduled_for: firstStepScheduledFor.toISOString(),
               status: 'pending',
             }))
 
