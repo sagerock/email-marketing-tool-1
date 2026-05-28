@@ -1,5 +1,6 @@
 // src/hooks/useMediaAssets.ts
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { apiFetch } from '../lib/api'
 
 export type MediaItem = {
   key: string
@@ -12,14 +13,12 @@ export type MediaItem = {
 
 type MediaResponse = { items: MediaItem[]; needs_setup: boolean }
 
-const API_BASE = import.meta.env.VITE_API_URL || ''
-
 export function useMediaAssets(clientId: string | null | undefined) {
   return useQuery<MediaResponse>({
     queryKey: ['media', clientId],
     enabled: !!clientId,
     queryFn: async () => {
-      const res = await fetch(`${API_BASE}/api/media?client_id=${clientId}`)
+      const res = await apiFetch(`/api/media?clientId=${encodeURIComponent(clientId!)}`)
       if (!res.ok) throw new Error(`Failed to load media: ${res.status}`)
       return res.json()
     },
@@ -31,9 +30,9 @@ export function useUploadMedia(clientId: string) {
   return useMutation({
     mutationFn: async (file: File) => {
       const fd = new FormData()
-      fd.append('client_id', clientId)
+      fd.append('clientId', clientId)
       fd.append('file', file)
-      const res = await fetch(`${API_BASE}/api/media/upload`, { method: 'POST', body: fd })
+      const res = await apiFetch(`/api/media/upload`, { method: 'POST', body: fd })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || `Upload failed: ${res.status}`)
@@ -48,8 +47,8 @@ export function useDeleteMedia(clientId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (key: string) => {
-      const res = await fetch(
-        `${API_BASE}/api/media?client_id=${clientId}&key=${encodeURIComponent(key)}`,
+      const res = await apiFetch(
+        `/api/media?clientId=${encodeURIComponent(clientId)}&key=${encodeURIComponent(key)}`,
         { method: 'DELETE' },
       )
       if (!res.ok) {
@@ -65,10 +64,9 @@ export function useScanMedia(clientId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async () => {
-      const res = await fetch(`${API_BASE}/api/media/scan`, {
+      const res = await apiFetch(`/api/media/scan`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: clientId }),
+        body: JSON.stringify({ clientId }),
       })
       if (!res.ok) throw new Error(`Scan failed: ${res.status}`)
       return res.json() as Promise<{ scanned: number; discovered: number }>

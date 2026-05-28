@@ -6733,11 +6733,11 @@ async function checkAiFollowupEnrollment(batchRecords, clientId) {
   }
 }
 
-// GET /api/media?client_id=X
+// GET /api/media?clientId=X
 // Returns merged list of S3 objects under the client's prefix plus discovered URLs.
 app.get('/api/media', async (req, res) => {
-  const clientId = req.query.client_id
-  if (!clientId) return res.status(400).json({ error: 'client_id is required' })
+  const clientId = req.query.clientId
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
 
   // Look up client prefix
   const { data: client, error: clientErr } = await supabase
@@ -6820,10 +6820,10 @@ function safeFilename(name) {
 }
 
 // POST /api/media/upload
-// multipart/form-data with fields: client_id, file
+// multipart/form-data with fields: clientId, file
 app.post('/api/media/upload', mediaUpload.single('file'), async (req, res) => {
-  const clientId = req.body.client_id
-  if (!clientId) return res.status(400).json({ error: 'client_id is required' })
+  const clientId = req.body.clientId
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
   if (!req.file) return res.status(400).json({ error: 'file is required' })
 
   const { data: client, error: clientErr } = await supabase
@@ -6858,13 +6858,13 @@ app.use('/api/media/upload', (err, req, res, next) => {
   next()
 })
 
-// DELETE /api/media?client_id=X&key=...
+// DELETE /api/media?clientId=X&key=...
 // Only allowed when key starts with the client's s3_prefix.
 app.delete('/api/media', async (req, res) => {
-  const clientId = req.query.client_id
+  const clientId = req.query.clientId
   const key = req.query.key
   if (!clientId || !key) {
-    return res.status(400).json({ error: 'client_id and key are required' })
+    return res.status(400).json({ error: 'clientId and key are required' })
   }
 
   const { data: client, error: clientErr } = await supabase
@@ -6892,11 +6892,11 @@ app.delete('/api/media', async (req, res) => {
 })
 
 // POST /api/media/scan
-// Body: { client_id }
+// Body: { clientId }
 // Scans templates + sequence_steps HTML for image URLs and caches them.
 app.post('/api/media/scan', async (req, res) => {
-  const clientId = req.body.client_id
-  if (!clientId) return res.status(400).json({ error: 'client_id is required' })
+  const clientId = req.body.clientId
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
   try {
     const result = await scanClientHtml(supabase, clientId)
     res.json(result)

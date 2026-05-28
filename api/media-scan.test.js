@@ -34,6 +34,14 @@ test('extractImageUrls deduplicates within a single document', () => {
   assert.deepEqual(extractImageUrls(html), ['https://example.com/a.png'])
 })
 
+test('extractImageUrls skips data: URLs', () => {
+  const html = `
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQYV2NgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg==">
+    <img src="https://example.com/real.png">
+  `
+  assert.deepEqual(extractImageUrls(html), ['https://example.com/real.png'])
+})
+
 test('filenameFromUrl strips query string and returns last path segment', () => {
   assert.equal(filenameFromUrl('https://example.com/a/b/c.png?v=1'), 'c.png')
   assert.equal(filenameFromUrl('https://example.com/'), '')

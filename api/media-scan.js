@@ -9,6 +9,7 @@ function extractImageUrls(html) {
   const out = []
   for (const match of html.matchAll(IMG_SRC_RE)) {
     const url = match[1]
+    if (url.startsWith('data:')) continue
     if (!seen.has(url)) {
       seen.add(url)
       out.push(url)
