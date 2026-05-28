@@ -12,6 +12,7 @@ type Props = {
 
 export default function MediaGrid({ items, loading, onSelect, onCopyUrl, onDelete }: Props) {
   const [search, setSearch] = useState('')
+  const [dimsByUrl, setDimsByUrl] = useState<Record<string, { w: number; h: number }>>({})
   const filtered = items.filter((i) => {
     if (!search) return true
     const q = search.toLowerCase()
@@ -46,12 +47,25 @@ export default function MediaGrid({ items, loading, onSelect, onCopyUrl, onDelet
                   alt={item.filename}
                   className="max-h-full max-w-full object-contain"
                   loading="lazy"
+                  onLoad={(e) => {
+                    const img = e.currentTarget
+                    if (img.naturalWidth && img.naturalHeight) {
+                      setDimsByUrl((prev) =>
+                        prev[item.url] ? prev : { ...prev, [item.url]: { w: img.naturalWidth, h: img.naturalHeight } },
+                      )
+                    }
+                  }}
                 />
               </div>
               <div className="p-2 text-xs">
                 <div className="truncate font-medium">{item.filename}</div>
                 <div className="flex items-center justify-between mt-1 text-gray-500">
-                  <span>{item.size != null ? `${Math.round(item.size / 1024)} KB` : '—'}</span>
+                  <span>
+                    {item.size != null ? `${Math.round(item.size / 1024)} KB` : '—'}
+                    {dimsByUrl[item.url] && (
+                      <span className="ml-1">· {dimsByUrl[item.url].w}×{dimsByUrl[item.url].h}</span>
+                    )}
+                  </span>
                   <span className={item.source === 's3' ? 'text-blue-600' : 'text-amber-600'}>
                     {item.source === 's3' ? 'S3' : 'Discovered'}
                   </span>
