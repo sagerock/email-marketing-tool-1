@@ -555,7 +555,7 @@ export default function Campaigns() {
                           <FolderOpen className="h-4 w-4 mr-1" />
                           Move
                         </Button>
-                        {campaign.status === 'draft' && (
+                        {(campaign.status === 'draft' || campaign.status === 'scheduled') && (
                           <>
                             <Button
                               size="sm"
