@@ -18,6 +18,7 @@ const path = require('path')
 const cron = require('node-cron')
 const sgMail = require('@sendgrid/mail')
 const sgClient = require('@sendgrid/client')
+const { computeNextSendTime } = require('./sequence-scheduler')
 const { createClient } = require('@supabase/supabase-js')
 const jsforce = require('jsforce')
 const puppeteer = require('puppeteer')
@@ -2777,30 +2778,30 @@ app.post('/api/sequences/process', async (req, res) => {
           .single()
 
         if (nextStep) {
-          // Schedule next email (unique constraint prevents duplicates)
-          const nextSendTime = new Date()
-          nextSendTime.setDate(nextSendTime.getDate() + (nextStep.delay_days || 0))
-          nextSendTime.setHours(nextSendTime.getHours() + (nextStep.delay_hours || 0))
+          const scheduledFor = computeNextSendTime(nextStep, new Date())
 
-          await supabase.from('scheduled_emails').upsert({
-            enrollment_id: enrollment.id,
-            step_id: nextStep.id,
-            contact_id: contact.id,
-            scheduled_for: nextSendTime.toISOString(),
-            status: 'pending',
-          }, {
-            onConflict: 'enrollment_id,step_id',
-            ignoreDuplicates: true
-          })
-
-          await supabase
-            .from('sequence_enrollments')
-            .update({
-              current_step: step.step_order,
-              last_email_sent_at: new Date().toISOString(),
-              next_email_scheduled_at: nextSendTime.toISOString(),
+          if (scheduledFor !== null) {
+            await supabase.from('scheduled_emails').upsert({
+              enrollment_id: enrollment.id,
+              step_id: nextStep.id,
+              contact_id: contact.id,
+              scheduled_for: scheduledFor.toISOString(),
+              status: 'pending',
+            }, {
+              onConflict: 'enrollment_id,step_id',
+              ignoreDuplicates: true
             })
-            .eq('id', enrollment.id)
+
+            await supabase
+              .from('sequence_enrollments')
+              .update({
+                current_step: step.step_order,
+                last_email_sent_at: new Date().toISOString(),
+                next_email_scheduled_at: scheduledFor.toISOString(),
+              })
+              .eq('id', enrollment.id)
+          }
+          // null: fixed-date step skipped — enrollment stays active, no scheduled_email created
         } else {
           // Sequence completed
           await supabase
@@ -7054,32 +7055,94 @@ app.listen(PORT, () => {
             .single()
 
           if (nextStep) {
-            // Schedule next email (unique constraint prevents duplicates)
-            const nextSendTime = new Date()
-            nextSendTime.setDate(nextSendTime.getDate() + (nextStep.delay_days || 0))
-            nextSendTime.setHours(nextSendTime.getHours() + (nextStep.delay_hours || 0))
+            const scheduledFor = computeNextSendTime(nextStep, new Date(now))
 
-            await supabase.from('scheduled_emails').upsert({
-              enrollment_id: enrollment.id,
-              step_id: nextStep.id,
-              contact_id: contact.id,
-              scheduled_for: nextSendTime.toISOString(),
-              status: 'pending',
-            }, {
-              onConflict: 'enrollment_id,step_id',
-              ignoreDuplicates: true
-            })
+            if (scheduledFor === null) {
+              // Fixed-date step skipped (past or within 3-day minimum gap)
+              console.log(`⏭️ Skipping fixed-date step ${nextStep.id} for enrollment ${enrollment.id}`)
 
-            await supabase
-              .from('sequence_enrollments')
-              .update({
-                current_step: step.step_order,
-                last_email_sent_at: new Date().toISOString(),
-                next_email_scheduled_at: nextSendTime.toISOString(),
-              })
-              .eq('id', enrollment.id)
+              // Advance chain: look for the step after the skipped one
+              const { data: stepAfterSkipped } = await supabase
+                .from('sequence_steps')
+                .select('*')
+                .eq('sequence_id', sequence.id)
+                .eq('step_order', nextStep.step_order + 1)
+                .single()
+
+              if (stepAfterSkipped) {
+                const nextNextSendTime = computeNextSendTime(stepAfterSkipped, new Date(now))
+                if (nextNextSendTime !== null) {
+                  await supabase.from('scheduled_emails').upsert({
+                    enrollment_id: enrollment.id,
+                    step_id: stepAfterSkipped.id,
+                    contact_id: contact.id,
+                    scheduled_for: nextNextSendTime.toISOString(),
+                    status: 'pending',
+                  }, { onConflict: 'enrollment_id,step_id', ignoreDuplicates: true })
+
+                  await supabase
+                    .from('sequence_enrollments')
+                    .update({
+                      current_step: step.step_order,
+                      last_email_sent_at: new Date().toISOString(),
+                      next_email_scheduled_at: nextNextSendTime.toISOString(),
+                    })
+                    .eq('id', enrollment.id)
+                } else {
+                  // Step after skipped is also skipped — complete enrollment
+                  await supabase
+                    .from('sequence_enrollments')
+                    .update({
+                      current_step: step.step_order,
+                      status: 'completed',
+                      completed_at: new Date().toISOString(),
+                      last_email_sent_at: new Date().toISOString(),
+                      next_email_scheduled_at: null,
+                    })
+                    .eq('id', enrollment.id)
+                  await supabase
+                    .from('email_sequences')
+                    .update({ total_completed: sequence.total_completed + 1 })
+                    .eq('id', sequence.id)
+                }
+              } else {
+                // No step after skipped — complete enrollment
+                await supabase
+                  .from('sequence_enrollments')
+                  .update({
+                    current_step: step.step_order,
+                    status: 'completed',
+                    completed_at: new Date().toISOString(),
+                    last_email_sent_at: new Date().toISOString(),
+                    next_email_scheduled_at: null,
+                  })
+                  .eq('id', enrollment.id)
+                await supabase
+                  .from('email_sequences')
+                  .update({ total_completed: sequence.total_completed + 1 })
+                  .eq('id', sequence.id)
+              }
+            } else {
+              // Normal scheduling (relative or future fixed-date)
+              await supabase.from('scheduled_emails').upsert({
+                enrollment_id: enrollment.id,
+                step_id: nextStep.id,
+                contact_id: contact.id,
+                scheduled_for: scheduledFor.toISOString(),
+                status: 'pending',
+              }, { onConflict: 'enrollment_id,step_id', ignoreDuplicates: true })
+
+              await supabase
+                .from('sequence_enrollments')
+                .update({
+                  current_step: step.step_order,
+                  last_email_sent_at: new Date().toISOString(),
+                  next_email_scheduled_at: scheduledFor.toISOString(),
+                })
+                .eq('id', enrollment.id)
+            }
           } else {
-            // Sequence completed
+            // Sequence completed (no next step at all)
             await supabase
               .from('sequence_enrollments')
               .update({
@@ -7091,7 +7154,6 @@ app.listen(PORT, () => {
               })
               .eq('id', enrollment.id)
 
-            // Update sequence completed count
             await supabase
               .from('email_sequences')
               .update({ total_completed: sequence.total_completed + 1 })
