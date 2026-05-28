@@ -178,6 +178,8 @@ export interface SequenceStep {
   delay_days: number
   delay_hours: number
   send_time?: string
+  timing_anchor: 'previous_step' | 'fixed_date'
+  fixed_send_at: string | null
   sent_count: number
   open_count: number
   click_count: number

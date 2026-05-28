@@ -23,6 +23,14 @@ import {
   Eye
 } from 'lucide-react'
 
+// Converts a UTC ISO string to a local datetime-local input value (YYYY-MM-DDTHH:MM).
+// The datetime-local input interprets its value as local time, so we must convert from UTC.
+function toLocalDatetimeInput(isoString: string): string {
+  const d = new Date(isoString)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 export default function Automations() {
   const { selectedClient } = useClient()
   const [sequences, setSequences] = useState<EmailSequence[]>([])
@@ -345,7 +353,7 @@ function CreateSequenceModal({
     trigger_salesforce_campaign_ids: [] as string[],
   })
   const [sequenceSteps, setSequenceSteps] = useState<Partial<SequenceStep>[]>([
-    { step_order: 1, subject: '', delay_days: 0, delay_hours: 0 }
+    { step_order: 1, subject: '', delay_days: 0, delay_hours: 0, timing_anchor: 'previous_step', fixed_send_at: null }
   ])
   const [templates, setTemplates] = useState<Template[]>([])
   const [availableTags, setAvailableTags] = useState<string[]>([])
@@ -393,7 +401,9 @@ function CreateSequenceModal({
         step_order: sequenceSteps.length + 1,
         subject: '',
         delay_days: 1,
-        delay_hours: 0
+        delay_hours: 0,
+        timing_anchor: 'previous_step',
+        fixed_send_at: null,
       }
     ])
   }
@@ -470,6 +480,8 @@ function CreateSequenceModal({
         html_content: s.html_content || null,
         delay_days: s.delay_days || 0,
         delay_hours: s.delay_hours || 0,
+        timing_anchor: s.timing_anchor || 'previous_step',
+        fixed_send_at: s.fixed_send_at || null,
       }))
 
       const { error: stepsError } = await supabase
@@ -683,27 +695,58 @@ function CreateSequenceModal({
                         <span className="text-blue-600 font-medium text-sm">{index + 1}</span>
                       </div>
                       <div className="flex-1 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-gray-600">Wait</span>
-                          <input
-                            type="number"
-                            min="0"
-                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                            value={stepData.delay_days || 0}
-                            onChange={(e) => updateStep(index, 'delay_days', parseInt(e.target.value) || 0)}
-                          />
-                          <span className="text-sm text-gray-600">days</span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="23"
-                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                            value={stepData.delay_hours || 0}
-                            onChange={(e) => updateStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
-                          />
-                          <span className="text-sm text-gray-600">
-                            {index === 0 ? 'after enrollment' : 'after previous step'}
-                          </span>
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-4">
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`timing-${index}`}
+                                checked={stepData.timing_anchor !== 'fixed_date'}
+                                onChange={() => updateStep(index, 'timing_anchor', 'previous_step')}
+                              />
+                              After a delay
+                            </label>
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`timing-${index}`}
+                                checked={stepData.timing_anchor === 'fixed_date'}
+                                onChange={() => updateStep(index, 'timing_anchor', 'fixed_date')}
+                              />
+                              On a specific date
+                            </label>
+                          </div>
+                          {stepData.timing_anchor === 'fixed_date' ? (
+                            <input
+                              type="datetime-local"
+                              className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              value={stepData.fixed_send_at ? toLocalDatetimeInput(stepData.fixed_send_at) : ''}
+                              onChange={(e) => updateStep(index, 'fixed_send_at', e.target.value ? new Date(e.target.value).toISOString() : null)}
+                            />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm text-gray-600">Wait</span>
+                              <input
+                                type="number"
+                                min="0"
+                                className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                                value={stepData.delay_days || 0}
+                                onChange={(e) => updateStep(index, 'delay_days', parseInt(e.target.value) || 0)}
+                              />
+                              <span className="text-sm text-gray-600">days</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max="23"
+                                className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                                value={stepData.delay_hours || 0}
+                                onChange={(e) => updateStep(index, 'delay_hours', parseInt(e.target.value) || 0)}
+                              />
+                              <span className="text-sm text-gray-600">
+                                {index === 0 ? 'after enrollment' : 'after previous step'}
+                              </span>
+                            </div>
+                          )}
                         </div>
                         <Input
                           label="Subject *"
@@ -935,6 +978,8 @@ function EditSequenceModal({
           subject: `Email ${newStepOrder}`,
           delay_days: newStepOrder === 1 ? 0 : 1,
           delay_hours: 0,
+          timing_anchor: 'previous_step',
+          fixed_send_at: null,
         })
         .select()
         .single()
@@ -1142,28 +1187,59 @@ function EditSequenceModal({
                         <span className="text-blue-600 font-medium text-sm">{step.step_order}</span>
                       </div>
                       <div className="flex-1 space-y-3">
-                        <div className="flex items-center gap-2 pb-2 border-b">
-                          <Clock className="h-4 w-4 text-gray-400" />
-                          <span className="text-sm text-gray-600">Wait</span>
-                          <input
-                            type="number"
-                            min="0"
-                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                            value={step.delay_days}
-                            onChange={(e) => updateStep(step.id, 'delay_days', parseInt(e.target.value) || 0)}
-                          />
-                          <span className="text-sm text-gray-600">days</span>
-                          <input
-                            type="number"
-                            min="0"
-                            max="23"
-                            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
-                            value={step.delay_hours}
-                            onChange={(e) => updateStep(step.id, 'delay_hours', parseInt(e.target.value) || 0)}
-                          />
-                          <span className="text-sm text-gray-600">
-                            {index === 0 ? 'hours after enrollment' : 'hours after previous'}
-                          </span>
+                        <div className="space-y-2 pb-2 border-b">
+                          <div className="flex items-center gap-4">
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`timing-${step.id}`}
+                                checked={step.timing_anchor !== 'fixed_date'}
+                                onChange={() => updateStep(step.id, 'timing_anchor', 'previous_step')}
+                              />
+                              After a delay
+                            </label>
+                            <label className="flex items-center gap-2 text-sm cursor-pointer">
+                              <input
+                                type="radio"
+                                name={`timing-${step.id}`}
+                                checked={step.timing_anchor === 'fixed_date'}
+                                onChange={() => updateStep(step.id, 'timing_anchor', 'fixed_date')}
+                              />
+                              On a specific date
+                            </label>
+                          </div>
+                          {step.timing_anchor === 'fixed_date' ? (
+                            <input
+                              type="datetime-local"
+                              className="rounded-md border border-gray-300 px-2 py-1 text-sm"
+                              value={step.fixed_send_at ? toLocalDatetimeInput(step.fixed_send_at) : ''}
+                              onChange={(e) => updateStep(step.id, 'fixed_send_at', e.target.value ? new Date(e.target.value).toISOString() : null)}
+                            />
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-4 w-4 text-gray-400" />
+                              <span className="text-sm text-gray-600">Wait</span>
+                              <input
+                                type="number"
+                                min="0"
+                                className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                                value={step.delay_days}
+                                onChange={(e) => updateStep(step.id, 'delay_days', parseInt(e.target.value) || 0)}
+                              />
+                              <span className="text-sm text-gray-600">days</span>
+                              <input
+                                type="number"
+                                min="0"
+                                max="23"
+                                className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+                                value={step.delay_hours}
+                                onChange={(e) => updateStep(step.id, 'delay_hours', parseInt(e.target.value) || 0)}
+                              />
+                              <span className="text-sm text-gray-600">
+                                {index === 0 ? 'hours after enrollment' : 'hours after previous'}
+                              </span>
+                            </div>
+                          )}
                         </div>
                         <Input
                           label="Subject"
@@ -1566,11 +1642,15 @@ function ViewSequenceModal({
                       <div className="flex-1">
                         <p className="font-medium text-sm">{step.subject}</p>
                         <p className="text-xs text-gray-500">
-                          {step.delay_days === 0 && step.delay_hours === 0
-                            ? index === 0 ? 'Sends immediately' : 'Sends right after previous'
-                            : index === 0
-                              ? `${step.delay_days}d ${step.delay_hours}h after enrollment`
-                              : `${step.delay_days}d ${step.delay_hours}h after previous`}
+                          {step.timing_anchor === 'fixed_date'
+                            ? step.fixed_send_at
+                              ? `Sends ${new Date(step.fixed_send_at).toLocaleString()}`
+                              : 'Fixed date (not set)'
+                            : step.delay_days === 0 && step.delay_hours === 0
+                              ? index === 0 ? 'Sends immediately' : 'Sends right after previous'
+                              : index === 0
+                                ? `${step.delay_days}d ${step.delay_hours}h after enrollment`
+                                : `${step.delay_days}d ${step.delay_hours}h after previous`}
                         </p>
                       </div>
                       <div className="text-xs text-gray-500">
