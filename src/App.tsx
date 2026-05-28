@@ -20,6 +20,7 @@ import KnowledgeBase from './pages/KnowledgeBase'
 import BounceRecovery from './pages/BounceRecovery'
 import ContactDetail from './pages/ContactDetail'
 import EmailBuilder from './pages/EmailBuilder'
+import Media from './pages/Media'
 import DebugAuth from './pages/DebugAuth'
 
 function App() {
@@ -63,6 +64,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Templates />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/media"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Media />
                   </Layout>
                 </ProtectedRoute>
               }
