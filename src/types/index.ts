@@ -107,6 +107,7 @@ export interface Client {
   mailing_address?: string
   default_utm_params?: string
   default_reply_to_email?: string
+  s3_prefix?: string
   verified_senders?: VerifiedSender[]
   brand_reference_template_id?: string | null
   created_at: string

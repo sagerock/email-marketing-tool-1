@@ -515,6 +515,12 @@ export default function Settings() {
                         </span>
                       </div>
                     )}
+                    <div>
+                      <span className="text-gray-500">Media library prefix: </span>
+                      <span className="font-mono text-gray-900">
+                        {selectedClient.s3_prefix || <em className="text-gray-400">not set</em>}
+                      </span>
+                    </div>
                     {selectedClient.verified_senders && selectedClient.verified_senders.length > 0 && (
                       <div>
                         <span className="text-gray-500">Verified Senders: </span>
@@ -1184,6 +1190,7 @@ function AddClientModal({
     mailing_address: '',
     default_utm_params: '',
     default_reply_to_email: '',
+    s3_prefix: '',
   })
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>([])
   const [newSender, setNewSender] = useState({ email: '', name: '' })
@@ -1201,6 +1208,7 @@ function AddClientModal({
         mailing_address: formData.mailing_address || null,
         default_utm_params: formData.default_utm_params || null,
         default_reply_to_email: formData.default_reply_to_email || null,
+        s3_prefix: formData.s3_prefix.trim().toLowerCase() || null,
         verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
       })
 
@@ -1250,6 +1258,19 @@ function AddClientModal({
               setFormData({ ...formData, ip_pool: e.target.value })
             }
           />
+          <div>
+            <Input
+              label="Media library prefix (optional)"
+              placeholder="my-company"
+              value={formData.s3_prefix}
+              onChange={(e) =>
+                setFormData({ ...formData, s3_prefix: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              S3 folder name for this client's images (lowercase, letters/digits/hyphens). Leave blank to disable the Media library for this client.
+            </p>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1400,6 +1421,7 @@ function EditClientModal({
     default_utm_params: client.default_utm_params || '',
     default_reply_to_email: client.default_reply_to_email || '',
     brand_reference_template_id: client.brand_reference_template_id || '',
+    s3_prefix: client.s3_prefix || '',
   })
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>(
     client.verified_senders || []
@@ -1432,6 +1454,7 @@ function EditClientModal({
           default_utm_params: formData.default_utm_params || null,
           default_reply_to_email: formData.default_reply_to_email || null,
           brand_reference_template_id: formData.brand_reference_template_id || null,
+          s3_prefix: formData.s3_prefix.trim().toLowerCase() || null,
           verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
         })
         .eq('id', client.id)
@@ -1482,6 +1505,19 @@ function EditClientModal({
               setFormData({ ...formData, ip_pool: e.target.value })
             }
           />
+          <div>
+            <Input
+              label="Media library prefix (optional)"
+              placeholder="my-company"
+              value={formData.s3_prefix}
+              onChange={(e) =>
+                setFormData({ ...formData, s3_prefix: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              S3 folder name for this client's images (lowercase, letters/digits/hyphens). Leave blank to disable the Media library for this client.
+            </p>
+          </div>
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
