@@ -1192,9 +1192,13 @@ function AddClientModal({
     default_reply_to_email: '',
     s3_prefix: '',
   })
+  const [prefixTouched, setPrefixTouched] = useState(false)
   const [verifiedSenders, setVerifiedSenders] = useState<VerifiedSender[]>([])
   const [newSender, setNewSender] = useState({ email: '', name: '' })
   const [submitting, setSubmitting] = useState(false)
+
+  const slugify = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -1238,7 +1242,14 @@ function AddClientModal({
             required
             placeholder="My Company"
             value={formData.name}
-            onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+            onChange={(e) => {
+              const name = e.target.value
+              setFormData((prev) => ({
+                ...prev,
+                name,
+                s3_prefix: prefixTouched ? prev.s3_prefix : slugify(name),
+              }))
+            }}
           />
           <Input
             label="SendGrid API Key *"
@@ -1263,12 +1274,13 @@ function AddClientModal({
               label="Media library prefix (optional)"
               placeholder="my-company"
               value={formData.s3_prefix}
-              onChange={(e) =>
+              onChange={(e) => {
+                setPrefixTouched(true)
                 setFormData({ ...formData, s3_prefix: e.target.value })
-              }
+              }}
             />
             <p className="mt-1 text-xs text-gray-500">
-              S3 folder name for this client's images (lowercase, letters/digits/hyphens). Leave blank to disable the Media library for this client.
+              S3 folder name for this client's images (lowercase, letters/digits/hyphens). Auto-suggested from the client name; edit to customize. Leave blank to disable the Media library for this client.
             </p>
           </div>
 
