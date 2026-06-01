@@ -20,15 +20,29 @@ def get_token() -> str:
     return r.json()["access_token"]
 
 
-def _get(token: str, path: str, params: dict | None = None) -> dict:
-    r = requests.get(
-        f"{BASE_URL}{path}",
-        headers={"Authorization": f"Bearer {token}"},
-        params=params or {},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()
+def _get(token: str, path: str, params: dict | None = None, max_retries: int = 5) -> dict:
+    # Cvent sporadically 429s the first request even when traffic has been quiet
+    # (observed on the 2am UTC cron most nights). Retry on 429 and 5xx with
+    # exponential backoff, honoring Retry-After when present.
+    attempt = 0
+    while True:
+        r = requests.get(
+            f"{BASE_URL}{path}",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params or {},
+            timeout=30,
+        )
+        if r.status_code < 400 or attempt >= max_retries or (r.status_code != 429 and r.status_code < 500):
+            r.raise_for_status()
+            return r.json()
+        retry_after = r.headers.get("Retry-After")
+        if retry_after and retry_after.isdigit():
+            wait = min(int(retry_after), 60)
+        else:
+            wait = min(2 ** attempt, 30)
+        print(f"  Cvent {r.status_code} on {path}; retrying in {wait}s (attempt {attempt + 1}/{max_retries})")
+        time.sleep(wait)
+        attempt += 1
 
 
 def _paginate(token: str, path: str, base_params: dict) -> list:
