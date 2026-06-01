@@ -64,17 +64,21 @@ def sync_cvent_session(
             instructor=session_config.get("instructor"),
         )
 
+    synced = 0
+    skipped = 0
     for enr in enrollments:
         att_id = enr["attendee"]["id"]
         att = all_attendees.get(att_id)
         if not att:
             print(f"  WARNING: attendee {att_id} not found in event roster, skipping")
+            skipped += 1
             continue
 
         raw_status = enr.get("status")
         status = STATUS_MAP.get(raw_status)
         if status is None:
             print(f"  WARNING: unknown status '{raw_status}' for attendee {att_id}, skipping")
+            skipped += 1
             continue
         name = f"{att['firstName']} {att['lastName']}"
 
@@ -82,22 +86,31 @@ def sync_cvent_session(
             print(f"  [DRY RUN] {name} <{att['email']}> → {session_config['name']} ({status})")
             continue
 
-        contact_id = db.upsert_contact(sb, client_id, att["email"], att["firstName"], att["lastName"])
-        db.upsert_enrollment(
-            sb,
-            client_id=client_id,
-            program_id=program_id,
-            contact_id=contact_id,
-            status=status,
-            enrolled_at=enr.get("registrationDate"),
-            platform_enrollment_id=enr["id"],
-            raw_data=enr,
-        )
-        if status == "registered":
-            db.apply_tag(sb, contact_id, session_config["tag"])
+        try:
+            contact_id = db.upsert_contact(sb, client_id, att["email"], att["firstName"], att["lastName"])
+            db.upsert_enrollment(
+                sb,
+                client_id=client_id,
+                program_id=program_id,
+                contact_id=contact_id,
+                status=status,
+                enrolled_at=enr.get("registrationDate"),
+                platform_enrollment_id=enr["id"],
+                raw_data=enr,
+            )
+            if status == "registered":
+                db.apply_tag(sb, contact_id, session_config["tag"])
+            synced += 1
+        except Exception as e:
+            # One bad row should not kill the whole sync — log and continue.
+            # Most common cause: an attendee's email changed in Cvent, creating
+            # a new contact whose enrollment row collides with the stale one
+            # by platform_enrollment_id. Operator fixes the orphan manually.
+            print(f"  ERROR upserting {name} <{att['email']}> in {session_config['name']}: {e}")
+            skipped += 1
 
     if not dry_run:
-        print(f"  Done: {len(enrollments)} enrollments synced")
+        print(f"  Done: {synced} synced, {skipped} skipped (of {len(enrollments)} total)")
 
 
 def main() -> None:
