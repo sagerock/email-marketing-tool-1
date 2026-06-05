@@ -51,6 +51,21 @@ function decryptClient(client) {
   return result
 }
 
+// Run a PostgREST `.in(column, ids)` query in bounded chunks and concatenate
+// the rows. A long id list goes into the request URL as `id=in.(...)`, and at
+// ~36 chars per UUID a few hundred ids blow past undici's 16 KB max header size
+// (UND_ERR_HEADERS_OVERFLOW). `runBatch(idsChunk)` must return a Supabase query
+// promise. Mirrors the `{ data, error }` shape and stops on the first error.
+async function inChunks(ids, chunkSize, runBatch) {
+  const out = []
+  for (let i = 0; i < ids.length; i += chunkSize) {
+    const { data, error } = await runBatch(ids.slice(i, i + chunkSize))
+    if (error) return { data: null, error }
+    if (data) out.push(...data)
+  }
+  return { data: out, error: null }
+}
+
 // Retry helper for transient network errors (e.g. TLS connection resets)
 async function withRetry(fn, { retries = 3, delay = 1000, label = 'operation' } = {}) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -101,16 +116,13 @@ app.use(express.json({ limit: '5mb' }))
 
 // Retrying fetch for Supabase.
 //
-// On Railway this long-lived process intermittently throws `TypeError: fetch
-// failed` when undici has to open a NEW connection to Cloudflare-fronted
-// Supabase (stale/closed keep-alive socket, or an IPv6-first egress hiccup) —
-// while warm pooled sockets (kept alive by constant webhook traffic) keep
-// working. The symptom was the every-minute sequence cron: the claim UPDATE
-// succeeded but the immediately-following SELECT failed 100% of the time,
-// resetting the batch to pending and looping forever so no sequence emails
-// sent. These connection-layer failures happen before the request is written,
-// so a quick reconnect is safe and clears it. Paired with
-// NODE_OPTIONS=--dns-result-order=ipv4first on the service.
+// Node's global fetch throws `TypeError: fetch failed` for any low-level
+// transport problem and postgrest-js then masks it as a bare error with no
+// cause, so we retry genuinely transient connection failures (reset/closed
+// socket, DNS blip) before giving up. Deterministic failures — aborts, and
+// header/URL overflow (UND_ERR_HEADERS_OVERFLOW) — are NOT retried; retrying
+// can't help and only delays the real error. We log the cause + request URL
+// length once on give-up, since urlLen is the canary for an overflow regression.
 const fetchWithRetry = async (url, options = {}) => {
   const maxAttempts = 4
   let lastErr
@@ -119,30 +131,20 @@ const fetchWithRetry = async (url, options = {}) => {
       return await fetch(url, options)
     } catch (err) {
       lastErr = err
-      // Only retry low-level connection failures — not aborts or HTTP errors
-      // (HTTP error responses don't throw, so they pass straight through).
-      const haystack = [
-        err?.name,
-        err?.message,
-        err?.cause?.code,
-        err?.cause?.message,
-      ].filter(Boolean).join(' ')
+      const causeCode = err?.cause?.code || ''
+      const haystack = [err?.name, err?.message, causeCode, err?.cause?.message].filter(Boolean).join(' ')
       const isTransient =
         err?.name !== 'AbortError' &&
+        !/OVERFLOW/i.test(causeCode) &&
         /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|socket hang up|other side closed|UND_ERR/i.test(haystack)
-      // Diagnostic: postgrest-js hides the underlying cause, so surface it here.
-      const reqUrl = typeof url === 'string' ? url : (url?.url || '')
-      console.error('[supabase-fetch] attempt', attempt, 'failed', {
-        method: options?.method || 'GET',
-        urlLen: reqUrl.length,
-        urlTail: reqUrl.slice(-80),
-        name: err?.name,
-        message: err?.message,
-        causeCode: err?.cause?.code,
-        causeMessage: err?.cause?.message,
-        causeErrno: err?.cause?.errno,
-      })
-      if (!isTransient || attempt === maxAttempts) break
+      if (!isTransient || attempt === maxAttempts) {
+        const reqUrl = typeof url === 'string' ? url : (url?.url || '')
+        console.error(
+          `[supabase-fetch] giving up after ${attempt} attempt(s): ${err?.message}` +
+          ` (cause=${causeCode || 'n/a'}, method=${options?.method || 'GET'}, urlLen=${reqUrl.length})`
+        )
+        break
+      }
       await new Promise(r => setTimeout(r, 150 * attempt))
     }
   }
@@ -7030,12 +7032,14 @@ app.listen(PORT, () => {
 
           const contactIds = contacts.map(c => c.id)
 
-          // Get already enrolled contacts
-          const { data: enrolled } = await supabase
-            .from('sequence_enrollments')
-            .select('contact_id')
-            .eq('sequence_id', sequence.id)
-            .in('contact_id', contactIds)
+          // Get already enrolled contacts (chunked: contactIds can be large and
+          // an unbounded .in() would overflow undici's 16 KB header limit)
+          const { data: enrolled } = await inChunks(contactIds, 100, (batch) =>
+            supabase
+              .from('sequence_enrollments')
+              .select('contact_id')
+              .eq('sequence_id', sequence.id)
+              .in('contact_id', batch))
 
           const enrolledIds = new Set(enrolled?.map(e => e.contact_id) || [])
           const newContactIds = contactIds.filter(id => !enrolledIds.has(id))
@@ -7078,11 +7082,12 @@ app.listen(PORT, () => {
             // If duplicate key error (another replica already enrolled), fetch existing enrollments
             if (enrollError.code === '23505') {
               console.log(`ℹ️ Some contacts already enrolled by another process, fetching existing enrollments...`)
-              const { data: existingEnrollments } = await supabase
-                .from('sequence_enrollments')
-                .select('id, contact_id')
-                .eq('sequence_id', sequence.id)
-                .in('contact_id', newContactIds)
+              const { data: existingEnrollments } = await inChunks(newContactIds, 100, (batch) =>
+                supabase
+                  .from('sequence_enrollments')
+                  .select('id, contact_id')
+                  .eq('sequence_id', sequence.id)
+                  .in('contact_id', batch))
               enrollmentsToSchedule = existingEnrollments || []
             } else {
               console.error('❌ Error auto-enrolling contacts:', enrollError)
