@@ -7127,30 +7127,54 @@ app.listen(PORT, () => {
       // ============ PART 2: Process scheduled emails ============
       // Reuse 'now' from PART 0
 
-      // Atomically claim pending scheduled emails by setting status to 'processing'
-      // This prevents multiple replicas from processing the same email
-      const { data: claimedIds, error: claimError } = await supabase
-        .from('scheduled_emails')
-        .update({ status: 'processing' })
-        .eq('status', 'pending')
-        .lte('scheduled_for', now)
-        .limit(50)
-        .select('id')
+      // Claim a BOUNDED batch of pending scheduled emails by flipping them to
+      // 'processing'. This must be capped: PostgREST IGNORES .limit() on an
+      // UPDATE, so the previous `.update(...).limit(50)` actually claimed ALL
+      // pending rows (536 at peak) and returned every id. The follow-up
+      // `.in('id', [536 uuids])` then built a ~21 KB request URL that undici
+      // rejected with UND_ERR_HEADERS_OVERFLOW (max header size 16 KB) — the
+      // batch reset to 'pending' and looped forever, so zero sequence emails
+      // sent. LIMIT *does* work on SELECT, so we select a capped set of ids
+      // first, then UPDATE only those.
+      const CLAIM_BATCH = 100
+      let claimedIds = null
+      let claimError = null
+      {
+        const { data: candidateRows, error: candidateError } = await supabase
+          .from('scheduled_emails')
+          .select('id')
+          .eq('status', 'pending')
+          .lte('scheduled_for', now)
+          .order('scheduled_for', { ascending: true })
+          .limit(CLAIM_BATCH)
+
+        if (candidateError) {
+          claimError = candidateError
+        } else if (candidateRows && candidateRows.length > 0) {
+          // The trailing .eq('status','pending') keeps this atomic across
+          // replicas: only rows another replica hasn't already grabbed are
+          // updated and returned.
+          const { data, error } = await supabase
+            .from('scheduled_emails')
+            .update({ status: 'processing' })
+            .in('id', candidateRows.map(c => c.id))
+            .eq('status', 'pending')
+            .select('id')
+          claimedIds = data
+          claimError = error
+        } else {
+          claimedIds = []
+        }
+      }
 
       if (claimError) {
         console.error('❌ Error claiming scheduled emails:', claimError)
       } else if (claimedIds && claimedIds.length > 0) {
 
       // Fetch full details for the claimed emails using FLAT queries, then stitch
-      // them together in JS — deliberately NOT a nested PostgREST embed.
-      //
-      // Why: the embedded form (scheduled_emails -> enrollment -> sequence/contact/
-      // step/campaign) fails with `TypeError: fetch failed` from this Railway
-      // container, 100% reproducibly, even though the identical request succeeds
-      // from elsewhere and even though flat single-table `.in('id', ...)` queries
-      // (the same shape used to enroll contacts above) work fine here. Decomposing
-      // into flat queries sidesteps the embed entirely. The assembled objects keep
-      // the exact shape the processing loop below expects.
+      // them together in JS. Each .in('id', ...) is bounded by CLAIM_BATCH above,
+      // so no request URL approaches undici's 16 KB header limit. The assembled
+      // objects keep the exact shape the processing loop below expects.
       let scheduledEmails = null
       let fetchError = null
       try {
