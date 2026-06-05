@@ -7091,24 +7091,38 @@ app.listen(PORT, () => {
       } else if (claimedIds && claimedIds.length > 0) {
 
       // Now fetch full details for the emails we claimed.
-      // NOTE: select only the columns the send loop below actually uses. Pulling
-      // `*` on every embed (contacts(*), email_sequences(*), sequence_steps(*))
-      // bloated the request; combined with a full .in() batch it tripped a
-      // transport-level `TypeError: fetch failed`, stalling all sends. Keep this
-      // list in sync with the fields referenced in the processing loop.
-      const { data: scheduledEmails, error: fetchError } = await supabase
-        .from('scheduled_emails')
-        .select(`
-          id, attempts,
-          enrollment:sequence_enrollments(
-            id, status,
-            sequence:email_sequences(id, status, client_id, from_email, from_name, reply_to, total_completed),
-            contact:contacts(id, email, first_name, last_name, unsubscribed, unsubscribe_token, industry),
-            trigger_campaign:salesforce_campaigns(id, name, type)
-          ),
-          step:sequence_steps(id, step_order, subject, template_id, html_content, sent_count)
-        `)
-        .in('id', claimedIds.map(e => e.id))
+      //
+      // Two hardening measures here, both learned from a production stall where
+      // every send looped on `TypeError: fetch failed`:
+      //  1. Select only the columns the send loop below actually uses (not `*`
+      //     on every embed). Keep this list in sync with the processing loop.
+      //  2. Retry on failure. supabase-js uses undici's global keep-alive fetch;
+      //     after PART 0/PART 1 have made many calls this tick, a reused socket
+      //     that Supabase already closed surfaces as `TypeError: fetch failed`.
+      //     The query is fine (verified directly) — retrying gets a fresh
+      //     connection and succeeds, instead of resetting the batch forever.
+      let scheduledEmails = null
+      let fetchError = null
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        const res = await supabase
+          .from('scheduled_emails')
+          .select(`
+            id, attempts,
+            enrollment:sequence_enrollments(
+              id, status,
+              sequence:email_sequences(id, status, client_id, from_email, from_name, reply_to, total_completed),
+              contact:contacts(id, email, first_name, last_name, unsubscribed, unsubscribe_token, industry),
+              trigger_campaign:salesforce_campaigns(id, name, type)
+            ),
+            step:sequence_steps(id, step_order, subject, template_id, html_content, sent_count)
+          `)
+          .in('id', claimedIds.map(e => e.id))
+        scheduledEmails = res.data
+        fetchError = res.error
+        if (!fetchError) break
+        console.error(`⚠️ scheduled-email fetch attempt ${attempt}/4 failed: ${fetchError.message}`)
+        await new Promise(r => setTimeout(r, 400 * attempt))
+      }
 
       if (fetchError) {
         console.error('❌ Error fetching scheduled emails:', fetchError)
