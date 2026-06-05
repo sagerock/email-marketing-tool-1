@@ -7083,45 +7083,96 @@ app.listen(PORT, () => {
         .update({ status: 'processing' })
         .eq('status', 'pending')
         .lte('scheduled_for', now)
-        .limit(20)
+        .limit(50)
         .select('id')
 
       if (claimError) {
         console.error('❌ Error claiming scheduled emails:', claimError)
       } else if (claimedIds && claimedIds.length > 0) {
 
-      // Now fetch full details for the emails we claimed.
+      // Fetch full details for the claimed emails using FLAT queries, then stitch
+      // them together in JS — deliberately NOT a nested PostgREST embed.
       //
-      // Two hardening measures here, both learned from a production stall where
-      // every send looped on `TypeError: fetch failed`:
-      //  1. Select only the columns the send loop below actually uses (not `*`
-      //     on every embed). Keep this list in sync with the processing loop.
-      //  2. Retry on failure. supabase-js uses undici's global keep-alive fetch;
-      //     after PART 0/PART 1 have made many calls this tick, a reused socket
-      //     that Supabase already closed surfaces as `TypeError: fetch failed`.
-      //     The query is fine (verified directly) — retrying gets a fresh
-      //     connection and succeeds, instead of resetting the batch forever.
+      // Why: the embedded form (scheduled_emails -> enrollment -> sequence/contact/
+      // step/campaign) fails with `TypeError: fetch failed` from this Railway
+      // container, 100% reproducibly, even though the identical request succeeds
+      // from elsewhere and even though flat single-table `.in('id', ...)` queries
+      // (the same shape used to enroll contacts above) work fine here. Decomposing
+      // into flat queries sidesteps the embed entirely. The assembled objects keep
+      // the exact shape the processing loop below expects.
       let scheduledEmails = null
       let fetchError = null
-      for (let attempt = 1; attempt <= 4; attempt++) {
-        const res = await supabase
+      try {
+        const { data: rawSched, error: e1 } = await supabase
           .from('scheduled_emails')
-          .select(`
-            id, attempts,
-            enrollment:sequence_enrollments(
-              id, status,
-              sequence:email_sequences(id, status, client_id, from_email, from_name, reply_to, total_completed),
-              contact:contacts(id, email, first_name, last_name, unsubscribed, unsubscribe_token, industry),
-              trigger_campaign:salesforce_campaigns(id, name, type)
-            ),
-            step:sequence_steps(id, step_order, subject, template_id, html_content, sent_count)
-          `)
+          .select('id, attempts, enrollment_id, step_id')
           .in('id', claimedIds.map(e => e.id))
-        scheduledEmails = res.data
-        fetchError = res.error
-        if (!fetchError) break
-        console.error(`⚠️ scheduled-email fetch attempt ${attempt}/4 failed: ${fetchError.message}`)
-        await new Promise(r => setTimeout(r, 400 * attempt))
+        if (e1) throw e1
+
+        const enrollmentIds = [...new Set((rawSched || []).map(r => r.enrollment_id).filter(Boolean))]
+        const stepIds = [...new Set((rawSched || []).map(r => r.step_id).filter(Boolean))]
+
+        const { data: enrollments, error: e2 } = await supabase
+          .from('sequence_enrollments')
+          .select('id, status, sequence_id, contact_id, trigger_campaign_id')
+          .in('id', enrollmentIds)
+        if (e2) throw e2
+
+        const sequenceIds = [...new Set((enrollments || []).map(r => r.sequence_id).filter(Boolean))]
+        const contactIds = [...new Set((enrollments || []).map(r => r.contact_id).filter(Boolean))]
+        const campaignIds = [...new Set((enrollments || []).map(r => r.trigger_campaign_id).filter(Boolean))]
+
+        const { data: sequences, error: e3 } = await supabase
+          .from('email_sequences')
+          .select('id, status, client_id, from_email, from_name, reply_to, total_completed')
+          .in('id', sequenceIds)
+        if (e3) throw e3
+
+        const { data: contactRows, error: e4 } = await supabase
+          .from('contacts')
+          .select('id, email, first_name, last_name, unsubscribed, unsubscribe_token, industry')
+          .in('id', contactIds)
+        if (e4) throw e4
+
+        const { data: steps, error: e5 } = await supabase
+          .from('sequence_steps')
+          .select('id, step_order, subject, template_id, html_content, sent_count')
+          .in('id', stepIds)
+        if (e5) throw e5
+
+        let campaigns = []
+        if (campaignIds.length > 0) {
+          const { data: camps, error: e6 } = await supabase
+            .from('salesforce_campaigns')
+            .select('id, name, type')
+            .in('id', campaignIds)
+          if (e6) throw e6
+          campaigns = camps || []
+        }
+
+        const seqById = new Map((sequences || []).map(s => [s.id, s]))
+        const contactById = new Map((contactRows || []).map(c => [c.id, c]))
+        const stepById = new Map((steps || []).map(s => [s.id, s]))
+        const enrollmentById = new Map((enrollments || []).map(en => [en.id, en]))
+        const campaignById = new Map(campaigns.map(c => [c.id, c]))
+
+        scheduledEmails = (rawSched || []).map(r => {
+          const enr = enrollmentById.get(r.enrollment_id)
+          return {
+            id: r.id,
+            attempts: r.attempts,
+            enrollment: enr ? {
+              id: enr.id,
+              status: enr.status,
+              sequence: seqById.get(enr.sequence_id) || null,
+              contact: contactById.get(enr.contact_id) || null,
+              trigger_campaign: enr.trigger_campaign_id ? (campaignById.get(enr.trigger_campaign_id) || null) : null,
+            } : null,
+            step: stepById.get(r.step_id) || null,
+          }
+        }).filter(se => se.enrollment && se.enrollment.sequence && se.enrollment.contact && se.step)
+      } catch (err) {
+        fetchError = err
       }
 
       if (fetchError) {
