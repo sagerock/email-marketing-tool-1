@@ -99,10 +99,49 @@ const corsOptions = {
 app.use(cors(corsOptions))
 app.use(express.json({ limit: '5mb' }))
 
+// Retrying fetch for Supabase.
+//
+// On Railway this long-lived process intermittently throws `TypeError: fetch
+// failed` when undici has to open a NEW connection to Cloudflare-fronted
+// Supabase (stale/closed keep-alive socket, or an IPv6-first egress hiccup) —
+// while warm pooled sockets (kept alive by constant webhook traffic) keep
+// working. The symptom was the every-minute sequence cron: the claim UPDATE
+// succeeded but the immediately-following SELECT failed 100% of the time,
+// resetting the batch to pending and looping forever so no sequence emails
+// sent. These connection-layer failures happen before the request is written,
+// so a quick reconnect is safe and clears it. Paired with
+// NODE_OPTIONS=--dns-result-order=ipv4first on the service.
+const fetchWithRetry = async (url, options = {}) => {
+  const maxAttempts = 4
+  let lastErr
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fetch(url, options)
+    } catch (err) {
+      lastErr = err
+      // Only retry low-level connection failures — not aborts or HTTP errors
+      // (HTTP error responses don't throw, so they pass straight through).
+      const haystack = [
+        err?.name,
+        err?.message,
+        err?.cause?.code,
+        err?.cause?.message,
+      ].filter(Boolean).join(' ')
+      const isTransient =
+        err?.name !== 'AbortError' &&
+        /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|socket hang up|other side closed|UND_ERR/i.test(haystack)
+      if (!isTransient || attempt === maxAttempts) break
+      await new Promise(r => setTimeout(r, 150 * attempt))
+    }
+  }
+  throw lastErr
+}
+
 // Initialize Supabase
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY // Use service key for backend
+  process.env.SUPABASE_SERVICE_KEY, // Use service key for backend
+  { global: { fetch: fetchWithRetry } }
 )
 
 // ---- Auth Middleware ----
