@@ -7083,25 +7083,30 @@ app.listen(PORT, () => {
         .update({ status: 'processing' })
         .eq('status', 'pending')
         .lte('scheduled_for', now)
-        .limit(50)
+        .limit(20)
         .select('id')
 
       if (claimError) {
         console.error('❌ Error claiming scheduled emails:', claimError)
       } else if (claimedIds && claimedIds.length > 0) {
 
-      // Now fetch full details for the emails we claimed
+      // Now fetch full details for the emails we claimed.
+      // NOTE: select only the columns the send loop below actually uses. Pulling
+      // `*` on every embed (contacts(*), email_sequences(*), sequence_steps(*))
+      // bloated the request; combined with a full .in() batch it tripped a
+      // transport-level `TypeError: fetch failed`, stalling all sends. Keep this
+      // list in sync with the fields referenced in the processing loop.
       const { data: scheduledEmails, error: fetchError } = await supabase
         .from('scheduled_emails')
         .select(`
-          *,
+          id, attempts,
           enrollment:sequence_enrollments(
-            *,
-            sequence:email_sequences(*),
-            contact:contacts(*),
+            id, status,
+            sequence:email_sequences(id, status, client_id, from_email, from_name, reply_to, total_completed),
+            contact:contacts(id, email, first_name, last_name, unsubscribed, unsubscribe_token, industry),
             trigger_campaign:salesforce_campaigns(id, name, type)
           ),
-          step:sequence_steps(*)
+          step:sequence_steps(id, step_order, subject, template_id, html_content, sent_count)
         `)
         .in('id', claimedIds.map(e => e.id))
 
