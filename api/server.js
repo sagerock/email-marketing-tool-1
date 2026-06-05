@@ -130,6 +130,18 @@ const fetchWithRetry = async (url, options = {}) => {
       const isTransient =
         err?.name !== 'AbortError' &&
         /fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|socket hang up|other side closed|UND_ERR/i.test(haystack)
+      // Diagnostic: postgrest-js hides the underlying cause, so surface it here.
+      const reqUrl = typeof url === 'string' ? url : (url?.url || '')
+      console.error('[supabase-fetch] attempt', attempt, 'failed', {
+        method: options?.method || 'GET',
+        urlLen: reqUrl.length,
+        urlTail: reqUrl.slice(-80),
+        name: err?.name,
+        message: err?.message,
+        causeCode: err?.cause?.code,
+        causeMessage: err?.cause?.message,
+        causeErrno: err?.cause?.errno,
+      })
       if (!isTransient || attempt === maxAttempts) break
       await new Promise(r => setTimeout(r, 150 * attempt))
     }
