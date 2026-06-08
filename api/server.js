@@ -453,12 +453,111 @@ app.delete('/api/admin/users/:id', authenticateUser, requireSuperAdmin, async (r
   }
 })
 
+// Freemail domains whose senders get auto-captured by Email-to-Salesforce style
+// mailbox rules. Used by the spam-capture safety net below.
+const FREEMAIL_DOMAINS = new Set([
+  'gmail.com', 'yahoo.com', 'hotmail.com', 'outlook.com', 'aol.com', 'icloud.com',
+  'live.com', 'msn.com', 'ymail.com', 'qq.com', '163.com', 'gmx.com', 'mail.com',
+  'protonmail.com', 'proton.me'
+])
+
+/**
+ * Detects the "spam-captured contact" pattern: a freemail address that Salesforce
+ * auto-created from an inbound email sender, with no real data attached.
+ *
+ * Signature (all must hold):
+ *  - record_type 'contact' — the auto-captured junk lands as Contacts; real new
+ *    freemail signups arrive as Leads, so this spares genuine inbound leads
+ *  - freemail domain
+ *  - no source code (current OR history) — real leads/forms carry one
+ *  - the name is exactly the email local-part (e.g. aaronbanks@gmail.com -> "Aaron Banks"),
+ *    i.e. the name was parsed straight from the address rather than entered by a human
+ *
+ * This is deliberately tight so it never flags a real person: a genuine gmail
+ * contact (john.smith@, jsmith1980@) won't have name === local-part.
+ * Background: Alconox's po@alconox.com purchase-order mailbox auto-created ~6,500 of
+ * these in April 2026 from a spam wave; this net stops any repeat before it can be mailed.
+ */
+function isLikelySpamCapturedContact(record) {
+  if (!record || !record.email) return false
+  if (record.record_type !== 'contact') return false
+  const email = String(record.email).toLowerCase().trim()
+  const at = email.indexOf('@')
+  if (at < 1) return false
+  const local = email.slice(0, at)
+  const domain = email.slice(at + 1)
+  if (!FREEMAIL_DOMAINS.has(domain)) return false
+  if (record.source_code || record.source_code_history) return false
+  const name = `${(record.first_name || '').trim()}${(record.last_name || '').trim()}`.toLowerCase()
+  if (!name) return false
+  return name === local
+}
+
+/**
+ * Safety net: after a sync batch is upserted, auto-suppress any records matching the
+ * spam-capture pattern so they can never reach a send, even if the upstream Salesforce
+ * source is never cleaned. Only flips contacts currently unsubscribed=false (idempotent),
+ * and chunks the id filter to keep request URLs small.
+ */
+async function suppressSpamCapturedContacts(chunk, clientId) {
+  const junk = chunk.filter(isLikelySpamCapturedContact)
+  if (junk.length === 0) return 0
+
+  const sfIds = [...new Set(junk.map(r => r.salesforce_id).filter(Boolean))]
+  const emailsWithoutSfId = [...new Set(
+    junk.filter(r => !r.salesforce_id).map(r => String(r.email).toLowerCase().trim()).filter(Boolean)
+  )]
+
+  let suppressed = 0
+  const ID_CHUNK = 150
+
+  const runUpdate = async (column, values) => {
+    for (let i = 0; i < values.length; i += ID_CHUNK) {
+      const slice = values.slice(i, i + ID_CHUNK)
+      const { data, error } = await supabase
+        .from('contacts')
+        .update({ unsubscribed: true, updated_at: new Date().toISOString() })
+        .eq('client_id', clientId)
+        .eq('unsubscribed', false)
+        .in(column, slice)
+        .select('id')
+      if (error) {
+        console.error(`Spam-capture auto-suppress failed (${column}, ${slice.length}): ${error.message}`)
+        continue
+      }
+      suppressed += data ? data.length : 0
+    }
+  }
+
+  if (sfIds.length) await runUpdate('salesforce_id', sfIds)
+  if (emailsWithoutSfId.length) await runUpdate('email', emailsWithoutSfId)
+
+  if (suppressed > 0) {
+    console.log(`🛡️  Auto-suppressed ${suppressed} likely spam-captured freemail contact(s) during sync (Email-to-Salesforce junk pattern)`)
+  }
+  return suppressed
+}
+
+/**
+ * Upsert a batch of contact records with individual retry fallback, then run the
+ * spam-capture safety net over the same batch.
+ */
+async function upsertContactBatch(chunk, clientId) {
+  const result = await upsertContactBatchRaw(chunk, clientId)
+  try {
+    await suppressSpamCapturedContacts(chunk, clientId)
+  } catch (err) {
+    console.error(`Spam-capture auto-suppress error: ${err.message}`)
+  }
+  return result
+}
+
 /**
  * Upsert a batch of contact records with individual retry fallback.
  * First tries batch upsert by salesforce_id. If that fails, retries each record
  * individually so a single bad record doesn't silently drop the entire batch.
  */
-async function upsertContactBatch(chunk, clientId) {
+async function upsertContactBatchRaw(chunk, clientId) {
   const { error: batchError } = await supabase
     .from('contacts')
     .upsert(chunk, { onConflict: 'salesforce_id', ignoreDuplicates: false })
