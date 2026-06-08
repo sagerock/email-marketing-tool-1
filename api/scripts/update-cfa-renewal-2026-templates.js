@@ -14,7 +14,15 @@ const path = require('path');
 const { createClient } = require('@supabase/supabase-js');
 
 const CLIENT_ID = '22500cd6-052a-42ff-a0cb-4f3ba9125dfd';
-const OUTPUT_DIR = '/home/sage/scripts/sagerock/clients/center-for-anthroposophy/renewal_2026/output';
+// Derived relative to this script so it survives machine/migration path changes.
+// Assumes the sagerock repo is a sibling of email-marketing-tool-1 (both under the
+// same dev root). Override with RENEWAL_OUTPUT_DIR if that layout ever differs.
+const OUTPUT_DIR =
+  process.env.RENEWAL_OUTPUT_DIR ||
+  path.join(
+    __dirname,
+    '../../../sagerock/clients/center-for-anthroposophy/renewal_2026/output'
+  );
 
 // template name (live, letters_meta.py scheme) -> output HTML filename
 const MAP = [
