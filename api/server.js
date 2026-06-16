@@ -52,6 +52,16 @@ function decryptClient(client) {
   return result
 }
 
+// Per-client SendGrid category, e.g. `client-cfa`. Lets us pull one client's
+// open/click rate in a single /v3/categories/stats call instead of summing
+// per-campaign categories. Prefers the human-readable s3_prefix slug; falls
+// back to the client UUID when no slug is set so every send is still tagged.
+function clientCategory(client) {
+  if (!client) return null
+  const slug = client.s3_prefix || client.id
+  return slug ? `client-${slug}` : null
+}
+
 // Run a PostgREST `.in(column, ids)` query in bounded chunks and concatenate
 // the rows. A long id list goes into the request URL as `id=in.(...)`, and at
 // ~36 chars per UUID a few hundred ids blow past undici's 16 KB max header size
@@ -1012,7 +1022,7 @@ async function sendCampaignById(campaignId) {
       from: { email: campaign.from_email, name: campaign.from_name },
       subject: campaign.subject,
       content: [{ type: 'text/html', value: processedTemplate }],
-      categories: [`campaign-${campaignId}`],
+      categories: [`campaign-${campaignId}`, clientCategory(client)].filter(Boolean),
       custom_args: { campaign_id: campaignId },
     }
     if (campaign.reply_to) requestBody.reply_to = { email: campaign.reply_to }
@@ -1309,7 +1319,7 @@ app.post('/api/send-test-email', async (req, res) => {
         customArgs: {
           campaign_id: campaignId,
         },
-        categories: [`campaign-${campaignId}`],
+        categories: [`campaign-${campaignId}`, clientCategory(client)].filter(Boolean),
         ipPoolName: client.ip_pool || undefined,
         headers: {
           'List-Unsubscribe': `<${testUnsubscribeUrl}>`,
@@ -2973,6 +2983,11 @@ app.post('/api/sequences/process', async (req, res) => {
             step_id: step.id,
             enrollment_id: enrollment.id,
           },
+          categories: [
+            `sequence-${sequence.id}`,
+            `sequence-step-${step.id}`,
+            clientCategory(client),
+          ].filter(Boolean),
           headers: {
             'List-Unsubscribe': `<${unsubscribeUrl}>`,
             'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
@@ -8013,6 +8028,11 @@ app.listen(PORT, () => {
               step_id: step.id,
               enrollment_id: enrollment.id,
             },
+            categories: [
+              `sequence-${sequence.id}`,
+              `sequence-step-${step.id}`,
+              clientCategory(client),
+            ].filter(Boolean),
             headers: {
               'List-Unsubscribe': `<${unsubscribeUrl}>`,
               'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
