@@ -6343,6 +6343,32 @@ app.post('/api/ai-followup/generate', async (req, res) => {
       }
     }
 
+    // Optionally inject an approved resource link (resource-nudge agents only).
+    // Derives industry from the contact, or falls back to the latest form
+    // submission's Industry field, then looks up the vetted industry_links URL.
+    // This is the ONLY URL such agents are allowed to reference (no invented links).
+    let resourceContext = ''
+    if (config.include_resource_link) {
+      const latestSub = contact.form_submissions?.length > 0
+        ? contact.form_submissions[contact.form_submissions.length - 1]
+        : null
+      const industryName = contact.industry
+        || latestSub?.fields?.Industry
+        || latestSub?.fields?.industry
+        || null
+      let approvedResourceUrl = 'https://alconox.com/industries/'
+      if (industryName) {
+        const { data: il } = await supabase
+          .from('industry_links')
+          .select('link_url')
+          .eq('client_id', config.client_id)
+          .eq('industry', industryName)
+          .maybeSingle()
+        if (il?.link_url) approvedResourceUrl = il.link_url
+      }
+      resourceContext = `\n\nAPPROVED RESOURCE LINK (the ONLY URL you may include in the email; use it only when pointing the reader to resources, and never invent or guess any other URL):\n  ${approvedResourceUrl}`
+    }
+
     let previousContext = ''
     if (previousDrafts && previousDrafts.length > 0) {
       previousContext = '\n\nPrevious emails sent to this contact:\n' +
@@ -6353,7 +6379,7 @@ app.post('/api/ai-followup/generate', async (req, res) => {
 
     const userPrompt = `Write a follow-up email for this contact. Return ONLY a JSON object with "subject" and "body" fields. The body should be plain text (no HTML). Do not include any other text outside the JSON.
 
-${contactContext}${formContext}${previousContext}`
+${contactContext}${formContext}${resourceContext}${previousContext}`
 
     const response = await anthropic.messages.create({
       model: 'claude-sonnet-4-6',
