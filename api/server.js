@@ -2447,8 +2447,28 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
       return res.status(400).json({ error: 'AI agent is disabled' })
     }
 
-    // Extract email (required) - support various key formats
-    const email = req.body.email || req.body.Email || req.body['Work Email']
+    // Extract contact fields. Gravity Forms sends field IDs ("2", "1.3", "16")
+    // that vary per form, so honor the agent's field_map first, then fall back
+    // to common named keys.
+    const body = req.body
+    const fmap = config.field_map || {}
+    const pick = (logical, ...aliases) => {
+      const keys = [fmap[logical], ...aliases].filter(Boolean)
+      for (const k of keys) {
+        const v = body[k]
+        if (v != null && String(v).trim() !== '') return String(v).trim()
+      }
+      return null
+    }
+
+    // Email (required) - mapped key, common names, then a last-resort value scan
+    let email = pick('email', 'email', 'Email', 'Work Email')
+    if (!email) {
+      const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+      for (const v of Object.values(body)) {
+        if (typeof v === 'string' && emailRe.test(v.trim())) { email = v.trim(); break }
+      }
+    }
     if (!email) {
       console.error('❌ Gravity Forms webhook: no email field in payload', req.body)
       return res.status(400).json({ error: 'No email field in request body' })
@@ -2457,11 +2477,10 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
     const normalizedEmail = email.toLowerCase().trim()
     const clientId = config.client_id
 
-    // Extract known contact fields from body (support various key formats)
-    const body = req.body
-    const firstName = body.first_name || body.firstName || body['First Name'] || null
-    const lastName = body.last_name || body.lastName || body['Last Name'] || null
-    const company = body.company || body.Company || body.organization || body['Company Name'] || null
+    const firstName = pick('first_name', 'first_name', 'firstName', 'First Name')
+    const lastName = pick('last_name', 'last_name', 'lastName', 'Last Name')
+    const company = pick('company', 'company', 'Company', 'organization', 'Company Name')
+    const industry = pick('industry', 'industry', 'Industry')
 
     // Build form submission record with all fields
     const formSubmission = {
@@ -2475,7 +2494,7 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
     // Check if contact already exists
     const { data: existing } = await supabase
       .from('contacts')
-      .select('id, first_name, last_name, company, form_submissions')
+      .select('id, first_name, last_name, company, industry, form_submissions')
       .eq('client_id', clientId)
       .eq('email', normalizedEmail)
       .single()
@@ -2488,6 +2507,7 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
       if (!existing.first_name && firstName) updates.first_name = firstName
       if (!existing.last_name && lastName) updates.last_name = lastName
       if (!existing.company && company) updates.company = company
+      if (!existing.industry && industry) updates.industry = industry
 
       await supabase.from('contacts').update(updates).eq('id', existing.id)
       contactId = existing.id
@@ -2502,6 +2522,7 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
           first_name: firstName,
           last_name: lastName,
           company,
+          industry,
           form_submissions: [formSubmission],
           unsubscribed: false,
         })
