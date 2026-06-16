@@ -66,6 +66,7 @@ export interface Campaign {
   utm_params?: string
   folder_id?: string
   salesforce_campaign_id?: string
+  purchase_filter?: PurchaseFilter | null
   sent_count?: number
   failed_count?: number
   send_error?: string
@@ -77,11 +78,23 @@ export interface Campaign {
     excluded_sf_campaign_filter?: number
     excluded_tag_filter?: number
     excluded_audience_filter?: number
+    excluded_product_filter?: number
     final_recipients: number
   }
   created_at: string
   updated_at: string
   client_id?: string
+}
+
+// Purchase-history recipient filter (WooCommerce-derived). Any field
+// null/absent/'any' means that dimension is not applied.
+export interface PurchaseFilter {
+  min_spend?: number | null
+  min_orders?: number | null
+  recency_mode?: 'any' | 'within' | 'lapsed'
+  recency_days?: number | null
+  product_mode?: 'any' | 'purchased' | 'not_purchased'
+  product_skus?: string[]
 }
 
 export interface AnalyticsEvent {

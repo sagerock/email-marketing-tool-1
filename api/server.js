@@ -37,7 +37,8 @@ function decryptClient(client) {
     console.error('⚠️  ENCRYPTION_KEY not set - credentials will not be decrypted')
     return client
   }
-  const FIELDS = ['sendgrid_api_key', 'salesforce_client_id', 'salesforce_client_secret']
+  const FIELDS = ['sendgrid_api_key', 'salesforce_client_id', 'salesforce_client_secret',
+                  'woocommerce_consumer_key', 'woocommerce_consumer_secret']
   const result = { ...client }
   for (const field of FIELDS) {
     if (result[field]) {
@@ -865,6 +866,31 @@ async function sendCampaignById(campaignId) {
     }
   }
 
+  // 4a. Purchase filter setup (WooCommerce-derived). Spend/orders/recency are
+  // applied as contact-column predicates in the page query; product purchase is
+  // resolved here into an email set and applied in-memory (like the SF filter).
+  const purchaseFilter = campaign.purchase_filter || null
+  let purchaseRecencyCutoff = null
+  if (purchaseFilter?.recency_mode && purchaseFilter.recency_mode !== 'any' && purchaseFilter.recency_days) {
+    purchaseRecencyCutoff = new Date(Date.now() - Number(purchaseFilter.recency_days) * 86400000).toISOString()
+  }
+  let productBuyerEmails = null   // Set<lowercased email> when product filter active
+  let productMode = null          // 'purchased' | 'not_purchased'
+  if (purchaseFilter?.product_mode && purchaseFilter.product_mode !== 'any'
+      && Array.isArray(purchaseFilter.product_skus) && purchaseFilter.product_skus.length > 0) {
+    productMode = purchaseFilter.product_mode
+    productBuyerEmails = await getProductBuyerEmailSet(campaign.client_id, purchaseFilter.product_skus)
+    console.log(`📧 Product filter (${productMode}): ${productBuyerEmails.size} buyer email(s) across ${purchaseFilter.product_skus.length} SKU(s)`)
+    // "purchased" with no buyers means nobody qualifies — finish empty.
+    if (productMode === 'purchased' && productBuyerEmails.size === 0) {
+      await supabase
+        .from('campaigns')
+        .update({ status: 'sent', sent_at: new Date().toISOString(), recipient_count: 0 })
+        .eq('id', campaignId)
+      return { sent: 0, failed: 0 }
+    }
+  }
+
   // 4b. Count contacts excluded by each filter for the send breakdown
   const breakdown = { total_contacts: 0, excluded_unsubscribed: 0, excluded_hard_bounced: 0, final_recipients: 0 }
 
@@ -1027,6 +1053,21 @@ async function sendCampaignById(campaignId) {
       .eq('client_id', campaign.client_id)
       .neq('bounce_status', 'hard')
 
+    // Purchase filter: spend / order-count / recency predicates (null total_spent
+    // and last_order_date — i.e. non-buyers — are excluded by these comparisons).
+    if (purchaseFilter) {
+      if (purchaseFilter.min_spend != null && purchaseFilter.min_spend !== '') {
+        baseQuery = baseQuery.gte('total_spent', purchaseFilter.min_spend)
+      }
+      if (purchaseFilter.min_orders != null && purchaseFilter.min_orders !== '') {
+        baseQuery = baseQuery.gte('order_count', purchaseFilter.min_orders)
+      }
+      if (purchaseRecencyCutoff) {
+        if (purchaseFilter.recency_mode === 'within') baseQuery = baseQuery.gte('last_order_date', purchaseRecencyCutoff)
+        else if (purchaseFilter.recency_mode === 'lapsed') baseQuery = baseQuery.lt('last_order_date', purchaseRecencyCutoff)
+      }
+    }
+
     if (audienceActive) {
       const orClauses = []
       if (audienceFilter.includes('lead')) orClauses.push('record_type.eq.lead')
@@ -1054,6 +1095,14 @@ async function sendCampaignById(campaignId) {
         campaign.filter_tags.some(tag => c.tags?.includes(tag))
       )
       breakdown.excluded_tag_filter = (breakdown.excluded_tag_filter || 0) + (beforeTagFilter - filtered.length)
+    }
+    // Product purchase filter (AND logic): keep buyers / non-buyers of the SKUs.
+    if (productBuyerEmails) {
+      const beforeProductFilter = filtered.length
+      filtered = productMode === 'purchased'
+        ? filtered.filter(c => c.email && productBuyerEmails.has(c.email.toLowerCase()))
+        : filtered.filter(c => !c.email || !productBuyerEmails.has(c.email.toLowerCase()))
+      breakdown.excluded_product_filter = (breakdown.excluded_product_filter || 0) + (beforeProductFilter - filtered.length)
     }
 
     totalRecipients += filtered.length
@@ -3735,6 +3784,392 @@ async function getSalesforceConnection(clientId) {
 
   return conn
 }
+
+// ============================================================
+// WooCommerce integration
+// Per-client store credentials (encrypted), email-keyed order sync, and
+// denormalized purchase rollups on contacts. Enrich-only — never touches
+// `unsubscribed`. Mirrors the Salesforce sync model above.
+// ============================================================
+
+// Alconox's store (and many WP hosts) sit behind a WAF that 403s the default
+// fetch/undici user-agent. A named UA gets through.
+const WOO_USER_AGENT = 'SageRockEmailTool/1.0 (+https://mail.sagerock.com)'
+
+// WooCommerce statuses that do NOT represent realized revenue. Used to exclude
+// orders from contact rollups (kept in sync with recompute_woo_rollups()).
+const WOO_NON_REVENUE_STATUSES = new Set([
+  'cancelled', 'refunded', 'failed', 'trash', 'checkout-draft', 'pending',
+])
+
+/**
+ * Resolve and decrypt a client's WooCommerce credentials.
+ * Returns { baseUrl, authHeader } or throws if not configured.
+ */
+async function getWooClient(clientId) {
+  const { data: clientRaw, error } = await supabase
+    .from('clients')
+    .select('woocommerce_url, woocommerce_consumer_key, woocommerce_consumer_secret')
+    .eq('id', clientId)
+    .single()
+
+  if (error) throw new Error(`Failed to load client: ${error.message}`)
+  const client = decryptClient(clientRaw)
+  if (!client.woocommerce_url || !client.woocommerce_consumer_key || !client.woocommerce_consumer_secret) {
+    throw new Error('WooCommerce is not connected for this client')
+  }
+
+  const baseUrl = client.woocommerce_url.replace(/\/+$/, '') + '/wp-json/wc/v3'
+  const authHeader = 'Basic ' + Buffer.from(
+    `${client.woocommerce_consumer_key}:${client.woocommerce_consumer_secret}`
+  ).toString('base64')
+  return { baseUrl, authHeader }
+}
+
+/**
+ * GET a WooCommerce REST endpoint with auth + WAF-friendly UA, returning
+ * { data, totalPages }. Retries transient failures with backoff.
+ */
+async function wooFetch(baseUrl, authHeader, path) {
+  const url = `${baseUrl}${path}`
+  let lastErr
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const resp = await fetch(url, {
+        headers: { Authorization: authHeader, 'User-Agent': WOO_USER_AGENT, Accept: 'application/json' },
+      })
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => '')
+        // 4xx (except 429) is not worth retrying — surface immediately.
+        if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+          throw new Error(`WooCommerce ${resp.status}: ${body.slice(0, 200)}`)
+        }
+        throw new Error(`WooCommerce ${resp.status} (retryable): ${body.slice(0, 120)}`)
+      }
+      const data = await resp.json()
+      const totalPages = parseInt(resp.headers.get('x-wp-totalpages') || '1', 10)
+      return { data, totalPages }
+    } catch (err) {
+      lastErr = err
+      if (/WooCommerce 4\d\d:/.test(err.message)) throw err // non-retryable 4xx
+      await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+    }
+  }
+  throw lastErr
+}
+
+/**
+ * Map a raw WooCommerce order to our row shape. Data-minimized: we keep email,
+ * money, dates, and line-item SKUs — not billing address, phone, IP, or payment.
+ */
+function mapWooOrder(order, clientId) {
+  const email = (order.billing?.email || '').toLowerCase().trim() || null
+  return {
+    client_id: clientId,
+    woo_order_id: order.id,
+    email,
+    status: order.status || null,
+    total: order.total != null ? parseFloat(order.total) : null,
+    currency: order.currency || null,
+    // date_created_gmt has no tz suffix; mark it UTC explicitly.
+    order_date: order.date_created_gmt ? `${order.date_created_gmt}Z` : (order.date_created || null),
+    line_items: Array.isArray(order.line_items)
+      ? order.line_items.map(li => ({ sku: li.sku || null, name: li.name || null, qty: li.quantity, total: li.total }))
+      : null,
+    updated_at: new Date().toISOString(),
+  }
+}
+
+/**
+ * Core WooCommerce sync. Incremental by `modified_after` (UTC) unless fullSync.
+ * Returns { ordersSynced, contactsUpdated }.
+ */
+async function runWooSync(clientId, fullSync = false) {
+  const { baseUrl, authHeader } = await getWooClient(clientId)
+
+  const { data: client } = await supabase
+    .from('clients')
+    .select('last_woocommerce_sync')
+    .eq('id', clientId)
+    .single()
+
+  const syncStartTime = new Date().toISOString()
+  const syncSince = fullSync ? null : client?.last_woocommerce_sync
+
+  // dates_are_gmt=true makes modified_after compare in UTC (WooCommerce
+  // otherwise interprets it in the store's local timezone). orderby=modified
+  // keeps pagination stable as the result set shifts during the run.
+  const baseParams = new URLSearchParams({
+    per_page: '100', status: 'any', orderby: 'modified', order: 'asc', dates_are_gmt: 'true',
+  })
+  if (syncSince) baseParams.set('modified_after', syncSince)
+
+  const affectedEmails = new Set()
+  let ordersSynced = 0
+  let page = 1
+  let totalPages = 1
+
+  do {
+    const params = new URLSearchParams(baseParams)
+    params.set('page', String(page))
+    const { data: orders, totalPages: tp } = await wooFetch(baseUrl, authHeader, `/orders?${params}`)
+    totalPages = tp
+    if (!Array.isArray(orders) || orders.length === 0) break
+
+    const rows = orders.map(o => mapWooOrder(o, clientId))
+    const { error: upErr } = await supabase
+      .from('woocommerce_orders')
+      .upsert(rows, { onConflict: 'client_id,woo_order_id', ignoreDuplicates: false })
+    if (upErr) throw new Error(`Order upsert failed: ${upErr.message}`)
+
+    for (const r of rows) if (r.email) affectedEmails.add(r.email)
+    ordersSynced += rows.length
+    page++
+  } while (page <= totalPages)
+
+  // Recompute rollups for the touched emails, in chunks (keeps the array param
+  // and the UPDATE bounded). Excludes non-revenue statuses inside the RPC.
+  let contactsUpdated = 0
+  const emails = [...affectedEmails]
+  const CHUNK = 500
+  for (let i = 0; i < emails.length; i += CHUNK) {
+    const { data: n, error: rpcErr } = await supabase.rpc('recompute_woo_rollups', {
+      p_client_id: clientId,
+      p_emails: emails.slice(i, i + CHUNK),
+    })
+    if (rpcErr) throw new Error(`Rollup recompute failed: ${rpcErr.message}`)
+    contactsUpdated += n || 0
+  }
+
+  await supabase
+    .from('clients')
+    .update({
+      last_woocommerce_sync: syncStartTime,
+      woocommerce_sync_status: 'completed',
+      woocommerce_sync_count: ordersSynced,
+      woocommerce_sync_message: `Synced ${ordersSynced} order(s); updated ${contactsUpdated} contact(s)`,
+    })
+    .eq('id', clientId)
+
+  return { ordersSynced, contactsUpdated }
+}
+
+/**
+ * Connect a WooCommerce store: store encrypted credentials and verify them.
+ */
+app.post('/api/woocommerce/connect', async (req, res) => {
+  try {
+    const { clientId, storeUrl, consumerKey, consumerSecret } = req.body
+    if (!clientId || !storeUrl || !consumerKey || !consumerSecret) {
+      return res.status(400).json({ error: 'clientId, storeUrl, consumerKey, and consumerSecret are required' })
+    }
+
+    const normalizedUrl = storeUrl.trim().replace(/\/+$/, '')
+    const baseUrl = `${normalizedUrl}/wp-json/wc/v3`
+    const authHeader = 'Basic ' + Buffer.from(`${consumerKey}:${consumerSecret}`).toString('base64')
+
+    // Verify credentials with a minimal call before saving.
+    try {
+      await wooFetch(baseUrl, authHeader, '/orders?per_page=1')
+    } catch (verifyErr) {
+      return res.status(400).json({ error: `Could not connect to WooCommerce: ${verifyErr.message}` })
+    }
+
+    const { error: updateError } = await supabase
+      .from('clients')
+      .update({
+        woocommerce_url: normalizedUrl,
+        woocommerce_consumer_key: ENCRYPTION_KEY ? encryptValue(consumerKey, ENCRYPTION_KEY) : consumerKey,
+        woocommerce_consumer_secret: ENCRYPTION_KEY ? encryptValue(consumerSecret, ENCRYPTION_KEY) : consumerSecret,
+        woocommerce_connected_at: new Date().toISOString(),
+        woocommerce_sync_status: 'idle',
+        woocommerce_sync_message: null,
+      })
+      .eq('id', clientId)
+
+    if (updateError) {
+      console.error('Error storing WooCommerce credentials:', updateError)
+      return res.status(500).json({ error: 'Failed to save WooCommerce connection' })
+    }
+
+    console.log(`✅ WooCommerce connected for client ${clientId}`)
+    res.json({ success: true, message: 'WooCommerce connected successfully' })
+  } catch (error) {
+    console.error('WooCommerce connect error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Get WooCommerce connection/sync status for a client.
+ */
+app.get('/api/woocommerce/status', async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const { data: client, error } = await supabase
+      .from('clients')
+      .select('woocommerce_url, woocommerce_connected_at, last_woocommerce_sync, woocommerce_sync_status, woocommerce_sync_message, woocommerce_sync_count')
+      .eq('id', clientId)
+      .single()
+
+    if (error) throw error
+
+    res.json({
+      connected: !!client.woocommerce_url,
+      storeUrl: client.woocommerce_url,
+      connectedAt: client.woocommerce_connected_at,
+      lastSync: client.last_woocommerce_sync,
+      syncStatus: client.woocommerce_sync_status,
+      syncMessage: client.woocommerce_sync_message,
+      syncCount: client.woocommerce_sync_count,
+    })
+  } catch (error) {
+    console.error('Error getting WooCommerce status:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Disconnect WooCommerce from a client (clears credentials + sync state).
+ */
+app.post('/api/woocommerce/disconnect', async (req, res) => {
+  try {
+    const { clientId } = req.body
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const { error } = await supabase
+      .from('clients')
+      .update({
+        woocommerce_url: null,
+        woocommerce_consumer_key: null,
+        woocommerce_consumer_secret: null,
+        woocommerce_connected_at: null,
+        woocommerce_sync_status: null,
+        woocommerce_sync_message: null,
+        woocommerce_sync_count: null,
+        last_woocommerce_sync: null,
+      })
+      .eq('id', clientId)
+
+    if (error) throw error
+    console.log(`🔌 WooCommerce disconnected for client ${clientId}`)
+    res.json({ success: true })
+  } catch (error) {
+    console.error('Error disconnecting WooCommerce:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Sync WooCommerce orders for a client. Body: { clientId, fullSync? }.
+ * Runs in the background; poll /api/woocommerce/status for progress.
+ */
+app.post('/api/woocommerce/sync', async (req, res) => {
+  try {
+    const { clientId, fullSync } = req.body
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    await supabase
+      .from('clients')
+      .update({ woocommerce_sync_status: 'syncing', woocommerce_sync_message: 'Starting sync...' })
+      .eq('id', clientId)
+
+    // Respond immediately; the sync can take a while across many pages.
+    res.json({ success: true, message: 'WooCommerce sync started' })
+
+    runWooSync(clientId, !!fullSync)
+      .then(({ ordersSynced, contactsUpdated }) => {
+        console.log(`✅ WooCommerce sync done for ${clientId}: ${ordersSynced} orders, ${contactsUpdated} contacts`)
+      })
+      .catch(async (err) => {
+        console.error('WooCommerce sync error:', err.message)
+        await supabase
+          .from('clients')
+          .update({ woocommerce_sync_status: 'error', woocommerce_sync_message: err.message })
+          .eq('id', clientId)
+      })
+  } catch (error) {
+    console.error('WooCommerce sync error:', error)
+    if (!res.headersSent) res.status(500).json({ error: error.message })
+  }
+})
+
+/**
+ * Resolve the set of lowercased buyer emails who purchased any of the given
+ * SKUs (revenue statuses only). Used by campaign purchase-filtering. Paginates
+ * woocommerce_orders rather than passing a large id list through PostgREST.
+ */
+async function getProductBuyerEmailSet(clientId, skus) {
+  const skuSet = new Set((skus || []).filter(Boolean))
+  const emails = new Set()
+  if (skuSet.size === 0) return emails
+
+  const PAGE = 1000
+  let from = 0
+  while (true) {
+    const { data, error } = await withRetry(
+      () => supabase.from('woocommerce_orders')
+        .select('email, status, line_items')
+        .eq('client_id', clientId)
+        .range(from, from + PAGE - 1),
+      { label: `Fetch woo orders page ${from / PAGE + 1}` }
+    )
+    if (error) throw error
+    if (!data || data.length === 0) break
+    for (const o of data) {
+      if (!o.email || WOO_NON_REVENUE_STATUSES.has(o.status)) continue
+      const items = Array.isArray(o.line_items) ? o.line_items : []
+      if (items.some(li => li && skuSet.has(li.sku))) emails.add(o.email.toLowerCase())
+    }
+    if (data.length < PAGE) break
+    from += PAGE
+  }
+  return emails
+}
+
+/**
+ * List distinct products (sku + name) a client's customers have purchased,
+ * with buyer counts — powers the product picker in the campaign builder.
+ */
+app.get('/api/woocommerce/products', async (req, res) => {
+  try {
+    const { clientId } = req.query
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+
+    const PAGE = 1000
+    let from = 0
+    const bySku = new Map() // sku -> { sku, name, buyers:Set<email> }
+    while (true) {
+      const { data, error } = await supabase.from('woocommerce_orders')
+        .select('email, status, line_items')
+        .eq('client_id', clientId)
+        .range(from, from + PAGE - 1)
+      if (error) throw error
+      if (!data || data.length === 0) break
+      for (const o of data) {
+        if (WOO_NON_REVENUE_STATUSES.has(o.status)) continue
+        const items = Array.isArray(o.line_items) ? o.line_items : []
+        for (const li of items) {
+          if (!li || !li.sku) continue
+          if (!bySku.has(li.sku)) bySku.set(li.sku, { sku: li.sku, name: li.name || li.sku, buyers: new Set() })
+          if (o.email) bySku.get(li.sku).buyers.add(o.email.toLowerCase())
+        }
+      }
+      if (data.length < PAGE) break
+      from += PAGE
+    }
+
+    const products = [...bySku.values()]
+      .map(p => ({ sku: p.sku, name: p.name, buyers: p.buyers.size }))
+      .sort((a, b) => b.buyers - a.buyers)
+    res.json({ products })
+  } catch (error) {
+    console.error('Error listing WooCommerce products:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
 
 /**
  * Get available Salesforce fields for Lead and Contact objects
@@ -8198,5 +8633,48 @@ app.listen(PORT, () => {
   })
 
   console.log('✅ Daily Salesforce sync cron job started (runs at 6 AM UTC)')
+
+  // Daily WooCommerce sync — 30 min after Salesforce so the two don't overlap.
+  cron.schedule('30 6 * * *', async () => {
+    console.log('🔄 Starting daily WooCommerce sync...')
+    try {
+      const { data: clients, error } = await supabase
+        .from('clients')
+        .select('id, name, woocommerce_consumer_key')
+        .not('woocommerce_consumer_key', 'is', null)
+
+      if (error) {
+        console.error('❌ Error fetching clients for WooCommerce sync:', error.message)
+        return
+      }
+      if (!clients || clients.length === 0) {
+        console.log('📭 No clients with WooCommerce connected')
+        return
+      }
+
+      console.log(`📋 Found ${clients.length} client(s) with WooCommerce connected`)
+      for (const client of clients) {
+        try {
+          await supabase
+            .from('clients')
+            .update({ woocommerce_sync_status: 'syncing', woocommerce_sync_message: 'Daily auto-sync starting...' })
+            .eq('id', client.id)
+          const { ordersSynced, contactsUpdated } = await runWooSync(client.id, false)
+          console.log(`  ✅ ${client.name}: ${ordersSynced} order(s), ${contactsUpdated} contact(s) updated`)
+        } catch (clientErr) {
+          console.error(`  ❌ WooCommerce sync failed for ${client.name}:`, clientErr.message)
+          await supabase
+            .from('clients')
+            .update({ woocommerce_sync_status: 'error', woocommerce_sync_message: clientErr.message })
+            .eq('id', client.id)
+        }
+      }
+      console.log('✅ Daily WooCommerce sync complete')
+    } catch (error) {
+      console.error('❌ Daily WooCommerce sync error:', error.message)
+    }
+  })
+
+  console.log('✅ Daily WooCommerce sync cron job started (runs at 6:30 AM UTC)')
 })
 

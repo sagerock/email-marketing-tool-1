@@ -2,7 +2,48 @@ import { useState, useEffect, useRef } from 'react'
 import { supabase } from '../lib/supabase'
 import { apiFetch } from '../lib/api'
 import { useClient } from '../context/ClientContext'
-import type { Campaign, Template, Folder, SalesforceCampaign } from '../types/index.js'
+import type { Campaign, Template, Folder, SalesforceCampaign, PurchaseFilter } from '../types/index.js'
+
+// Product the client's customers have purchased (from /api/woocommerce/products)
+type WooProduct = { sku: string; name: string; buyers: number }
+
+// Form-friendly shape (numbers held as strings) for the purchase-history filter.
+type PurchaseFilterForm = {
+  min_spend: string
+  min_orders: string
+  recency_mode: 'any' | 'within' | 'lapsed'
+  recency_days: string
+  product_mode: 'any' | 'purchased' | 'not_purchased'
+  product_skus: string[]
+}
+
+// Restore the form shape from a saved campaign's purchase_filter.
+function toPurchaseForm(pf?: PurchaseFilter | null): PurchaseFilterForm {
+  return {
+    min_spend: pf?.min_spend != null ? String(pf.min_spend) : '',
+    min_orders: pf?.min_orders != null ? String(pf.min_orders) : '',
+    recency_mode: pf?.recency_mode || 'any',
+    recency_days: pf?.recency_days != null ? String(pf.recency_days) : '',
+    product_mode: pf?.product_mode || 'any',
+    product_skus: pf?.product_skus || [],
+  }
+}
+
+// Collapse the form shape to a PurchaseFilter for save/count, or null if nothing is set.
+function normalizePurchase(pf: PurchaseFilterForm): PurchaseFilter | null {
+  const out: PurchaseFilter = {}
+  if (pf.min_spend !== '') out.min_spend = Number(pf.min_spend)
+  if (pf.min_orders !== '') out.min_orders = Number(pf.min_orders)
+  if (pf.recency_mode !== 'any' && pf.recency_days !== '') {
+    out.recency_mode = pf.recency_mode
+    out.recency_days = Number(pf.recency_days)
+  }
+  if (pf.product_mode !== 'any' && pf.product_skus.length > 0) {
+    out.product_mode = pf.product_mode
+    out.product_skus = pf.product_skus
+  }
+  return Object.keys(out).length > 0 ? out : null
+}
 import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
@@ -756,6 +797,7 @@ function CreateCampaignModal({
   const [verifiedSenders, setVerifiedSenders] = useState<{email: string, name: string}[]>([])
   const [defaultUtmParams, setDefaultUtmParams] = useState('')
   const [salesforceCampaigns, setSalesforceCampaigns] = useState<SalesforceCampaign[]>([])
+  const [wooProducts, setWooProducts] = useState<WooProduct[]>([])
   const [formData, setFormData] = useState({
     name: campaign?.name || '',
     template_id: campaign?.template_id || '',
@@ -769,6 +811,7 @@ function CreateCampaignModal({
     utm_params: campaign?.utm_params || '',
     folder_id: campaign?.folder_id || '',
     salesforce_campaign_id: campaign?.salesforce_campaign_id || '',
+    purchase_filter: toPurchaseForm(campaign?.purchase_filter),
   })
   const [submitting, setSubmitting] = useState(false)
 
@@ -777,7 +820,19 @@ function CreateCampaignModal({
     fetchContacts()
     fetchVerifiedSenders()
     fetchSalesforceCampaigns()
+    fetchWooProducts()
   }, [])
+
+  const fetchWooProducts = async () => {
+    try {
+      const res = await apiFetch(`/api/woocommerce/products?clientId=${clientId}`)
+      if (!res.ok) return // store not connected for this client — silently skip
+      const { products } = await res.json()
+      setWooProducts(products || [])
+    } catch (err) {
+      console.error('Error fetching WooCommerce products:', err)
+    }
+  }
 
   const fetchVerifiedSenders = async () => {
     const { data } = await supabase
@@ -827,81 +882,36 @@ function CreateCampaignModal({
         utm_params: campaign.utm_params || '',
         folder_id: campaign.folder_id || '',
         salesforce_campaign_id: campaign.salesforce_campaign_id || '',
+        purchase_filter: toPurchaseForm(campaign.purchase_filter),
       })
     }
   }, [campaign])
 
-  // Fetch filtered count when tags, SF campaign, or audience filter changes
+  // Recompute the recipient count whenever any recipient filter changes. Uses
+  // the count_campaign_recipients RPC — the same resolution logic the sender
+  // runs — so the preview matches the actual send (incl. hard-bounce exclusion).
   useEffect(() => {
-    const audienceActive = formData.audience_filter.length > 0 && formData.audience_filter.length < 3
-    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id || audienceActive) {
-      fetchFilteredCount(formData.filter_tags, formData.salesforce_campaign_id, formData.audience_filter)
-    } else {
-      setFilteredTagCount(null)
-    }
-  }, [formData.filter_tags, formData.salesforce_campaign_id, formData.audience_filter])
+    fetchFilteredCount()
+  }, [
+    formData.filter_tags, formData.salesforce_campaign_id, formData.audience_filter,
+    formData.purchase_filter,
+  ])
 
-  const fetchFilteredCount = async (tags: string[], sfCampaignId: string, audienceFilter: string[]) => {
-    // Increment version and capture it for this request
+  const fetchFilteredCount = async () => {
     countRequestVersion.current += 1
     const thisRequestVersion = countRequestVersion.current
-
     try {
-      let contactIds: string[] | null = null
-
-      // If SF Campaign is selected, get contacts from that campaign first
-      if (sfCampaignId) {
-        const { data: members, error: membersError } = await supabase
-          .from('salesforce_campaign_members')
-          .select('contact_id')
-          .eq('salesforce_campaign_id', sfCampaignId)
-          .eq('client_id', clientId)
-
-        if (membersError) throw membersError
-        contactIds = members?.map(m => m.contact_id) || []
-
-        // If no contacts in the campaign, count is 0
-        if (contactIds.length === 0) {
-          if (thisRequestVersion === countRequestVersion.current) {
-            setFilteredTagCount(0)
-          }
-          return
-        }
-      }
-
-      // Build the count query
-      let query = supabase
-        .from('contacts')
-        .select('*', { count: 'exact', head: true })
-        .eq('client_id', clientId)
-        .eq('unsubscribed', false)
-
-      // Filter by SF Campaign contact IDs if applicable
-      if (contactIds) {
-        query = query.in('id', contactIds)
-      }
-
-      // Filter by tags if applicable
-      if (tags.length > 0) {
-        query = query.filter('tags', 'ov', `{${tags.map(t => `"${t}"`).join(',')}}`)
-      }
-
-      // Filter by audience (lead/customer/dealer) — only apply if a strict subset is selected
-      if (audienceFilter.length > 0 && audienceFilter.length < 3) {
-        const orClauses: string[] = []
-        if (audienceFilter.includes('lead')) orClauses.push('record_type.eq.lead')
-        if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer,or(account_type.is.null,account_type.neq.Dealer))')
-        if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,or(account_type.eq.Dealer,contact_type.eq.Dealer))')
-        if (orClauses.length > 0) query = query.or(orClauses.join(','))
-      }
-
-      const { count, error } = await query
-
+      const { data, error } = await supabase.rpc('count_campaign_recipients', {
+        p_client_id: clientId,
+        p_tags: formData.filter_tags.length > 0 ? formData.filter_tags : null,
+        p_sf_campaign_id: formData.salesforce_campaign_id || null,
+        p_audience: formData.audience_filter.length > 0 ? formData.audience_filter : null,
+        p_purchase: normalizePurchase(formData.purchase_filter),
+      })
       if (error) throw error
-
       // Only update if this is still the latest request
       if (thisRequestVersion === countRequestVersion.current) {
-        setFilteredTagCount(count || 0)
+        setFilteredTagCount(data ?? 0)
       }
     } catch (error) {
       console.error('Error fetching filtered count:', error)
@@ -973,13 +983,10 @@ function CreateCampaignModal({
   }
 
   const getRecipientCount = () => {
-    const audienceActive = formData.audience_filter.length > 0 && formData.audience_filter.length < 3
-    // If any filter is active, use the filtered count
-    if (formData.filter_tags.length > 0 || formData.salesforce_campaign_id || audienceActive) {
-      return filteredTagCount
-    }
-    // No filters, return total count
-    return totalContactCount
+    // The RPC count (filteredTagCount) is authoritative for every filter combo,
+    // including no filters (= true sendable, hard-bounces excluded). Fall back to
+    // the rough total only while the first RPC call is still in flight.
+    return filteredTagCount ?? totalContactCount
   }
 
   const toggleAudience = (segment: 'lead' | 'customer' | 'dealer') => {
@@ -1017,6 +1024,8 @@ function CreateCampaignModal({
         reply_to: formData.reply_to || null,
         folder_id: formData.folder_id || null,
         salesforce_campaign_id: formData.salesforce_campaign_id || null,
+        // Persist the cleaned PurchaseFilter (jsonb), not the form's string shape.
+        purchase_filter: normalizePurchase(formData.purchase_filter),
         scheduled_at: scheduledAtUtc,
         recipient_count: recipientCount,
         status: formData.scheduled_at ? 'scheduled' : 'draft',
@@ -1332,6 +1341,106 @@ function CreateCampaignModal({
                     ⚠️ Both filters active: will send to contacts in the SF Campaign who also have selected tags
                   </p>
                 )}
+              </div>
+            )}
+
+            {/* Purchase History Filter (WooCommerce) */}
+            {wooProducts.length > 0 && (
+              <div className="space-y-3 rounded-md border border-gray-200 p-3">
+                <label className="block text-sm font-medium text-gray-700">
+                  Filter by Purchase History (optional)
+                </label>
+
+                {/* Spend + order count */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Min total spent ($)</label>
+                    <input
+                      type="number" min="0" step="1" placeholder="Any"
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.purchase_filter.min_spend}
+                      onChange={(e) => setFormData({ ...formData, purchase_filter: { ...formData.purchase_filter, min_spend: e.target.value } })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Min number of orders</label>
+                    <input
+                      type="number" min="0" step="1" placeholder="Any"
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.purchase_filter.min_orders}
+                      onChange={(e) => setFormData({ ...formData, purchase_filter: { ...formData.purchase_filter, min_orders: e.target.value } })}
+                    />
+                  </div>
+                </div>
+
+                {/* Recency */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Order recency</label>
+                    <select
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                      value={formData.purchase_filter.recency_mode}
+                      onChange={(e) => setFormData({ ...formData, purchase_filter: { ...formData.purchase_filter, recency_mode: e.target.value as PurchaseFilterForm['recency_mode'] } })}
+                    >
+                      <option value="any">Any time</option>
+                      <option value="within">Ordered within…</option>
+                      <option value="lapsed">Hasn't ordered in…</option>
+                    </select>
+                  </div>
+                  {formData.purchase_filter.recency_mode !== 'any' && (
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">Days</label>
+                      <input
+                        type="number" min="1" step="1" placeholder="e.g. 365"
+                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                        value={formData.purchase_filter.recency_days}
+                        onChange={(e) => setFormData({ ...formData, purchase_filter: { ...formData.purchase_filter, recency_days: e.target.value } })}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Product purchased / not purchased */}
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">Product purchased</label>
+                  <select
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    value={formData.purchase_filter.product_mode}
+                    onChange={(e) => setFormData({ ...formData, purchase_filter: { ...formData.purchase_filter, product_mode: e.target.value as PurchaseFilterForm['product_mode'] } })}
+                  >
+                    <option value="any">No product filter</option>
+                    <option value="purchased">Has purchased…</option>
+                    <option value="not_purchased">Has NOT purchased…</option>
+                  </select>
+                  {formData.purchase_filter.product_mode !== 'any' && (
+                    <div className="mt-2 flex flex-wrap gap-2 p-3 border border-gray-300 rounded-md bg-gray-50 max-h-40 overflow-y-auto">
+                      {wooProducts.map((p) => {
+                        const selected = formData.purchase_filter.product_skus.includes(p.sku)
+                        return (
+                          <Badge
+                            key={p.sku}
+                            variant={selected ? 'info' : 'default'}
+                            className="cursor-pointer hover:opacity-80"
+                            onClick={() => setFormData({
+                              ...formData,
+                              purchase_filter: {
+                                ...formData.purchase_filter,
+                                product_skus: selected
+                                  ? formData.purchase_filter.product_skus.filter((s) => s !== p.sku)
+                                  : [...formData.purchase_filter.product_skus, p.sku],
+                              },
+                            })}
+                          >
+                            {p.name} ({p.buyers})
+                          </Badge>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500">
+                  Purchase filters use WooCommerce order history and combine with the filters above (AND).
+                </p>
               </div>
             )}
 
