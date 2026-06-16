@@ -2429,6 +2429,7 @@ DESIGN BEST PRACTICES:
 app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, res) => {
   try {
     const { webhookKey } = req.params
+    console.log(`📥 Gravity Forms webhook hit: key=${webhookKey?.slice(0, 8)}… bodyKeys=[${Object.keys(req.body || {}).join(', ')}]`)
 
     // Look up AI agent config by webhook key
     const { data: config, error: configError } = await supabase
@@ -2438,6 +2439,7 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
       .single()
 
     if (configError || !config) {
+      console.error(`❌ Gravity Forms webhook: invalid/unknown webhook key (key=${webhookKey})`)
       return res.status(404).json({ error: 'Invalid webhook key' })
     }
 
