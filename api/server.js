@@ -7112,6 +7112,69 @@ app.post('/api/media/scan', async (req, res) => {
   }
 })
 
+// ---- Public unsubscribe endpoint (RFC 8058 one-click) ----
+// MUST be registered BEFORE express.static and the SPA catch-all below.
+// Gmail / Apple Mail / Outlook honor the `List-Unsubscribe-Post: One-Click`
+// header by sending an HTTP POST to the List-Unsubscribe URL. Without this
+// route that POST fell through to the SPA catch-all (which only matches GET),
+// so it 404'd and the opt-out was silently lost — a CAN-SPAM problem and the
+// cause of unsubscribes collapsing to ~0/month after ~late March 2026. The
+// token rides in the query string of the List-Unsubscribe URL. The browser
+// GET continues to fall through to the React confirm page, which records the
+// opt-out client-side.
+async function recordUnsubscribe(token, campaignId) {
+  if (!token) return { ok: false, status: 400, message: 'Missing unsubscribe token.' }
+
+  const { data: contact, error: lookupError } = await supabase
+    .from('contacts')
+    .select('id, email, client_id, unsubscribed')
+    .eq('unsubscribe_token', token)
+    .maybeSingle()
+
+  if (lookupError) {
+    console.error('❌ Unsubscribe lookup failed:', lookupError.message)
+    return { ok: false, status: 500, message: 'Lookup failed.' }
+  }
+  if (!contact) return { ok: false, status: 404, message: 'Unknown unsubscribe token.' }
+
+  // Idempotent: only write + log the first time so repeat POSTs don't pile up events.
+  if (!contact.unsubscribed) {
+    const nowIso = new Date().toISOString()
+    const { error: updateError } = await supabase
+      .from('contacts')
+      .update({ unsubscribed: true, unsubscribed_at: nowIso })
+      .eq('unsubscribe_token', token)
+
+    if (updateError) {
+      console.error('❌ Unsubscribe update failed:', updateError.message)
+      return { ok: false, status: 500, message: 'Could not record unsubscribe.' }
+    }
+
+    // Best-effort analytics event so opt-outs appear in campaign reporting again.
+    try {
+      await supabase.from('analytics_events').insert({
+        campaign_id: campaignId || null,
+        email: contact.email,
+        event_type: 'unsubscribe',
+        timestamp: nowIso,
+      })
+    } catch (analyticsError) {
+      console.error('⚠️ Unsubscribe analytics log failed:', analyticsError.message)
+    }
+    console.log(`✅ Unsubscribed ${contact.email} via one-click (campaign ${campaignId || 'n/a'})`)
+  }
+
+  return { ok: true, status: 200, message: 'You have been unsubscribed.' }
+}
+
+// One-click POST (RFC 8058). Must return 2xx so the mail client reports success.
+app.post('/unsubscribe', async (req, res) => {
+  const token = req.query.token || req.body?.token
+  const campaignId = req.query.campaign_id || req.body?.campaign_id || null
+  const result = await recordUnsubscribe(token, campaignId)
+  res.status(result.status).type('text/plain').send(result.message)
+})
+
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
 
