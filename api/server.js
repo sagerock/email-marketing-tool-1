@@ -233,6 +233,8 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/contacts/upsert') return next()
   // Skip auth for public signup (rate-limited, no sensitive data)
   if (req.path === '/public/signup') return next()
+  // Skip auth for AWSNA 2026 booth resource signup (rate-limited, no sensitive data)
+  if (req.path === '/public/awsna-signup') return next()
   // Skip auth for ip-pools (public)
   if (req.path.startsWith('/ip-pools')) return next()
   // Skip auth for accept-invite (user doesn't have an account yet)
@@ -6374,6 +6376,170 @@ app.post('/api/public/signup', async (req, res) => {
     res.status(500).json({ error: 'Signup failed. Please try again.' })
   }
 })
+
+// ==========================================
+// AWSNA 2026 booth resource signup
+// Public, rate-limited. Captures the lead under the SageRock client,
+// tags it for follow-up, and emails the booth PDF download links.
+// The landing page also reveals the links instantly on success.
+// ==========================================
+const awsnaSignupRateLimit = new Map() // IP -> { count, resetTime }
+
+const AWSNA_RESOURCES = [
+  { title: 'The Waldorf Storytelling Calendar (Sept 2026 – Aug 2027)', url: 'https://sagerock-email-images.s3.us-east-2.amazonaws.com/awsna-2026/waldorf-storytelling-calendar-2026-2027.pdf' },
+  { title: 'You Get the Families. We Handle the Rest.', url: 'https://sagerock-email-images.s3.us-east-2.amazonaws.com/awsna-2026/you-get-the-families.pdf' },
+  { title: 'The Enrollment Audit', url: 'https://sagerock-email-images.s3.us-east-2.amazonaws.com/awsna-2026/enrollment-audit.pdf' },
+  { title: 'SageRock Data Flow', url: 'https://sagerock-email-images.s3.us-east-2.amazonaws.com/awsna-2026/sagerock-data-flow.pdf' },
+  { title: 'Iris: Technology Made Human', url: 'https://sagerock-email-images.s3.us-east-2.amazonaws.com/awsna-2026/iris-technology-made-human.pdf' },
+  { title: 'Beyond the Classroom', url: 'https://sagerock-email-images.s3.us-east-2.amazonaws.com/awsna-2026/beyond-the-classroom.pdf' },
+]
+
+app.post('/api/public/awsna-signup', async (req, res) => {
+  try {
+    // Rate limiting: 8 requests per IP per 15 minutes (booth use, shared wifi)
+    const ip = req.ip || req.connection.remoteAddress
+    const now = Date.now()
+    const windowMs = 15 * 60 * 1000
+    const maxRequests = 8
+
+    const rateData = awsnaSignupRateLimit.get(ip) || { count: 0, resetTime: now + windowMs }
+    if (now > rateData.resetTime) {
+      rateData.count = 0
+      rateData.resetTime = now + windowMs
+    }
+    rateData.count++
+    awsnaSignupRateLimit.set(ip, rateData)
+
+    if (rateData.count > maxRequests) {
+      return res.status(429).json({ error: 'Too many requests. Please try again in a few minutes.' })
+    }
+
+    // Validate input (name optional, email required)
+    const { email, first_name } = req.body
+
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Email is required' })
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Please enter a valid email address' })
+    }
+
+    const normalizedEmail = email.toLowerCase().trim()
+    const cleanName = (first_name && typeof first_name === 'string') ? first_name.trim() : null
+
+    const publicClientId = process.env.PUBLIC_SIGNUP_CLIENT_ID
+    if (!publicClientId) {
+      console.error('❌ PUBLIC_SIGNUP_CLIENT_ID not configured')
+      return res.status(500).json({ error: 'Signup is not configured' })
+    }
+
+    const tags = ['awsna-2026', 'conference-lead']
+
+    // Upsert contact (merge tags if they already exist)
+    const { data: existingContact } = await supabase
+      .from('contacts')
+      .select('*')
+      .eq('client_id', publicClientId)
+      .eq('email', normalizedEmail)
+      .single()
+
+    let contact
+    if (existingContact) {
+      const mergedTags = [...new Set([...(existingContact.tags || []), ...tags])]
+      const { data: updated, error: updateError } = await supabase
+        .from('contacts')
+        .update({
+          first_name: existingContact.first_name || cleanName,
+          tags: mergedTags,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', existingContact.id)
+        .select()
+        .single()
+      if (updateError) throw updateError
+      contact = updated
+      console.log(`📝 AWSNA signup: updated contact ${normalizedEmail}`)
+    } else {
+      const { data: created, error: createError } = await supabase
+        .from('contacts')
+        .insert({
+          client_id: publicClientId,
+          email: normalizedEmail,
+          first_name: cleanName,
+          tags,
+          unsubscribed: false,
+        })
+        .select()
+        .single()
+      if (createError) throw createError
+      contact = created
+      console.log(`✅ AWSNA signup: created contact ${normalizedEmail}`)
+    }
+
+    // Email the resource links (best-effort, don't block the response)
+    sendAwsnaResourcesEmail(contact).catch(err => {
+      console.error('❌ Failed to send AWSNA resources email:', err)
+    })
+
+    // Return the links so the landing page can reveal them instantly
+    res.json({ success: true, resources: AWSNA_RESOURCES })
+  } catch (error) {
+    console.error('❌ AWSNA signup error:', error)
+    res.status(500).json({ error: 'Something went wrong. Please try again.' })
+  }
+})
+
+/**
+ * Send the AWSNA booth resources email with download links.
+ */
+async function sendAwsnaResourcesEmail(contact) {
+  const apiKey = process.env.CONTACT_SENDGRID_API_KEY
+  if (!apiKey) {
+    console.error('❌ CONTACT_SENDGRID_API_KEY not configured, skipping AWSNA email')
+    return
+  }
+  sgMail.setApiKey(apiKey)
+
+  const greeting = contact.first_name ? `Hi ${contact.first_name},` : 'Hi there,'
+
+  const linkRows = AWSNA_RESOURCES.map(r => (
+    `<tr><td style="padding:8px 0;border-bottom:1px solid #ece7da;">
+       <a href="${r.url}" style="color:#58654d;font-weight:600;text-decoration:none;font-size:15px;">${r.title}</a>
+       <div style="font-size:12px;color:#9a9483;margin-top:2px;">PDF · click to download</div>
+     </td></tr>`
+  )).join('')
+
+  const textLinks = AWSNA_RESOURCES.map(r => `• ${r.title}\n  ${r.url}`).join('\n\n')
+
+  const htmlBody = `
+  <div style="background:#faf8f3;padding:28px 0;font-family:Georgia,'Source Serif 4',serif;">
+    <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #ece7da;border-radius:10px;padding:32px;">
+      <div style="font-size:13px;letter-spacing:2px;text-transform:uppercase;color:#c08a5e;font-family:Arial,sans-serif;">SageRock Schools · AWSNA 2026</div>
+      <h1 style="font-size:24px;color:#3f4a35;margin:10px 0 16px;">Your booth resources</h1>
+      <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;">${greeting}</p>
+      <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;">Thanks for stopping by the SageRock booth. Here is everything we shared, yours to keep:</p>
+      <table style="width:100%;border-collapse:collapse;margin:18px 0;font-family:Arial,sans-serif;">${linkRows}</table>
+      <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;">Want us to look at your own enrollment funnel? Reply to this email or reach Rocky at <a href="mailto:rocky@sagerock.com" style="color:#58654d;">rocky@sagerock.com</a>. Conference attendees get a free $2,500 enrollment audit when starting a plan.</p>
+      <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;margin-top:18px;">Warmly,<br>Sage &amp; the SageRock team</p>
+    </div>
+    <div style="max-width:560px;margin:14px auto 0;text-align:center;font-size:12px;color:#9a9483;font-family:Arial,sans-serif;">SageRock · sagerock.com/schools</div>
+  </div>`
+
+  const textBody = `${greeting}\n\nThanks for stopping by the SageRock booth at AWSNA 2026. Here are your resources:\n\n${textLinks}\n\nWant us to look at your enrollment funnel? Reply here or email rocky@sagerock.com. Conference attendees get a free $2,500 enrollment audit when starting a plan.\n\nWarmly,\nSage & the SageRock team\nsagerock.com/schools`
+
+  await sgMail.send({
+    to: contact.email,
+    bcc: [{ email: 'sage@sagerock.com' }],
+    from: { email: 'sage@sagerock.com', name: 'Sage at SageRock' },
+    replyTo: { email: 'rocky@sagerock.com', name: 'Rocky Lewis' },
+    subject: 'Your SageRock booth resources (AWSNA 2026)',
+    text: textBody,
+    html: htmlBody,
+  })
+
+  console.log(`📧 AWSNA resources email sent to ${contact.email}`)
+}
 
 /**
  * Generate and send an AI-powered welcome email using Claude
