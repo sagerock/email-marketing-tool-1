@@ -6520,13 +6520,13 @@ async function sendAwsnaResourcesEmail(contact) {
       <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;">${greeting}</p>
       <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;">Thanks for stopping by the SageRock booth. Here is everything we shared, yours to keep:</p>
       <table style="width:100%;border-collapse:collapse;margin:18px 0;font-family:Arial,sans-serif;">${linkRows}</table>
-      <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;">Want us to look at your own enrollment funnel? Reply to this email or reach Rocky at <a href="mailto:rocky@sagerock.com" style="color:#58654d;">rocky@sagerock.com</a>. Conference attendees get a free $2,500 enrollment audit when starting a plan.</p>
+      <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;">Want us to look at your own enrollment funnel? Reply to this email or reach Rocky at <a href="mailto:rocky@sagerock.com" style="color:#58654d;">rocky@sagerock.com</a>. AWSNA attendees get our enrollment audit at half off, $1,250 instead of $2,500, through July 31.</p>
       <p style="font-size:15px;color:#444;line-height:1.6;font-family:Arial,sans-serif;margin-top:18px;">Warmly,<br>Sage &amp; the SageRock team</p>
     </div>
     <div style="max-width:560px;margin:14px auto 0;text-align:center;font-size:12px;color:#9a9483;font-family:Arial,sans-serif;">SageRock · sagerock.com/schools</div>
   </div>`
 
-  const textBody = `${greeting}\n\nThanks for stopping by the SageRock booth at AWSNA 2026. Here are your resources:\n\n${textLinks}\n\nWant us to look at your enrollment funnel? Reply here or email rocky@sagerock.com. Conference attendees get a free $2,500 enrollment audit when starting a plan.\n\nWarmly,\nSage & the SageRock team\nsagerock.com/schools`
+  const textBody = `${greeting}\n\nThanks for stopping by the SageRock booth at AWSNA 2026. Here are your resources:\n\n${textLinks}\n\nWant us to look at your enrollment funnel? Reply here or email rocky@sagerock.com. AWSNA attendees get our enrollment audit at half off, $1,250 instead of $2,500, through July 31.\n\nWarmly,\nSage & the SageRock team\nsagerock.com/schools`
 
   await sgMail.send({
     to: contact.email,
