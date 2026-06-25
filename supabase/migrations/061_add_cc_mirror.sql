@@ -1,7 +1,10 @@
 -- 061_add_cc_mirror.sql
 -- Phase 1 of pulling Constant Contact in live: a read-only MIRROR of CfA's
--- Constant Contact contacts and lists, plus a durable OAuth token store so a
--- Railway cron can run the nightly sync.
+-- Constant Contact contacts, lists, and list memberships.
+--
+-- The sync that fills these reuses the existing ENCRYPTED CC token in
+-- cc_integrations (owned by the dashboard's cc-auth) — there is no separate
+-- token store here, so two services never fight over CC's rotating refresh token.
 --
 -- IMPORTANT: these cc_* tables are a reflection of Constant Contact ONLY. They
 -- are deliberately separate from `contacts` and are NEVER a sending source.
@@ -60,23 +63,9 @@ CREATE TABLE IF NOT EXISTS cc_list_memberships (
 CREATE INDEX IF NOT EXISTS idx_cc_list_memberships_list
   ON cc_list_memberships (client_id, cc_list_id);
 
--- Durable OAuth token store + incremental watermark, one row per client.
--- CC access tokens last ~2h and the refresh token ROTATES on every refresh, so
--- the pair has to live somewhere writable (not an env var) for the cron to use.
-CREATE TABLE IF NOT EXISTS cc_sync_state (
-  client_id          UUID PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
-  access_token       TEXT,
-  refresh_token      TEXT,
-  token_expires_at   TIMESTAMPTZ,
-  updated_watermark  TIMESTAMPTZ,   -- max(updated_at_cc) seen; next run pulls updated_after this
-  last_run_at        TIMESTAMPTZ,
-  last_run_status    TEXT
-);
-
 ALTER TABLE cc_contacts          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cc_lists             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE cc_list_memberships  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cc_sync_state        ENABLE ROW LEVEL SECURITY;
 
 CREATE POLICY "Allow all operations on cc_contacts"
   ON cc_contacts FOR ALL USING (true);
@@ -84,5 +73,3 @@ CREATE POLICY "Allow all operations on cc_lists"
   ON cc_lists FOR ALL USING (true);
 CREATE POLICY "Allow all operations on cc_list_memberships"
   ON cc_list_memberships FOR ALL USING (true);
-CREATE POLICY "Allow all operations on cc_sync_state"
-  ON cc_sync_state FOR ALL USING (true);
