@@ -84,3 +84,36 @@ def fetch_session_enrollments(token: str, session_id: str) -> list:
     """Return non-deleted enrollment dicts for a session."""
     rows = _paginate(token, "/ea/sessions/enrollment", {"filter": f"session.id eq '{session_id}'"})
     return [r for r in rows if not r.get("deleted")]
+
+
+def enrollments_from_registration_type(all_attendees: dict, registration_type_id: str) -> list:
+    """Synthesize enrollment dicts for attendees matched by registration TYPE.
+
+    Some Cvent products (e.g. CfA's "Morning Community Gatherings Only") are sold
+    as a standalone registration type / admission item, not a session, so those
+    registrants never appear in /ea/sessions/enrollment — matching by session
+    finds nobody. They are identifiable directly on the attendee roster via
+    registrationType.id. We shape the result to match fetch_session_enrollments
+    so the sync loop downstream is identical.
+    """
+    out = []
+    for att_id, att in all_attendees.items():
+        raw = att.get("raw") or {}
+        rt_id = (raw.get("registrationType") or {}).get("id")
+        if rt_id != registration_type_id:
+            continue
+        # Live registrations only — skip declined/deleted invitees.
+        if raw.get("status") != "Accepted":
+            continue
+        if (raw.get("contact") or {}).get("deleted"):
+            continue
+        out.append({
+            "id": raw.get("id", att_id),
+            "attendee": {"id": att_id},
+            "status": "Registered",
+            "registrationDate": raw.get("registeredAt"),
+            "registrationType": raw.get("registrationType"),
+            "admissionItem": raw.get("admissionItem"),
+            "matchedBy": "registration_type",
+        })
+    return out
