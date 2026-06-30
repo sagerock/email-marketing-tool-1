@@ -133,7 +133,9 @@
       "year": 2026,
       "format": "online",
       "instructor": null,
-      "tag": "morning-community-gatherings-renewal-2026-online"
+      "tag": "morning-community-gatherings-renewal-2026-online",
+      "match": "registration_type",
+      "registration_type_id": "f758eeaa-7dba-4c06-b30b-fec097640f48"
     }
   }
 }

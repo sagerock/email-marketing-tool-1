@@ -47,8 +47,13 @@ def sync_cvent_session(
         print(f"  Fetching attendees for event {event_id}...")
         all_attendees = cvent.fetch_attendees(token, event_id)
 
-    print(f"  Fetching enrollments for session {session_id}...")
-    enrollments = cvent.fetch_session_enrollments(token, session_id)
+    if session_config.get("match") == "registration_type":
+        rtid = session_config["registration_type_id"]
+        print(f"  Matching attendees by registration type {rtid}...")
+        enrollments = cvent.enrollments_from_registration_type(all_attendees, rtid)
+    else:
+        print(f"  Fetching enrollments for session {session_id}...")
+        enrollments = cvent.fetch_session_enrollments(token, session_id)
     print(f"  {len(enrollments)} enrollments found")
 
     if not dry_run:

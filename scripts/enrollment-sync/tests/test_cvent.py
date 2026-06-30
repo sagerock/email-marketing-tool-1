@@ -64,6 +64,44 @@ def test_fetch_sessions_returns_list(mock_get):
     assert result[0]["id"] == "session-1"
 
 
+def test_enrollments_from_registration_type_matches_and_shapes():
+    all_attendees = {
+        "att-1": {"email": "cg@example.com", "raw": {
+            "id": "reg-1", "status": "Accepted", "registeredAt": "2026-06-26T12:08:31Z",
+            "contact": {"deleted": False},
+            "registrationType": {"id": "rt-cg", "name": "Community Gatherings Only"},
+            "admissionItem": {"id": "ai-cg", "name": "Morning Community Gatherings (Online) Only"},
+        }},
+        "att-2": {"email": "grade@example.com", "raw": {
+            "id": "reg-2", "status": "Accepted",
+            "registrationType": {"id": "rt-grade"},
+            "contact": {"deleted": False},
+        }},
+    }
+    result = cvent.enrollments_from_registration_type(all_attendees, "rt-cg")
+    assert len(result) == 1
+    enr = result[0]
+    assert enr["attendee"]["id"] == "att-1"
+    assert enr["id"] == "reg-1"
+    assert enr["status"] == "Registered"
+    assert enr["registrationDate"] == "2026-06-26T12:08:31Z"
+
+
+def test_enrollments_from_registration_type_skips_declined_and_deleted():
+    all_attendees = {
+        "att-declined": {"email": "d@example.com", "raw": {
+            "id": "reg-d", "status": "Declined", "contact": {"deleted": False},
+            "registrationType": {"id": "rt-cg"},
+        }},
+        "att-deleted": {"email": "x@example.com", "raw": {
+            "id": "reg-x", "status": "Accepted", "contact": {"deleted": True},
+            "registrationType": {"id": "rt-cg"},
+        }},
+    }
+    result = cvent.enrollments_from_registration_type(all_attendees, "rt-cg")
+    assert result == []
+
+
 def _mock_error_response(status_code, headers=None):
     m = MagicMock()
     m.status_code = status_code
