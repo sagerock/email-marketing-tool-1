@@ -72,6 +72,7 @@ export default function AIAgents() {
     followup_delays: '1, 3, 7',
     system_prompt: '',
     log_to_salesforce: false,
+    auto_send: false,
   })
 
   const fetchConfigs = useCallback(async () => {
@@ -221,12 +222,13 @@ export default function AIAgents() {
           followup_delays: delays,
           system_prompt: newAgent.system_prompt || null,
           log_to_salesforce: newAgent.log_to_salesforce,
+          auto_send: newAgent.auto_send,
         }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setShowCreateAgent(false)
-      setNewAgent({ name: '', trigger_type: 'tag', trigger_tag: '', from_email: '', from_name: '', reply_to: '', bcc_email: '', max_followups: 3, followup_delays: '1, 3, 7', system_prompt: '', log_to_salesforce: false })
+      setNewAgent({ name: '', trigger_type: 'tag', trigger_tag: '', from_email: '', from_name: '', reply_to: '', bcc_email: '', max_followups: 3, followup_delays: '1, 3, 7', system_prompt: '', log_to_salesforce: false, auto_send: false })
       await fetchConfigs()
     } catch (error: any) {
       alert(`Failed to create agent: ${error.message}`)
@@ -892,6 +894,7 @@ export default function AIAgents() {
                         followup_delays: editingConfig.followup_delays.join(', '),
                         system_prompt: editingConfig.system_prompt || '',
                         log_to_salesforce: editingConfig.log_to_salesforce,
+                        auto_send: editingConfig.auto_send || false,
                       } : newAgent}
                       onChange={editingConfig ? undefined : setNewAgent}
                       onSave={async (vals) => {
@@ -909,6 +912,7 @@ export default function AIAgents() {
                             followup_delays: delays,
                             system_prompt: vals.system_prompt || undefined,
                             log_to_salesforce: vals.log_to_salesforce,
+                            auto_send: vals.auto_send,
                           } as any)
                           setEditingConfig(null)
                         } else {
@@ -947,6 +951,11 @@ export default function AIAgents() {
                               <Badge variant={config.enabled ? 'success' : 'default'}>
                                 {config.enabled ? 'Active' : 'Disabled'}
                               </Badge>
+                              {config.auto_send && (
+                                <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-800 border border-amber-300 px-2 py-0.5 text-xs font-medium">
+                                  Auto-send
+                                </span>
+                              )}
                             </div>
                             <div className="mt-1 text-sm text-gray-500 space-y-0.5">
                               <p>
@@ -1190,6 +1199,20 @@ function AgentForm({
           <span className="text-gray-700">Log sent emails as Tasks in Salesforce</span>
         </label>
       )}
+      <div className={`rounded-lg border p-3 ${vals.auto_send ? 'bg-amber-50 border-amber-300' : 'border-gray-200'}`}>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input
+            type="checkbox"
+            checked={vals.auto_send || false}
+            onChange={e => update('auto_send', e.target.checked)}
+            className="rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+          />
+          <span className="text-gray-700 font-medium">Auto-send (skip the approval queue)</span>
+        </label>
+        <p className="text-xs text-gray-500 mt-1 ml-6">
+          Emails are sent immediately when the AI generates them — no human review. If a send fails, the draft falls back to the pending queue.
+        </p>
+      </div>
       <div className="flex gap-2 pt-2">
         <Button onClick={handleSubmit} disabled={saving}>
           {saving ? <RefreshCw className="h-4 w-4 animate-spin mr-1" /> : null}

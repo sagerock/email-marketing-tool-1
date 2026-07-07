@@ -316,6 +316,7 @@ export interface AIFollowupConfig {
   followup_delays: number[]
   system_prompt?: string
   log_to_salesforce: boolean
+  auto_send: boolean
   created_at: string
   updated_at: string
 }

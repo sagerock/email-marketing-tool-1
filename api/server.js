@@ -6812,7 +6812,7 @@ app.get('/api/ai-followup/configs', async (req, res) => {
 // Create a new AI agent config
 app.post('/api/ai-followup/configs', async (req, res) => {
   try {
-    const { clientId, name, trigger_type, trigger_tag, from_email, from_name, reply_to, bcc_email, max_followups, followup_delays, system_prompt, log_to_salesforce } = req.body
+    const { clientId, name, trigger_type, trigger_tag, from_email, from_name, reply_to, bcc_email, max_followups, followup_delays, system_prompt, log_to_salesforce, auto_send } = req.body
     if (!clientId || !name || !from_email || !from_name) {
       return res.status(400).json({ error: 'clientId, name, from_email, and from_name are required' })
     }
@@ -6836,6 +6836,7 @@ app.post('/api/ai-followup/configs', async (req, res) => {
         followup_delays: followup_delays || [1, 3, 7],
         system_prompt: system_prompt || null,
         log_to_salesforce: log_to_salesforce || false,
+        auto_send: auto_send || false,
         enabled: false,
       })
       .select()
@@ -7064,6 +7065,19 @@ ${contactContext}${formContext}${resourceContext}${previousContext}`
     if (draftError) throw draftError
 
     console.log(`🤖 AI draft generated for ${contact.email} (step ${stepNumber}) - config: ${config.name}`)
+
+    // Auto-send: skip the approval queue when the agent is configured for it.
+    // If the send fails, the draft stays 'pending' and falls back to the manual queue.
+    if (config.auto_send) {
+      try {
+        const { messageId } = await sendAiFollowupDraft(draft.id, null)
+        console.log(`🚀 Auto-sent AI draft to ${contact.email} (${config.name} step ${stepNumber})`)
+        return res.json({ ...draft, status: 'sent', sendgrid_message_id: messageId, auto_sent: true })
+      } catch (sendError) {
+        console.error(`⚠️ Auto-send failed for draft ${draft.id} — left pending for manual review:`, sendError.message)
+      }
+    }
+
     res.json(draft)
   } catch (error) {
     console.error('Error generating AI draft:', error)
@@ -7100,139 +7114,161 @@ app.get('/api/ai-followup/drafts', async (req, res) => {
 })
 
 // Approve and send an AI draft
+/**
+ * Core send path for an AI follow-up draft — shared by the manual approve
+ * endpoint and auto_send agents (send immediately on generation).
+ * Validation problems throw with .statusCode and .validation = true so
+ * callers can tell "bad state, don't mark failed" apart from real send errors.
+ */
+async function sendAiFollowupDraft(draftId, reviewedBy = null) {
+  const fail = (statusCode, message) => {
+    const err = new Error(message)
+    err.statusCode = statusCode
+    err.validation = true
+    throw err
+  }
+
+  // Fetch the draft with config and contact info
+  const { data: draft, error: draftError } = await supabase
+    .from('ai_followup_drafts')
+    .select(`
+      *,
+      contact:contacts(id, email, first_name, last_name, salesforce_id, unsubscribed),
+      config:ai_followup_config(id, name, from_email, from_name, reply_to, bcc_email, log_to_salesforce, max_followups, followup_delays, client_id)
+    `)
+    .eq('id', draftId)
+    .single()
+
+  if (draftError) throw draftError
+  if (!draft) fail(404, 'Draft not found')
+  if (draft.status !== 'pending') fail(400, `Draft is already ${draft.status}`)
+  if (draft.contact?.unsubscribed) fail(400, 'Contact has unsubscribed')
+
+  // Fetch client SendGrid API key
+  const { data: clientRaw } = await supabase
+    .from('clients')
+    .select('sendgrid_api_key')
+    .eq('id', draft.client_id)
+    .single()
+
+  const client = decryptClient(clientRaw)
+  if (!client?.sendgrid_api_key) {
+    fail(400, 'Client does not have a SendGrid API key configured')
+  }
+
+  // Build unsubscribe URL
+  const baseUrl = process.env.BASE_URL || process.env.FRONTEND_URL || 'https://mail.sagerock.com'
+
+  // Fetch the contact's unsubscribe token
+  const { data: fullContact } = await supabase
+    .from('contacts')
+    .select('unsubscribe_token')
+    .eq('id', draft.contact_id)
+    .single()
+
+  const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${fullContact?.unsubscribe_token || ''}`
+
+  // Send via SendGrid
+  sgMail.setApiKey(client.sendgrid_api_key)
+  const msg = {
+    to: draft.contact.email,
+    from: { email: draft.config.from_email, name: draft.config.from_name },
+    replyTo: draft.config.reply_to || undefined,
+    bcc: draft.config.bcc_email ? [{ email: draft.config.bcc_email }] : undefined,
+    subject: draft.subject,
+    html: draft.html_content,
+    text: draft.plain_text,
+    customArgs: {
+      ai_followup_draft_id: draft.id,
+      ai_followup_config_id: draft.config_id,
+    },
+    headers: {
+      'List-Unsubscribe': `<${unsubscribeUrl}>`,
+      'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+    },
+  }
+
+  const [sgResponse] = await sgMail.send(msg)
+  const messageId = sgResponse?.headers?.['x-message-id'] || null
+
+  // Update draft status to sent
+  const now = new Date().toISOString()
+  await supabase
+    .from('ai_followup_drafts')
+    .update({
+      status: 'sent',
+      reviewed_by: reviewedBy || null,
+      reviewed_at: now,
+      sent_at: now,
+      sendgrid_message_id: messageId,
+    })
+    .eq('id', draftId)
+
+  // Update followup contact record
+  if (draft.followup_contact_id) {
+    const config = draft.config
+    const nextStep = draft.step_number
+    const isComplete = nextStep >= config.max_followups
+
+    const contactUpdate = {
+      current_step: nextStep,
+      last_email_sent_at: now,
+    }
+
+    if (isComplete) {
+      contactUpdate.status = 'completed'
+      contactUpdate.completed_at = now
+      contactUpdate.next_followup_at = null
+    } else {
+      // Calculate next followup time
+      const delayDays = config.followup_delays[nextStep] || config.followup_delays[config.followup_delays.length - 1] || 7
+      const nextDate = new Date()
+      nextDate.setDate(nextDate.getDate() + delayDays)
+      contactUpdate.next_followup_at = nextDate.toISOString()
+    }
+
+    await supabase
+      .from('ai_followup_contacts')
+      .update(contactUpdate)
+      .eq('id', draft.followup_contact_id)
+  }
+
+  // Salesforce Task write-back (non-blocking)
+  if (draft.config.log_to_salesforce && draft.contact.salesforce_id) {
+    try {
+      const taskResult = await createSalesforceTask(draft.client_id, {
+        whoId: draft.contact.salesforce_id,
+        subject: `AI Follow-up: ${draft.subject}`,
+        description: `Automated follow-up email sent via AI Agent "${draft.config.name}".\n\nStep ${draft.step_number} of ${draft.config.max_followups}.\n\n${draft.plain_text}`,
+      })
+      if (taskResult?.id) {
+        await supabase
+          .from('ai_followup_drafts')
+          .update({ salesforce_task_id: taskResult.id })
+          .eq('id', draftId)
+      }
+    } catch (sfError) {
+      console.error('⚠️ SF Task creation failed (non-blocking):', sfError.message)
+    }
+  }
+
+  return { draft, messageId }
+}
+
 app.post('/api/ai-followup/drafts/:id/approve', async (req, res) => {
   try {
     const { id } = req.params
     const { reviewedBy } = req.body
 
-    // Fetch the draft with config and contact info
-    const { data: draft, error: draftError } = await supabase
-      .from('ai_followup_drafts')
-      .select(`
-        *,
-        contact:contacts(id, email, first_name, last_name, salesforce_id, unsubscribed),
-        config:ai_followup_config(id, name, from_email, from_name, reply_to, bcc_email, log_to_salesforce, max_followups, followup_delays, client_id)
-      `)
-      .eq('id', id)
-      .single()
-
-    if (draftError) throw draftError
-    if (!draft) return res.status(404).json({ error: 'Draft not found' })
-    if (draft.status !== 'pending') return res.status(400).json({ error: `Draft is already ${draft.status}` })
-    if (draft.contact?.unsubscribed) return res.status(400).json({ error: 'Contact has unsubscribed' })
-
-    // Fetch client SendGrid API key
-    const { data: clientRaw } = await supabase
-      .from('clients')
-      .select('sendgrid_api_key')
-      .eq('id', draft.client_id)
-      .single()
-
-    const client = decryptClient(clientRaw)
-    if (!client?.sendgrid_api_key) {
-      return res.status(400).json({ error: 'Client does not have a SendGrid API key configured' })
-    }
-
-    // Build unsubscribe URL
-    const baseUrl = process.env.BASE_URL || process.env.FRONTEND_URL || 'https://mail.sagerock.com'
-
-    // Fetch the contact's unsubscribe token
-    const { data: fullContact } = await supabase
-      .from('contacts')
-      .select('unsubscribe_token')
-      .eq('id', draft.contact_id)
-      .single()
-
-    const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${fullContact?.unsubscribe_token || ''}`
-
-    // Send via SendGrid
-    sgMail.setApiKey(client.sendgrid_api_key)
-    const msg = {
-      to: draft.contact.email,
-      from: { email: draft.config.from_email, name: draft.config.from_name },
-      replyTo: draft.config.reply_to || undefined,
-      bcc: draft.config.bcc_email ? [{ email: draft.config.bcc_email }] : undefined,
-      subject: draft.subject,
-      html: draft.html_content,
-      text: draft.plain_text,
-      customArgs: {
-        ai_followup_draft_id: draft.id,
-        ai_followup_config_id: draft.config_id,
-      },
-      headers: {
-        'List-Unsubscribe': `<${unsubscribeUrl}>`,
-        'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
-      },
-    }
-
-    const [sgResponse] = await sgMail.send(msg)
-    const messageId = sgResponse?.headers?.['x-message-id'] || null
-
-    // Update draft status to sent
-    const now = new Date().toISOString()
-    await supabase
-      .from('ai_followup_drafts')
-      .update({
-        status: 'sent',
-        reviewed_by: reviewedBy || null,
-        reviewed_at: now,
-        sent_at: now,
-        sendgrid_message_id: messageId,
-      })
-      .eq('id', id)
-
-    // Update followup contact record
-    if (draft.followup_contact_id) {
-      const config = draft.config
-      const nextStep = draft.step_number
-      const isComplete = nextStep >= config.max_followups
-
-      const contactUpdate = {
-        current_step: nextStep,
-        last_email_sent_at: now,
-      }
-
-      if (isComplete) {
-        contactUpdate.status = 'completed'
-        contactUpdate.completed_at = now
-        contactUpdate.next_followup_at = null
-      } else {
-        // Calculate next followup time
-        const delayDays = config.followup_delays[nextStep] || config.followup_delays[config.followup_delays.length - 1] || 7
-        const nextDate = new Date()
-        nextDate.setDate(nextDate.getDate() + delayDays)
-        contactUpdate.next_followup_at = nextDate.toISOString()
-      }
-
-      await supabase
-        .from('ai_followup_contacts')
-        .update(contactUpdate)
-        .eq('id', draft.followup_contact_id)
-    }
-
-    // Salesforce Task write-back (non-blocking)
-    if (draft.config.log_to_salesforce && draft.contact.salesforce_id) {
-      try {
-        const taskResult = await createSalesforceTask(draft.client_id, {
-          whoId: draft.contact.salesforce_id,
-          subject: `AI Follow-up: ${draft.subject}`,
-          description: `Automated follow-up email sent via AI Agent "${draft.config.name}".\n\nStep ${draft.step_number} of ${draft.config.max_followups}.\n\n${draft.plain_text}`,
-        })
-        if (taskResult?.id) {
-          await supabase
-            .from('ai_followup_drafts')
-            .update({ salesforce_task_id: taskResult.id })
-            .eq('id', id)
-        }
-      } catch (sfError) {
-        console.error('⚠️ SF Task creation failed (non-blocking):', sfError.message)
-      }
-    }
+    const { draft, messageId } = await sendAiFollowupDraft(id, reviewedBy || null)
 
     console.log(`✅ AI draft approved and sent to ${draft.contact.email} (${draft.config.name} step ${draft.step_number})`)
     res.json({ success: true, messageId })
   } catch (error) {
     console.error('Error approving AI draft:', error)
+    if (error.validation) {
+      return res.status(error.statusCode).json({ error: error.message })
+    }
     // Update draft as failed
     await supabase
       .from('ai_followup_drafts')
