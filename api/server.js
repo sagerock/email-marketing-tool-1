@@ -2417,6 +2417,23 @@ Remind the user if they ask you to remove these.
 ${brandReferenceContext ? `BRAND REFERENCE:
 The user message may include a <brand_reference> block containing the client's current canonical brand template. Treat it as the default visual style: match its colors, fonts, header/footer, button styling, layout structure, and overall aesthetic in any email you produce, unless the user explicitly asks for a different style. The brand reference is a style guide, not the email content — copy its structure and styling, not its words.\n` : ''}${templateListStr ? `AVAILABLE PREVIOUS EMAILS (the user may reference these by name):\n${templateListStr}\n\nWhen the user references a previous email, they may provide its HTML as a <reference_email> block. Use it as a starting point or inspiration as directed.` : ''}
 
+OUTLOOK / WORD-ENGINE HARD RULES (these bugs are INVISIBLE in browser preview — they only appear in classic desktop Outlook on Windows, which renders with Microsoft Word, not a browser engine. Follow these exactly):
+- NEVER use a CSS border (border-top / border-bottom) as a section separator or horizontal rule. Word can render it doubled — the border plus a phantom seam show as two parallel lines.
+- NEVER use a thin table row (1–3px tall) whose only content is whitespace/&nbsp; with a background-color as a divider. Word inflates short rows to a minimum height and renders the top AND bottom edges as two separate hairlines.
+- NEVER put font-size:0 or line-height:0 on a <td> that contains an <img>. Word collapses the cell to zero height and the image DISAPPEARS entirely. (Safe in every other client — this one is Outlook-specific and silent.)
+- Word paints faint ~1px seams of the page background color at nested-table / section boundaries on its own. Any additional visible separator line placed next to one reads as "doubled." The reliable rule: give classic Outlook NO visible separator lines at all — separate sections with padding/whitespace instead.
+- When a visible divider line IS wanted for modern clients, hide it from Word with a downlevel-revealed conditional comment so Outlook falls back to clean whitespace. Canonical section divider (use this pattern; adjust color/padding to the brand):
+  <!--[if !mso]><!-->
+  <tr>
+   <td style="padding:0 40px;Margin:0">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt">
+     <tr><td style="height:1px;line-height:1px;font-size:1px;background-color:#E3E8EE">&nbsp;</td></tr>
+    </table>
+   </td>
+  </tr>
+  <!--<![endif]-->
+- Prefer generous top/bottom padding on each section's <td> to define rhythm; reach for a visible line only when the design truly needs one, and then only via the conditional-comment pattern above.
+
 DESIGN BEST PRACTICES:
 - Keep email width at 600px for maximum compatibility
 - Use web-safe fonts (Arial, Georgia, Verdana, Times New Roman)

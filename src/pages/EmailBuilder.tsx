@@ -4,7 +4,7 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
 import { cn } from '../lib/utils'
 
@@ -59,6 +59,7 @@ export default function EmailBuilder() {
 
   // Template reference state
   const [templateIndex, setTemplateIndex] = useState<TemplateIndexItem[]>([])
+  const [starters, setStarters] = useState<TemplateIndexItem[]>([])
   const [, setSentCampaigns] = useState<SentCampaignItem[]>([])
   const [referenceTemplateIds, setReferenceTemplateIds] = useState<string[]>([])
   const [showReferencePicker, setShowReferencePicker] = useState(false)
@@ -87,6 +88,7 @@ export default function EmailBuilder() {
     if (!selectedClient) return
     fetchTemplateIndex()
     fetchFolders()
+    fetchStarters()
   }, [selectedClient])
 
   // Load existing template when editTemplateId is in URL
@@ -158,6 +160,49 @@ export default function EmailBuilder() {
       setFolders(data || [])
     } catch (err) {
       console.error('Failed to fetch folders:', err)
+    }
+  }
+
+  // Starter layouts: proven, Outlook-hardened templates a user can build from.
+  const fetchStarters = async () => {
+    try {
+      const { data } = await supabase
+        .from('templates')
+        .select('id, name, subject, preview_text, created_at')
+        .eq('client_id', selectedClient!.id)
+        .eq('is_starter', true)
+        .order('name')
+      setStarters(data || [])
+    } catch (err) {
+      console.error('Failed to fetch starters:', err)
+    }
+  }
+
+  // Load a starter's HTML into the canvas as a NEW draft (does not edit the
+  // starter itself) and reference it so the AI preserves its structure.
+  const startFromStarter = async (starter: TemplateIndexItem) => {
+    try {
+      const { data, error } = await supabase
+        .from('templates')
+        .select('id, name, subject, preview_text, html_content')
+        .eq('id', starter.id)
+        .eq('client_id', selectedClient!.id)
+        .single()
+      if (error || !data) return
+      setCurrentHtml(data.html_content || '')
+      setCurrentSubject(data.subject || '')
+      setCurrentPreviewText(data.preview_text || '')
+      if (!referenceTemplateIds.includes(data.id)) {
+        setReferenceTemplateIds(prev => [...prev, data.id].slice(0, 2))
+      }
+      setMessages([{
+        id: 'starter-init',
+        role: 'assistant',
+        content: `Started from the "${data.name}" layout — an Outlook-safe base. Tell me what to change (swap the copy, update the product, adjust sections) and I'll keep the structure intact.`,
+        htmlContent: data.html_content || undefined,
+      }])
+    } catch (err) {
+      console.error('Failed to start from starter:', err)
     }
   }
 
@@ -478,6 +523,24 @@ export default function EmailBuilder() {
                     <li>Iterate on the current design ("make the button bigger", "change the colors")</li>
                   </ul>
                   <p className="mt-2">What would you like to build?</p>
+                  {starters.length > 0 && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <p className="text-xs font-medium text-gray-500 mb-2">Start from a layout</p>
+                      <div className="flex flex-wrap gap-2">
+                        {starters.map(s => (
+                          <button
+                            key={s.id}
+                            onClick={() => startFromStarter(s)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-purple-50 border border-purple-200 rounded-full text-xs text-purple-700 hover:bg-purple-100 transition-colors"
+                            title={s.subject || s.name}
+                          >
+                            <LayoutTemplate className="h-3 w-3" />
+                            {s.name.length > 32 ? s.name.substring(0, 32) + '…' : s.name}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
