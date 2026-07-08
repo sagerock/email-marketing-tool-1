@@ -34,3 +34,4 @@ dist-ssr
 # Supabase temp files
 supabase/.temp/
 supabase/emails/
+outlook-preview-out/
