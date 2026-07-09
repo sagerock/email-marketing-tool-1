@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { supabase } from '../lib/supabase'
+import { apiFetch } from '../lib/api'
 import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import { CheckCircle, XCircle, Mail } from 'lucide-react'
@@ -31,17 +31,12 @@ export default function Unsubscribe() {
 
     setLoading(true)
     try {
-      const { data, error: fetchError } = await supabase
-        .from('contacts')
-        .select('id, email, unsubscribed')
-        .eq('unsubscribe_token', token)
-        .single()
-
-      if (fetchError || !data) {
+      const res = await apiFetch(`/unsubscribe-info?token=${encodeURIComponent(token)}`)
+      if (!res.ok) {
         setError('Invalid or expired unsubscribe link.')
         return
       }
-
+      const data = await res.json()
       setContact(data)
     } catch (err) {
       console.error('Error fetching contact:', err)
@@ -56,28 +51,10 @@ export default function Unsubscribe() {
 
     setProcessing(true)
     try {
-      const { error: updateError } = await supabase
-        .from('contacts')
-        .update({
-          unsubscribed: true,
-          unsubscribed_at: new Date().toISOString(),
-        })
-        .eq('unsubscribe_token', token)
-
-      if (updateError) throw updateError
-
-      // Create analytics event for tracking (if campaign_id is available)
-      if (campaignId) {
-        await supabase
-          .from('analytics_events')
-          .insert({
-            campaign_id: campaignId,
-            email: contact.email,
-            event_type: 'unsubscribe',
-            timestamp: new Date().toISOString(),
-            sg_event_id: `unsubscribe-${contact.id}-${Date.now()}`,
-          })
-      }
+      const params = new URLSearchParams({ token })
+      if (campaignId) params.set('campaign_id', campaignId)
+      const res = await apiFetch(`/unsubscribe?${params.toString()}`, { method: 'POST' })
+      if (!res.ok) throw new Error('Unsubscribe failed')
 
       setSuccess(true)
       setContact((prev) => prev ? { ...prev, unsubscribed: true } : null)
@@ -94,15 +71,8 @@ export default function Unsubscribe() {
 
     setProcessing(true)
     try {
-      const { error: updateError } = await supabase
-        .from('contacts')
-        .update({
-          unsubscribed: false,
-          unsubscribed_at: null,
-        })
-        .eq('unsubscribe_token', token)
-
-      if (updateError) throw updateError
+      const res = await apiFetch(`/resubscribe?token=${encodeURIComponent(token)}`, { method: 'POST' })
+      if (!res.ok) throw new Error('Resubscribe failed')
 
       setSuccess(true)
       setContact((prev) => prev ? { ...prev, unsubscribed: false } : null)

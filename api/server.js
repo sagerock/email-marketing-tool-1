@@ -7844,6 +7844,60 @@ app.post('/unsubscribe', async (req, res) => {
   res.status(result.status).type('text/plain').send(result.message)
 })
 
+// Public token lookup for the in-body unsubscribe page. The browser cannot read
+// the contacts table directly (RLS only permits authenticated admins), so the
+// React page must go through the backend service key. Without this, a valid
+// unsubscribe link renders "invalid or expired." Registered BEFORE the SPA
+// catch-all so it isn't swallowed by the React router.
+app.get('/unsubscribe-info', async (req, res) => {
+  const token = req.query.token
+  if (!token) return res.status(400).json({ error: 'Missing token.' })
+  const { data, error } = await supabase
+    .from('contacts')
+    .select('id, email, unsubscribed')
+    .eq('unsubscribe_token', token)
+    .maybeSingle()
+  if (error) {
+    console.error('❌ unsubscribe-info lookup failed:', error.message)
+    return res.status(500).json({ error: 'Lookup failed.' })
+  }
+  if (!data) return res.status(404).json({ error: 'Invalid or expired unsubscribe link.' })
+  res.json({ id: data.id, email: data.email, unsubscribed: data.unsubscribed })
+})
+
+// Resubscribe (undo) by token — mirror of recordUnsubscribe, service-key path.
+async function recordResubscribe(token) {
+  if (!token) return { ok: false, status: 400, message: 'Missing token.' }
+  const { data: contact, error: lookupError } = await supabase
+    .from('contacts')
+    .select('id, email, unsubscribed')
+    .eq('unsubscribe_token', token)
+    .maybeSingle()
+  if (lookupError) {
+    console.error('❌ Resubscribe lookup failed:', lookupError.message)
+    return { ok: false, status: 500, message: 'Lookup failed.' }
+  }
+  if (!contact) return { ok: false, status: 404, message: 'Unknown token.' }
+  if (contact.unsubscribed) {
+    const { error: updateError } = await supabase
+      .from('contacts')
+      .update({ unsubscribed: false, unsubscribed_at: null })
+      .eq('unsubscribe_token', token)
+    if (updateError) {
+      console.error('❌ Resubscribe update failed:', updateError.message)
+      return { ok: false, status: 500, message: 'Could not resubscribe.' }
+    }
+    console.log(`✅ Resubscribed ${contact.email}`)
+  }
+  return { ok: true, status: 200, message: 'You have been resubscribed.' }
+}
+
+app.post('/resubscribe', async (req, res) => {
+  const token = req.query.token || req.body?.token
+  const result = await recordResubscribe(token)
+  res.status(result.status).type('text/plain').send(result.message)
+})
+
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
 
