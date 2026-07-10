@@ -7102,6 +7102,38 @@ ${contactContext}${formContext}${resourceContext}${previousContext}`
   }
 })
 
+// ---- Re-engagement / sunset (Phase 1: report-only) ----
+
+// List-health report: active / cold / protected breakdown for a client.
+app.get('/api/reengagement/health', async (req, res) => {
+  try {
+    const clientId = req.query.clientId
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+    const { data, error } = await supabase.rpc('reengagement_health', { p_client: clientId })
+    if (error) throw error
+    const { data: cfg } = await supabase
+      .from('reengagement_config').select('*').eq('client_id', clientId).maybeSingle()
+    res.json({ health: data, config: cfg || null })
+  } catch (error) {
+    console.error('Error fetching re-engagement health:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+// Manually re-run the classifier for a client (also runs daily via cron).
+app.post('/api/reengagement/scan', async (req, res) => {
+  try {
+    const clientId = req.body?.clientId
+    if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+    const { data, error } = await supabase.rpc('reengagement_classify', { p_client: clientId })
+    if (error) throw error
+    res.json({ result: data })
+  } catch (error) {
+    console.error('Error running re-engagement scan:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
 // List drafts for the approval queue
 app.get('/api/ai-followup/drafts', async (req, res) => {
   try {
@@ -8533,6 +8565,19 @@ app.listen(PORT, () => {
   })
 
   console.log('✅ Cron job started (runs every minute) - processes scheduled campaigns, automation sequences, and AI follow-ups')
+
+  // Daily re-engagement classification at 5:30 AM UTC (report-only; labels cold
+  // contacts for enabled clients — does NOT change send behavior).
+  cron.schedule('30 5 * * *', async () => {
+    try {
+      console.log('🔄 Running daily re-engagement classification...')
+      const { error } = await supabase.rpc('reengagement_classify_all')
+      if (error) throw error
+      console.log('✅ Re-engagement classification complete')
+    } catch (err) {
+      console.error('❌ Re-engagement classification failed:', err.message)
+    }
+  })
 
   // Daily Salesforce sync at 6 AM UTC
   cron.schedule('0 6 * * *', async () => {
