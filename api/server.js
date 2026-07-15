@@ -2499,6 +2499,16 @@ DESIGN BEST PRACTICES:
       messages: claudeMessages,
     })
 
+    // Cache telemetry: cache_read > 0 means the prompt cache is working;
+    // all-zero cache fields on repeat turns means a silent no-op
+    stream.on('finalMessage', (m) => {
+      const u = m.usage || {}
+      console.log(
+        `[email-builder] tokens: input=${u.input_tokens ?? 0} output=${u.output_tokens ?? 0} ` +
+        `cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0}`
+      )
+    })
+
     stream.on('text', (text) => {
       res.write(`data: ${JSON.stringify({ type: 'text', text })}\n\n`)
     })
