@@ -2447,6 +2447,11 @@ DESIGN BEST PRACTICES:
     // Build message array for Claude
     const claudeMessages = messages.slice(-10).map((msg, idx) => {
       let content = msg.content
+      // Strip any cache_control markers on caller-provided content blocks —
+      // the API allows max 4 breakpoints per request and ours are managed here
+      if (Array.isArray(content)) {
+        content = content.map(({ cache_control: _stray, ...block }) => block)
+      }
       // Inject brand reference + paperclipped references into the first user message
       if (idx === 0 && msg.role === 'user') {
         const prefix = [brandReferenceContext, referenceContext].filter(Boolean).join('\n\n')
@@ -2457,10 +2462,13 @@ DESIGN BEST PRACTICES:
 
     // Prompt caching: mark the newest turn so the next request in this
     // conversation reads the whole prior prefix (system + reference HTML +
-    // earlier turns) at ~10% of input price. Only while the slice(-10)
-    // window isn't sliding — once it slides, the prefix changes every turn
-    // and cache writes (billed at 1.25x) would never be read back.
-    if (messages.length <= 10) {
+    // earlier turns) at ~10% of input price. The frontend truncates to the
+    // last 10 messages BEFORE sending (EmailBuilder.tsx), so the server can't
+    // see the true conversation length — but a request with <= 8 messages is
+    // guaranteed un-truncated, and since each turn adds 2 messages the NEXT
+    // request (<= 10) is still un-truncated and can read this write. Beyond
+    // that the window slides every turn and writes would never be read back.
+    if (messages.length <= 8) {
       const last = claudeMessages[claudeMessages.length - 1]
       if (last && typeof last.content === 'string') {
         last.content = [{
