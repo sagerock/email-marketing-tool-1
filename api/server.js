@@ -2455,6 +2455,22 @@ DESIGN BEST PRACTICES:
       return { role: msg.role, content }
     })
 
+    // Prompt caching: mark the newest turn so the next request in this
+    // conversation reads the whole prior prefix (system + reference HTML +
+    // earlier turns) at ~10% of input price. Only while the slice(-10)
+    // window isn't sliding — once it slides, the prefix changes every turn
+    // and cache writes (billed at 1.25x) would never be read back.
+    if (messages.length <= 10) {
+      const last = claudeMessages[claudeMessages.length - 1]
+      if (last && typeof last.content === 'string') {
+        last.content = [{
+          type: 'text',
+          text: last.content,
+          cache_control: { type: 'ephemeral' },
+        }]
+      }
+    }
+
     // Set up SSE streaming
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -2465,7 +2481,13 @@ DESIGN BEST PRACTICES:
     const stream = anthropic.messages.stream({
       model: 'claude-sonnet-4-6',
       max_tokens: 16384,
-      system: systemPrompt,
+      // Cached system block: gives every turn (even after the history window
+      // slides) a stable read point covering the design-rules prompt.
+      system: [{
+        type: 'text',
+        text: systemPrompt,
+        cache_control: { type: 'ephemeral' },
+      }],
       messages: claudeMessages,
     })
 
