@@ -28,6 +28,7 @@ const { webhookLimiter, upsertLimiter } = require('./rate-limiters')
 const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
 const { filenameFromUrl, scanClientHtml } = require('./media-scan')
+const { markConversationTailForCaching } = require('./email-builder-cache')
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
 
@@ -1058,12 +1059,24 @@ async function sendCampaignById(campaignId) {
   const audienceFilter = Array.isArray(campaign.audience_filter) ? campaign.audience_filter : []
   const audienceActive = audienceFilter.length > 0 && audienceFilter.length < 3
 
+  // Safe-send gate (per-client, opt-in via clients.safe_send_only). When on, every
+  // broadcast is restricted to contacts who have engaged (opened/clicked) within the
+  // window — i.e. proven-deliverable addresses — no matter which tags/segments were
+  // picked. This is a reputation guardrail: it stops any send from reaching stale,
+  // never-validated addresses that would bounce. Only ever narrows the audience.
+  const safeSendCutoff = client.safe_send_only
+    ? new Date(Date.now() - (client.safe_send_window_days || 365) * 86400000).toISOString()
+    : null
+
   while (true) {
     let baseQuery = supabase.from('contacts')
       .select('id, email, first_name, last_name, unsubscribe_token, industry, tags, bounce_status')
       .eq('unsubscribed', false)
       .eq('client_id', campaign.client_id)
       .neq('bounce_status', 'hard')
+
+    // Reputation guardrail: only reach recently-engaged, proven-deliverable contacts.
+    if (safeSendCutoff) baseQuery = baseQuery.gte('last_engaged_at', safeSendCutoff)
 
     // Purchase filter: spend / order-count / recency predicates (null total_spent
     // and last_order_date — i.e. non-buyers — are excluded by these comparisons).
@@ -2461,23 +2474,19 @@ DESIGN BEST PRACTICES:
     })
 
     // Prompt caching: mark the newest turn so the next request in this
-    // conversation reads the whole prior prefix (system + reference HTML +
-    // earlier turns) at ~10% of input price. The frontend truncates to the
+    // conversation reads the whole prior prefix (system + earlier turns) at
+    // ~10% of input price. Requests with paperclipped reference templates are
+    // skipped because that context is ephemeral. The frontend truncates to the
     // last 10 messages BEFORE sending (EmailBuilder.tsx), so the server can't
     // see the true conversation length — but a request with <= 8 messages is
     // guaranteed un-truncated, and since each turn adds 2 messages the NEXT
     // request (<= 10) is still un-truncated and can read this write. Beyond
     // that the window slides every turn and writes would never be read back.
-    if (messages.length <= 8) {
-      const last = claudeMessages[claudeMessages.length - 1]
-      if (last && typeof last.content === 'string') {
-        last.content = [{
-          type: 'text',
-          text: last.content,
-          cache_control: { type: 'ephemeral' },
-        }]
-      }
-    }
+    markConversationTailForCaching(
+      claudeMessages,
+      messages.length,
+      Boolean(referenceTemplateIds && referenceTemplateIds.length > 0)
+    )
 
     // Set up SSE streaming
     res.writeHead(200, {
@@ -9055,4 +9064,3 @@ app.listen(PORT, () => {
 
   console.log('✅ Daily WooCommerce sync cron job started (runs at 6:30 AM UTC)')
 })
-
