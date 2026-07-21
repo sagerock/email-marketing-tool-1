@@ -1064,9 +1064,21 @@ async function sendCampaignById(campaignId) {
   // window — i.e. proven-deliverable addresses — no matter which tags/segments were
   // picked. This is a reputation guardrail: it stops any send from reaching stale,
   // never-validated addresses that would bounce. Only ever narrows the audience.
-  const safeSendCutoff = client.safe_send_only
-    ? new Date(Date.now() - (client.safe_send_window_days || 365) * 86400000).toISOString()
-    : null
+  // Grace: contacts created within safe_send_new_days are sendable before their
+  // first engagement — but only if any linked Salesforce record is also recent,
+  // so a bulk import of old leads (created_at = import time) stays gated.
+  const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString()
+  let safeSendOrClause = null
+  if (client.safe_send_only) {
+    const engagedCutoff = daysAgo(client.safe_send_window_days || 365)
+    const newCutoff = daysAgo(client.safe_send_new_days || 30)
+    const sfRecentCutoff = daysAgo((client.safe_send_new_days || 30) * 3)
+    safeSendOrClause = [
+      `last_engaged_at.gte.${engagedCutoff}`,
+      `and(created_at.gte.${newCutoff},salesforce_created_date.is.null)`,
+      `and(created_at.gte.${newCutoff},salesforce_created_date.gte.${sfRecentCutoff})`,
+    ].join(',')
+  }
 
   while (true) {
     let baseQuery = supabase.from('contacts')
@@ -1075,8 +1087,9 @@ async function sendCampaignById(campaignId) {
       .eq('client_id', campaign.client_id)
       .neq('bounce_status', 'hard')
 
-    // Reputation guardrail: only reach recently-engaged, proven-deliverable contacts.
-    if (safeSendCutoff) baseQuery = baseQuery.gte('last_engaged_at', safeSendCutoff)
+    // Reputation guardrail: recently-engaged contacts, plus genuinely-new ones.
+    // Chained .or() is ANDed with the query's other filters by PostgREST.
+    if (safeSendOrClause) baseQuery = baseQuery.or(safeSendOrClause)
 
     // Purchase filter: spend / order-count / recency predicates (null total_spent
     // and last_order_date — i.e. non-buyers — are excluded by these comparisons).
