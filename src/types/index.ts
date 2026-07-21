@@ -75,6 +75,7 @@ export interface Campaign {
     total_contacts: number
     excluded_unsubscribed: number
     excluded_hard_bounced: number
+    excluded_not_engaged?: number
     excluded_sf_campaign_filter?: number
     excluded_tag_filter?: number
     excluded_audience_filter?: number

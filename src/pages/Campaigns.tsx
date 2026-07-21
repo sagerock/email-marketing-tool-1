@@ -535,6 +535,12 @@ export default function Campaigns() {
                               <span className="text-red-600">−{campaign.send_breakdown.excluded_unsubscribed.toLocaleString()}</span>
                               <span>Hard bounced:</span>
                               <span className="text-red-600">−{campaign.send_breakdown.excluded_hard_bounced.toLocaleString()}</span>
+                              {campaign.send_breakdown.excluded_not_engaged !== undefined && campaign.send_breakdown.excluded_not_engaged > 0 && (
+                                <>
+                                  <span>Not recently engaged (safe-send):</span>
+                                  <span className="text-red-600">−{campaign.send_breakdown.excluded_not_engaged.toLocaleString()}</span>
+                                </>
+                              )}
                               {campaign.send_breakdown.excluded_sf_campaign_filter !== undefined && (
                                 <>
                                   <span>Not in SF Campaign:</span>

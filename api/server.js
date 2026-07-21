@@ -904,6 +904,27 @@ async function sendCampaignById(campaignId) {
     }
   }
 
+  // Safe-send gate (per-client, opt-in via clients.safe_send_only). When on, every
+  // broadcast is restricted to contacts who have engaged (opened/clicked) within the
+  // window — i.e. proven-deliverable addresses — no matter which tags/segments were
+  // picked. This is a reputation guardrail: it stops any send from reaching stale,
+  // never-validated addresses that would bounce. Only ever narrows the audience.
+  // Grace: contacts created within safe_send_new_days are sendable before their
+  // first engagement — but only if any linked Salesforce record is also recent,
+  // so a bulk import of old leads (created_at = import time) stays gated.
+  const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString()
+  let safeSendOrClause = null
+  if (client.safe_send_only) {
+    const engagedCutoff = daysAgo(client.safe_send_window_days || 365)
+    const newCutoff = daysAgo(client.safe_send_new_days || 30)
+    const sfRecentCutoff = daysAgo((client.safe_send_new_days || 30) * 3)
+    safeSendOrClause = [
+      `last_engaged_at.gte.${engagedCutoff}`,
+      `and(created_at.gte.${newCutoff},salesforce_created_date.is.null)`,
+      `and(created_at.gte.${newCutoff},salesforce_created_date.gte.${sfRecentCutoff})`,
+    ].join(',')
+  }
+
   // 4b. Count contacts excluded by each filter for the send breakdown
   const breakdown = { total_contacts: 0, excluded_unsubscribed: 0, excluded_hard_bounced: 0, final_recipients: 0 }
 
@@ -926,6 +947,18 @@ async function sendCampaignById(campaignId) {
     .eq('client_id', campaign.client_id)
     .eq('bounce_status', 'hard')
   breakdown.excluded_hard_bounced = bounceCount || 0
+
+  // Safe-send gate exclusions (stale: no recent engagement and not a new contact)
+  if (safeSendOrClause) {
+    const { count: safePassCount } = await supabase.from('contacts')
+      .select('id', { count: 'exact', head: true })
+      .eq('client_id', campaign.client_id)
+      .eq('unsubscribed', false)
+      .neq('bounce_status', 'hard')
+      .or(safeSendOrClause)
+    const eligibleAfterBounceUnsub = breakdown.total_contacts - breakdown.excluded_unsubscribed - breakdown.excluded_hard_bounced
+    breakdown.excluded_not_engaged = Math.max(0, eligibleAfterBounceUnsub - (safePassCount || 0))
+  }
 
   // SF campaign filter exclusions (contacts not in the SF campaign)
   if (sfCampaignContactIds) {
@@ -1058,27 +1091,6 @@ async function sendCampaignById(campaignId) {
   // Audience filter: subset of ['lead', 'customer', 'dealer']. Empty/null = all.
   const audienceFilter = Array.isArray(campaign.audience_filter) ? campaign.audience_filter : []
   const audienceActive = audienceFilter.length > 0 && audienceFilter.length < 3
-
-  // Safe-send gate (per-client, opt-in via clients.safe_send_only). When on, every
-  // broadcast is restricted to contacts who have engaged (opened/clicked) within the
-  // window — i.e. proven-deliverable addresses — no matter which tags/segments were
-  // picked. This is a reputation guardrail: it stops any send from reaching stale,
-  // never-validated addresses that would bounce. Only ever narrows the audience.
-  // Grace: contacts created within safe_send_new_days are sendable before their
-  // first engagement — but only if any linked Salesforce record is also recent,
-  // so a bulk import of old leads (created_at = import time) stays gated.
-  const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString()
-  let safeSendOrClause = null
-  if (client.safe_send_only) {
-    const engagedCutoff = daysAgo(client.safe_send_window_days || 365)
-    const newCutoff = daysAgo(client.safe_send_new_days || 30)
-    const sfRecentCutoff = daysAgo((client.safe_send_new_days || 30) * 3)
-    safeSendOrClause = [
-      `last_engaged_at.gte.${engagedCutoff}`,
-      `and(created_at.gte.${newCutoff},salesforce_created_date.is.null)`,
-      `and(created_at.gte.${newCutoff},salesforce_created_date.gte.${sfRecentCutoff})`,
-    ].join(',')
-  }
 
   while (true) {
     let baseQuery = supabase.from('contacts')
