@@ -920,10 +920,15 @@ async function sendCampaignById(campaignId) {
   let safeSendOrClause = null
   if (client.safe_send_only && !campaign.bypass_safe_send) {
     const engagedCutoff = daysAgo(client.safe_send_window_days || 365)
+    const activityCutoff = daysAgo(client.safe_send_activity_days || 60)
     const newCutoff = daysAgo(client.safe_send_new_days || 30)
     const sfRecentCutoff = daysAgo((client.safe_send_new_days || 30) * 3)
     safeSendOrClause = [
       `last_engaged_at.gte.${engagedCutoff}`,
+      // Recent-activity grace: fresh intent (download/order/open/signup) within the
+      // window makes a contact sendable even without a prior email open. last_activity_at
+      // is maintained nightly by refresh_alconox_safe_send().
+      `last_activity_at.gte.${activityCutoff}`,
       `and(created_at.gte.${newCutoff},salesforce_created_date.is.null)`,
       `and(created_at.gte.${newCutoff},salesforce_created_date.gte.${sfRecentCutoff})`,
     ].join(',')
