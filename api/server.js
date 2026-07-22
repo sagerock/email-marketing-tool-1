@@ -107,6 +107,8 @@ const corsOptions = {
       'https://mail.sagerock.com', // Production frontend
       'https://sagerock.com',      // WordPress site (public signup form)
       'https://www.sagerock.com',  // WordPress site (www variant)
+      'https://sagerock-web.onrender.com', // Astro site rebuild (public forms)
+      'http://localhost:4321',     // Astro local dev
     ]
 
     // Allow requests with no origin (like mobile apps or curl requests)
