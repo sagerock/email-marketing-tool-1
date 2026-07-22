@@ -914,9 +914,11 @@ async function sendCampaignById(campaignId) {
   // Grace: contacts created within safe_send_new_days are sendable before their
   // first engagement — but only if any linked Salesforce record is also recent,
   // so a bulk import of old leads (created_at = import time) stays gated.
+  // Per-campaign escape hatch: campaigns.bypass_safe_send skips the gate for a
+  // single send (e.g. deliberate re-engagement to a fresh, intent-based list).
   const daysAgo = (d) => new Date(Date.now() - d * 86400000).toISOString()
   let safeSendOrClause = null
-  if (client.safe_send_only) {
+  if (client.safe_send_only && !campaign.bypass_safe_send) {
     const engagedCutoff = daysAgo(client.safe_send_window_days || 365)
     const newCutoff = daysAgo(client.safe_send_new_days || 30)
     const sfRecentCutoff = daysAgo((client.safe_send_new_days || 30) * 3)
