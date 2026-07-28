@@ -44,6 +44,25 @@
  *   --prune       ALSO remove the tag from contacts that no longer qualify. Off by
  *                 default so a first run is purely additive and can't silently shrink
  *                 an audience someone is about to send to.
+ *   --exclude-tag=<a,b>  drop anyone carrying these tags — normally the tag a previous
+ *                 send targeted, so the same people don't get the same email twice.
+ *
+ * ON EXCLUDING PRIOR RECIPIENTS — read this before trusting it.
+ * This tool keeps NO per-recipient send log. There is no campaign_recipients table;
+ * the only per-person trace of a send is analytics_events, which holds SendGrid
+ * webhook events and is lossy (the 2026-07-23 send reports sent_count=64 but only 50
+ * people have any event row). So "who already got it" cannot be read off the system —
+ * it can only be reconstructed from the tag that send targeted.
+ *
+ * For the 2026-07-23 send that reconstruction is sound: all 50 people with event rows
+ * sit inside the 70-person tag, so the tag is a superset of the true recipients. The
+ * cost of using it is that up to 6 people who were tagged but NOT sent to also get
+ * excluded. That is the safe direction to be wrong in — skipping 6 eligible people
+ * beats mailing someone the same follow-up twice.
+ *
+ * Exclusions are per-run, not permanent: the tag is rebuilt from scratch each time, so
+ * six months from now, when these people are due a fresh follow-up, simply don't pass
+ * --exclude-tag for the old send.
  */
 require('dotenv').config({ path: '../.env' });
 const { createClient } = require('@supabase/supabase-js');
@@ -60,6 +79,11 @@ const flags = Object.fromEntries(
 const TIER = (flags.tier || 'A').toUpperCase();
 const TAG = flags.tag || 'WP-Book Downloaders 6mo';
 const PRUNE = !!flags.prune;
+// Tags whose holders are dropped from the segment — normally the tag a previous send
+// targeted. Reconstructed, not authoritative: see the header note on the missing
+// per-recipient send log.
+const EXCLUDE_TAGS = (flags['exclude-tag'] || '')
+  .split(',').map((t) => t.trim()).filter(Boolean);
 
 const SOURCE_CODES = ['White Papers', 'Book Request'];
 const SOURCE_TAGS = [
@@ -107,7 +131,9 @@ async function main() {
   const recent = (c) => c.last_activity_at && c.last_activity_at >= cutoff;
 
   const all = [...universe.values()];
-  const qualify = all.filter((c) => sendable(c) && recent(c));
+  const excluded = (c) => EXCLUDE_TAGS.some((t) => (c.tags || []).includes(t));
+  const preExclude = all.filter((c) => sendable(c) && recent(c));
+  const qualify = preExclude.filter((c) => !excluded(c));
   const qualifyIds = new Set(qualify.map((c) => c.id));
 
   const currentlyTagged = all.filter((c) => (c.tags || []).includes(TAG));
@@ -117,7 +143,13 @@ async function main() {
   console.log(`${DRY_RUN ? 'DRY RUN — ' : ''}Alconox WP/Book segment · tier ${TIER} (<${MONTHS}mo) · tag "${TAG}"`);
   console.log(`  universe (WP/Book, any age) : ${all.length}`);
   console.log(`    minus unsub/bounce/no-email: ${all.filter(sendable).length}`);
-  console.log(`    minus older than ${String(MONTHS).padStart(2)}mo      : ${qualify.length}  <- the segment`);
+  console.log(`    minus older than ${String(MONTHS).padStart(2)}mo      : ${preExclude.length}`);
+  if (EXCLUDE_TAGS.length) {
+    console.log(`    minus already sent to      : ${qualify.length}  <- the segment`);
+    console.log(`      (excluding holders of: ${EXCLUDE_TAGS.join(', ')} — ${preExclude.length - qualify.length} people)`);
+  } else {
+    console.log(`                               ${qualify.length}  <- the segment`);
+  }
   console.log(`  currently carrying the tag  : ${currentlyTagged.length}`);
   console.log(`  to ADD                      : ${toAdd.length}`);
   console.log(`  to REMOVE                   : ${toRemove.length}${PRUNE ? '' : '  (skipped — pass --prune)'}\n`);

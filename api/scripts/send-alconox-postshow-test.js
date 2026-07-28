@@ -27,12 +27,20 @@ const CLIENT_ID = 'ea7f1422-2d20-4299-85a7-c1201e953409'; // Alconox
 const CAMPAIGN_ID = process.env.CAMPAIGN_ID || 'a872f5ff-a67d-4f85-902d-ff0b78f41cd3';
 const DRY_RUN = !!process.env.DRY_RUN;
 
-const RECIPIENTS = [
+const DEFAULT_RECIPIENTS = [
   { email: 'slewis@alconox.com', first_name: 'Sage' },
   { email: 'ssilverstein@alconox.com', first_name: 'Stacy' },
   { email: 'mmodica@alconox.com', first_name: 'Michelle' },
   { email: 'mmoussourakis@alconox.com', first_name: 'Michael' },
 ];
+// TEST_TO overrides the reviewer list: "email" or "email:FirstName", comma-separated.
+// Handy for a solo look before circulating to the whole approval group.
+const RECIPIENTS = process.env.TEST_TO
+  ? process.env.TEST_TO.split(',').map((raw) => {
+      const [email, first_name] = raw.trim().split(':');
+      return { email: email.trim(), first_name: (first_name || email.split('@')[0]).trim() };
+    })
+  : DEFAULT_RECIPIENTS;
 
 const TEST_UNSUB = 'https://mail.sagerock.com/unsubscribe?token=TEST_TOKEN';
 
