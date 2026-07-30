@@ -29,6 +29,13 @@ const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require(
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
 const { filenameFromUrl, scanClientHtml } = require('./media-scan')
 const { markConversationTailForCaching } = require('./email-builder-cache')
+const {
+  CampaignClaimConflictError,
+  canonicalEmail,
+  isCampaignClaimConflictError,
+  isSchedulerEnabled,
+  keysetPages,
+} = require('./send-utils')
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
 
@@ -171,6 +178,37 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY, // Use service key for backend
   { global: { fetch: fetchWithRetry } }
 )
+
+async function updateSendingCampaign(campaignId, updates) {
+  const { data, error } = await supabase
+    .from('campaigns')
+    .update(updates)
+    .eq('id', campaignId)
+    .eq('status', 'sending')
+    .select('id')
+
+  if (error) throw error
+  if (!data || data.length === 0) {
+    throw new Error(`Campaign ${campaignId} is no longer owned by this send`)
+  }
+}
+
+async function markCampaignSendFailed(campaignId, error, context) {
+  if (isCampaignClaimConflictError(error)) {
+    console.log(`ℹ️ ${context}: campaign claim was already taken; leaving campaign state unchanged`)
+    return
+  }
+
+  const { error: updateError } = await supabase
+    .from('campaigns')
+    .update({ status: 'failed', send_error: error.message })
+    .eq('id', campaignId)
+    .eq('status', 'sending')
+
+  if (updateError) {
+    console.error(`❌ ${context}: failed to record campaign failure:`, updateError.message)
+  }
+}
 
 // ---- Auth Middleware ----
 
@@ -809,10 +847,10 @@ async function sendCampaignById(campaignId) {
   // Guard against double-sending with atomic status update
   // Only proceed if status is 'draft' or 'scheduled'
   if (campaign.status === 'sending') {
-    throw new Error('Campaign is already being sent')
+    throw new CampaignClaimConflictError('Campaign is already being sent')
   }
   if (campaign.status === 'sent') {
-    throw new Error('Campaign has already been sent')
+    throw new CampaignClaimConflictError('Campaign has already been sent')
   }
 
   // Atomically claim the campaign by setting status to 'sending'
@@ -826,7 +864,7 @@ async function sendCampaignById(campaignId) {
 
   if (claimError) throw claimError
   if (!claimResult || claimResult.length === 0) {
-    throw new Error('Campaign is already being sent or has been sent')
+    throw new CampaignClaimConflictError('Campaign is already being sent or has been sent')
   }
 
   // 2. Fetch client to get API key
@@ -860,23 +898,40 @@ async function sendCampaignById(campaignId) {
   // 4. Get contact IDs from Salesforce Campaign if specified
   let sfCampaignContactIds = null
   if (campaign.salesforce_campaign_id) {
-    const { data: members, error: membersError } = await withRetry(
-      () => supabase.from('salesforce_campaign_members').select('contact_id')
-        .eq('salesforce_campaign_id', campaign.salesforce_campaign_id)
-        .eq('client_id', campaign.client_id),
-      { label: 'Fetch SF campaign members' }
-    )
-
-    if (membersError) throw membersError
-    sfCampaignContactIds = new Set(members?.map(m => m.contact_id) || [])
+    sfCampaignContactIds = new Set()
+    for await (const members of keysetPages(async ({ afterId, limit, pageNumber }) => {
+      const fetchMembers = () => {
+        let query = supabase.from('salesforce_campaign_members')
+          .select('id, contact_id')
+          .eq('salesforce_campaign_id', campaign.salesforce_campaign_id)
+          .eq('client_id', campaign.client_id)
+          .order('id', { ascending: true })
+          .limit(limit)
+        if (afterId) query = query.gt('id', afterId)
+        return query
+      }
+      const { data, error } = await withRetry(fetchMembers, {
+        label: `Fetch SF campaign members page ${pageNumber}`,
+      })
+      if (error) throw error
+      return data || []
+    })) {
+      for (const member of members) {
+        if (member.contact_id) sfCampaignContactIds.add(member.contact_id)
+      }
+    }
     console.log(`📧 Salesforce Campaign filter: ${sfCampaignContactIds.size} contacts in campaign`)
 
     // If no contacts in the campaign, return early
     if (sfCampaignContactIds.size === 0) {
-      await supabase
-        .from('campaigns')
-        .update({ status: 'sent', sent_at: new Date().toISOString(), recipient_count: 0 })
-        .eq('id', campaignId)
+      await updateSendingCampaign(campaignId, {
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        recipient_count: 0,
+        sent_count: 0,
+        failed_count: 0,
+        send_error: null,
+      })
       return { sent: 0, failed: 0 }
     }
   }
@@ -898,10 +953,14 @@ async function sendCampaignById(campaignId) {
     console.log(`📧 Product filter (${productMode}): ${productBuyerEmails.size} buyer email(s) across ${purchaseFilter.product_skus.length} SKU(s)`)
     // "purchased" with no buyers means nobody qualifies — finish empty.
     if (productMode === 'purchased' && productBuyerEmails.size === 0) {
-      await supabase
-        .from('campaigns')
-        .update({ status: 'sent', sent_at: new Date().toISOString(), recipient_count: 0 })
-        .eq('id', campaignId)
+      await updateSendingCampaign(campaignId, {
+        status: 'sent',
+        sent_at: new Date().toISOString(),
+        recipient_count: 0,
+        sent_count: 0,
+        failed_count: 0,
+        send_error: null,
+      })
       return { sent: 0, failed: 0 }
     }
   }
@@ -932,6 +991,33 @@ async function sendCampaignById(campaignId) {
       `and(created_at.gte.${newCutoff},salesforce_created_date.is.null)`,
       `and(created_at.gte.${newCutoff},salesforce_created_date.gte.${sfRecentCutoff})`,
     ].join(',')
+  }
+
+  // Suppression is mailbox-wide, not row-wide. Historical rows can differ only
+  // by case/whitespace, so one unsubscribed or hard-bounced duplicate must
+  // suppress every row for that canonical address.
+  const suppressedRecipientEmails = new Set()
+  for await (const suppressedContacts of keysetPages(async ({ afterId, limit, pageNumber }) => {
+    const fetchSuppressedContacts = () => {
+      let query = supabase.from('contacts')
+        .select('id, email')
+        .eq('client_id', campaign.client_id)
+        .or('unsubscribed.eq.true,bounce_status.eq.hard')
+        .order('id', { ascending: true })
+        .limit(limit)
+      if (afterId) query = query.gt('id', afterId)
+      return query
+    }
+    const { data, error } = await withRetry(fetchSuppressedContacts, {
+      label: `Fetch canonical suppressions page ${pageNumber}`,
+    })
+    if (error) throw error
+    return data || []
+  })) {
+    for (const contact of suppressedContacts) {
+      const emailKey = canonicalEmail(contact.email)
+      if (emailKey) suppressedRecipientEmails.add(emailKey)
+    }
   }
 
   // 4b. Count contacts excluded by each filter for the send breakdown
@@ -993,7 +1079,7 @@ async function sendCampaignById(campaignId) {
     }
   }
 
-  // Tag filter - we'll calculate after the send loop since it's interleaved with pagination
+  // Tag-filter exclusions are counted with the same database predicates used by the send query.
 
   console.log(`📧 Send breakdown: ${JSON.stringify(breakdown)}`)
 
@@ -1057,8 +1143,8 @@ async function sendCampaignById(campaignId) {
   let failedCount = 0
   let failedRecipients = [] // Email addresses from failed batches
   let totalRecipients = 0
-  let page = 0
   let pendingPersonalizations = [] // Buffer for building up to PERSONALIZATIONS_BATCH_SIZE
+  const seenRecipientEmails = new Set()
 
   // Helper: flush a batch of personalizations to SendGrid
   const flushBatch = async (personalizations, batchLabel) => {
@@ -1088,11 +1174,11 @@ async function sendCampaignById(campaignId) {
     }
 
     // Update progress in DB after each batch
-    await supabase.from('campaigns').update({
+    await updateSendingCampaign(campaignId, {
       sent_count: sentCount,
       failed_count: failedCount,
       failed_recipients: failedRecipients,
-    }).eq('id', campaignId)
+    })
   }
 
   console.log(`📧 Starting paginated send with ${PERSONALIZATIONS_BATCH_SIZE}-recipient batches`)
@@ -1101,29 +1187,29 @@ async function sendCampaignById(campaignId) {
   const audienceFilter = Array.isArray(campaign.audience_filter) ? campaign.audience_filter : []
   const audienceActive = audienceFilter.length > 0 && audienceFilter.length < 3
 
-  while (true) {
-    let baseQuery = supabase.from('contacts')
-      .select('id, email, first_name, last_name, unsubscribe_token, industry, tags, bounce_status')
+  const buildContactQuery = (columns, selectOptions = {}, applyTagFilter = true) => {
+    let query = supabase.from('contacts')
+      .select(columns, selectOptions)
       .eq('unsubscribed', false)
       .eq('client_id', campaign.client_id)
       .neq('bounce_status', 'hard')
 
     // Reputation guardrail: recently-engaged contacts, plus genuinely-new ones.
     // Chained .or() is ANDed with the query's other filters by PostgREST.
-    if (safeSendOrClause) baseQuery = baseQuery.or(safeSendOrClause)
+    if (safeSendOrClause) query = query.or(safeSendOrClause)
 
     // Purchase filter: spend / order-count / recency predicates (null total_spent
     // and last_order_date — i.e. non-buyers — are excluded by these comparisons).
     if (purchaseFilter) {
       if (purchaseFilter.min_spend != null && purchaseFilter.min_spend !== '') {
-        baseQuery = baseQuery.gte('total_spent', purchaseFilter.min_spend)
+        query = query.gte('total_spent', purchaseFilter.min_spend)
       }
       if (purchaseFilter.min_orders != null && purchaseFilter.min_orders !== '') {
-        baseQuery = baseQuery.gte('order_count', purchaseFilter.min_orders)
+        query = query.gte('order_count', purchaseFilter.min_orders)
       }
       if (purchaseRecencyCutoff) {
-        if (purchaseFilter.recency_mode === 'within') baseQuery = baseQuery.gte('last_order_date', purchaseRecencyCutoff)
-        else if (purchaseFilter.recency_mode === 'lapsed') baseQuery = baseQuery.lt('last_order_date', purchaseRecencyCutoff)
+        if (purchaseFilter.recency_mode === 'within') query = query.gte('last_order_date', purchaseRecencyCutoff)
+        else if (purchaseFilter.recency_mode === 'lapsed') query = query.lt('last_order_date', purchaseRecencyCutoff)
       }
     }
 
@@ -1132,42 +1218,75 @@ async function sendCampaignById(campaignId) {
       if (audienceFilter.includes('lead')) orClauses.push('record_type.eq.lead')
       if (audienceFilter.includes('customer')) orClauses.push('and(record_type.eq.contact,contact_type.eq.Customer,or(account_type.is.null,account_type.neq.Dealer))')
       if (audienceFilter.includes('dealer')) orClauses.push('and(record_type.eq.contact,or(account_type.eq.Dealer,contact_type.eq.Dealer))')
-      if (orClauses.length > 0) baseQuery = baseQuery.or(orClauses.join(','))
+      if (orClauses.length > 0) query = query.or(orClauses.join(','))
     }
 
-    const { data: pageContacts, error } = await withRetry(
-      () => baseQuery.range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1),
-      { label: `Fetch contacts page ${page + 1}` }
-    )
+    if (applyTagFilter && campaign.filter_tags?.length > 0) {
+      query = query.overlaps('tags', campaign.filter_tags)
+    }
+    return query
+  }
 
+  if (campaign.filter_tags?.length > 0) {
+    const { count: beforeTagCount, error: beforeTagError } = await buildContactQuery(
+      'id', { count: 'exact', head: true }, false
+    )
+    if (beforeTagError) throw beforeTagError
+    const { count: afterTagCount, error: afterTagError } = await buildContactQuery(
+      'id', { count: 'exact', head: true }, true
+    )
+    if (afterTagError) throw afterTagError
+    breakdown.excluded_tag_filter = Math.max(0, (beforeTagCount || 0) - (afterTagCount || 0))
+  }
+
+  for await (const pageContacts of keysetPages(async ({ afterId, limit, pageNumber }) => {
+    const fetchContacts = () => {
+      let query = buildContactQuery('id, email, first_name, last_name, unsubscribe_token, industry, tags, bounce_status')
+        .order('id', { ascending: true })
+        .limit(limit)
+      if (afterId) query = query.gt('id', afterId)
+      return query
+    }
+    const { data, error } = await withRetry(fetchContacts, {
+      label: `Fetch contacts page ${pageNumber}`,
+    })
     if (error) throw error
-    if (!pageContacts || pageContacts.length === 0) break
+    return data || []
+  }, PAGE_SIZE)) {
 
     // Filter this page
     let filtered = pageContacts
     if (sfCampaignContactIds) {
       filtered = filtered.filter(c => sfCampaignContactIds.has(c.id))
     }
-    if (campaign.filter_tags && campaign.filter_tags.length > 0) {
-      const beforeTagFilter = filtered.length
-      filtered = filtered.filter(c =>
-        campaign.filter_tags.some(tag => c.tags?.includes(tag))
-      )
-      breakdown.excluded_tag_filter = (breakdown.excluded_tag_filter || 0) + (beforeTagFilter - filtered.length)
-    }
     // Product purchase filter (AND logic): keep buyers / non-buyers of the SKUs.
     if (productBuyerEmails) {
       const beforeProductFilter = filtered.length
       filtered = productMode === 'purchased'
-        ? filtered.filter(c => c.email && productBuyerEmails.has(c.email.toLowerCase()))
-        : filtered.filter(c => !c.email || !productBuyerEmails.has(c.email.toLowerCase()))
+        ? filtered.filter(c => productBuyerEmails.has(canonicalEmail(c.email)))
+        : filtered.filter(c => !productBuyerEmails.has(canonicalEmail(c.email)))
       breakdown.excluded_product_filter = (breakdown.excluded_product_filter || 0) + (beforeProductFilter - filtered.length)
     }
 
-    totalRecipients += filtered.length
-
     // Build personalizations for each contact
     for (const contact of filtered) {
+      const email = typeof contact.email === 'string' ? contact.email.trim() : ''
+      const emailKey = canonicalEmail(email)
+      if (!emailKey) {
+        breakdown.excluded_invalid_email = (breakdown.excluded_invalid_email || 0) + 1
+        continue
+      }
+      if (suppressedRecipientEmails.has(emailKey)) {
+        breakdown.excluded_canonical_suppression = (breakdown.excluded_canonical_suppression || 0) + 1
+        continue
+      }
+      if (seenRecipientEmails.has(emailKey)) {
+        breakdown.excluded_duplicate_email = (breakdown.excluded_duplicate_email || 0) + 1
+        continue
+      }
+      seenRecipientEmails.add(emailKey)
+      totalRecipients++
+
       const unsubscribeUrl = `${baseUrl}/unsubscribe?token=${contact.unsubscribe_token}&campaign_id=${campaignId}`
       const rawIndustryLink = contact.industry
         ? (industryLinkMap.get(contact.industry) || defaultIndustryUrl)
@@ -1175,9 +1294,9 @@ async function sendCampaignById(campaignId) {
       const industryLink = appendUtmToUrl(rawIndustryLink, utmParams)
 
       pendingPersonalizations.push({
-        to: [{ email: contact.email }],
+        to: [{ email }],
         substitutions: {
-          '{{email}}': contact.email,
+          '{{email}}': email,
           '{{first_name}}': contact.first_name || '',
           '{{last_name}}': contact.last_name || '',
           '{{unsubscribe_url}}': unsubscribeUrl,
@@ -1196,9 +1315,6 @@ async function sendCampaignById(campaignId) {
         pendingPersonalizations = []
       }
     }
-
-    page++
-    if (pageContacts.length < PAGE_SIZE) break
   }
 
   // Flush any remaining personalizations
@@ -1214,18 +1330,16 @@ async function sendCampaignById(campaignId) {
   console.log(`📧 Send breakdown: ${JSON.stringify(breakdown)}`)
 
   // 7. Update campaign to sent with final counts
-  await supabase
-    .from('campaigns')
-    .update({
-      status: 'sent',
-      sent_at: new Date().toISOString(),
-      recipient_count: totalRecipients,
-      sent_count: sentCount,
-      failed_count: failedCount,
-      failed_recipients: failedRecipients,
-      send_breakdown: breakdown,
-    })
-    .eq('id', campaignId)
+  await updateSendingCampaign(campaignId, {
+    status: 'sent',
+    sent_at: new Date().toISOString(),
+    recipient_count: totalRecipients,
+    sent_count: sentCount,
+    failed_count: failedCount,
+    failed_recipients: failedRecipients,
+    send_breakdown: breakdown,
+    send_error: null,
+  })
 
   return { success: true, sent: sentCount, failed: failedCount }
 }
@@ -1261,6 +1375,9 @@ app.post('/api/send-test-email', async (req, res) => {
     if (campaignError) {
       console.error('❌ Campaign fetch error:', campaignError)
       throw new Error(`Campaign not found: ${campaignError.message}`)
+    }
+    if (req.adminUser?.role === 'client_admin' && campaign.client_id !== req.adminUser.client_id) {
+      return res.status(403).json({ error: 'Access denied to this campaign' })
     }
 
     console.log('✅ Campaign found:', campaign.name)
@@ -1365,10 +1482,10 @@ app.post('/api/send-test-email', async (req, res) => {
         replyTo: campaign.reply_to || undefined,
         subject: `[TEST] ${campaign.subject}`,
         html: personalizedHtml,
-        customArgs: {
-          campaign_id: campaignId,
-        },
-        categories: [`campaign-${campaignId}`, clientCategory(client)].filter(Boolean),
+        // Keep tests out of production campaign analytics. The webhook only
+        // treats campaign_id as a real campaign event.
+        customArgs: { test_campaign_id: campaignId },
+        categories: [`test-campaign-${campaignId}`],
         ipPoolName: client.ip_pool || undefined,
         headers: {
           'List-Unsubscribe': `<${testUnsubscribeUrl}>`,
@@ -1412,8 +1529,11 @@ app.post('/api/send-campaign', async (req, res) => {
 
     // Validate campaign exists and is sendable
     const { data: campaign, error } = await supabase
-      .from('campaigns').select('id, status').eq('id', campaignId).single()
+      .from('campaigns').select('id, status, client_id').eq('id', campaignId).single()
     if (error || !campaign) return res.status(404).json({ error: 'Campaign not found' })
+    if (req.adminUser?.role === 'client_admin' && campaign.client_id !== req.adminUser.client_id) {
+      return res.status(403).json({ error: 'Access denied to this campaign' })
+    }
     if (campaign.status === 'sending') return res.status(409).json({ error: 'Campaign is already sending' })
     if (campaign.status === 'sent') return res.status(409).json({ error: 'Campaign has already been sent' })
 
@@ -1423,9 +1543,7 @@ app.post('/api/send-campaign', async (req, res) => {
     // Fire-and-forget: run send in background
     sendCampaignById(campaignId).catch(async (err) => {
       console.error(`Background campaign send failed for ${campaignId}:`, err)
-      await supabase.from('campaigns')
-        .update({ status: 'failed', send_error: err.message })
-        .eq('id', campaignId)
+      await markCampaignSendFailed(campaignId, err, 'Background campaign send')
     })
   } catch (error) {
     console.error('Error initiating campaign send:', error)
@@ -4224,24 +4342,27 @@ async function getProductBuyerEmailSet(clientId, skus) {
   if (skuSet.size === 0) return emails
 
   const PAGE = 1000
-  let from = 0
-  while (true) {
-    const { data, error } = await withRetry(
-      () => supabase.from('woocommerce_orders')
-        .select('email, status, line_items')
+  for await (const orders of keysetPages(async ({ afterId, limit, pageNumber }) => {
+    const fetchOrders = () => {
+      let query = supabase.from('woocommerce_orders')
+        .select('id, email, status, line_items')
         .eq('client_id', clientId)
-        .range(from, from + PAGE - 1),
-      { label: `Fetch woo orders page ${from / PAGE + 1}` }
-    )
+        .order('id', { ascending: true })
+        .limit(limit)
+      if (afterId) query = query.gt('id', afterId)
+      return query
+    }
+    const { data, error } = await withRetry(fetchOrders, {
+      label: `Fetch woo orders page ${pageNumber}`,
+    })
     if (error) throw error
-    if (!data || data.length === 0) break
-    for (const o of data) {
+    return data || []
+  }, PAGE)) {
+    for (const o of orders) {
       if (!o.email || WOO_NON_REVENUE_STATUSES.has(o.status)) continue
       const items = Array.isArray(o.line_items) ? o.line_items : []
-      if (items.some(li => li && skuSet.has(li.sku))) emails.add(o.email.toLowerCase())
+      if (items.some(li => li && skuSet.has(li.sku))) emails.add(canonicalEmail(o.email))
     }
-    if (data.length < PAGE) break
-    from += PAGE
   }
   return emails
 }
@@ -4256,26 +4377,32 @@ app.get('/api/woocommerce/products', async (req, res) => {
     if (!clientId) return res.status(400).json({ error: 'clientId is required' })
 
     const PAGE = 1000
-    let from = 0
     const bySku = new Map() // sku -> { sku, name, buyers:Set<email> }
-    while (true) {
-      const { data, error } = await supabase.from('woocommerce_orders')
-        .select('email, status, line_items')
-        .eq('client_id', clientId)
-        .range(from, from + PAGE - 1)
+    for await (const orders of keysetPages(async ({ afterId, limit, pageNumber }) => {
+      const fetchOrders = () => {
+        let query = supabase.from('woocommerce_orders')
+          .select('id, email, status, line_items')
+          .eq('client_id', clientId)
+          .order('id', { ascending: true })
+          .limit(limit)
+        if (afterId) query = query.gt('id', afterId)
+        return query
+      }
+      const { data, error } = await withRetry(fetchOrders, {
+        label: `Fetch WooCommerce product page ${pageNumber}`,
+      })
       if (error) throw error
-      if (!data || data.length === 0) break
-      for (const o of data) {
+      return data || []
+    }, PAGE)) {
+      for (const o of orders) {
         if (WOO_NON_REVENUE_STATUSES.has(o.status)) continue
         const items = Array.isArray(o.line_items) ? o.line_items : []
         for (const li of items) {
           if (!li || !li.sku) continue
           if (!bySku.has(li.sku)) bySku.set(li.sku, { sku: li.sku, name: li.name || li.sku, buyers: new Set() })
-          if (o.email) bySku.get(li.sku).buyers.add(o.email.toLowerCase())
+          if (o.email) bySku.get(li.sku).buyers.add(canonicalEmail(o.email))
         }
       }
-      if (data.length < PAGE) break
-      from += PAGE
     }
 
     const products = [...bySku.values()]
@@ -8025,6 +8152,19 @@ app.get('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`)
 
+  if (!isSchedulerEnabled()) {
+    console.log('ℹ️ Scheduler disabled (set RUN_SCHEDULER=true on exactly one worker service)')
+    return
+  }
+
+  console.log('✅ Scheduler enabled', {
+    service: process.env.RAILWAY_SERVICE_NAME || 'local',
+    deployment: process.env.RAILWAY_DEPLOYMENT_ID || null,
+    replica: process.env.RAILWAY_REPLICA_ID || null,
+    commit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
+    pid: process.pid,
+  })
+
   // Start cron job to process scheduled campaigns and sequence emails every minute
   cron.schedule('* * * * *', async () => {
     try {
@@ -8048,11 +8188,7 @@ app.listen(PORT, () => {
             console.log(`✅ Scheduled campaign sent: ${campaign.name} - ${result.sent} emails`)
           } catch (campaignError) {
             console.error(`❌ Failed to send scheduled campaign ${campaign.name}:`, campaignError.message)
-            // Mark campaign as failed
-            await supabase
-              .from('campaigns')
-              .update({ status: 'failed', send_error: campaignError.message })
-              .eq('id', campaign.id)
+            await markCampaignSendFailed(campaign.id, campaignError, 'Scheduled campaign send')
           }
         }
       }

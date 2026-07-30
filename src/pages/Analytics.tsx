@@ -503,7 +503,7 @@ export default function Analytics() {
 
     // Webhook stats (filtered - human engagement only)
     const webhookStats = {
-      sent: campaign.recipient_count,
+      sent: campaign.sent_count ?? campaign.recipient_count,
       delivered: eventCounts.delivered,
       opens: eventCounts.opens,
       uniqueOpens: eventCounts.uniqueOpens,
@@ -818,7 +818,7 @@ export default function Analytics() {
           id: campaign.id,
           name: campaign.name,
           sent_at: campaign.sent_at || campaign.created_at,
-          sent: campaign.recipient_count || 0,
+          sent: campaign.sent_count ?? campaign.recipient_count ?? 0,
           delivered: deliveredRes.count || 0,
           uniqueOpens: uniqueOpenEmails.size,
           uniqueClicks: uniqueClickEmails.size,

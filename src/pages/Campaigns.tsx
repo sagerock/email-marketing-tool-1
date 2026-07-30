@@ -913,6 +913,7 @@ function CreateCampaignModal({
         p_sf_campaign_id: formData.salesforce_campaign_id || null,
         p_audience: formData.audience_filter.length > 0 ? formData.audience_filter : null,
         p_purchase: normalizePurchase(formData.purchase_filter),
+        p_bypass_safe_send: campaign?.bypass_safe_send || false,
       })
       if (error) throw error
       // Only update if this is still the latest request

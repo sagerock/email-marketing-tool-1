@@ -67,6 +67,7 @@ export interface Campaign {
   folder_id?: string
   salesforce_campaign_id?: string
   purchase_filter?: PurchaseFilter | null
+  bypass_safe_send?: boolean
   sent_count?: number
   failed_count?: number
   send_error?: string
@@ -80,6 +81,9 @@ export interface Campaign {
     excluded_tag_filter?: number
     excluded_audience_filter?: number
     excluded_product_filter?: number
+    excluded_invalid_email?: number
+    excluded_duplicate_email?: number
+    excluded_canonical_suppression?: number
     final_recipients: number
   }
   created_at: string
