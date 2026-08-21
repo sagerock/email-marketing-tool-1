@@ -3033,6 +3033,7 @@ app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, 
     // Route: sibling thinkific agents for this client can claim a lead via a
     // route_pattern (regex, in field_map) matched against the capture URL.
     let config = keyConfig
+    let routeMatched = false
     const routeText = `${pageUrl || ''} ${JSON.stringify(lead)}`
     const { data: siblings } = await supabase
       .from('ai_followup_config')
@@ -3044,8 +3045,12 @@ app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, 
       const pattern = sib.field_map?.route_pattern
       if (!pattern || sib.id === keyConfig.id) continue
       try {
-        if (new RegExp(pattern, 'i').test(routeText)) { config = sib; break }
+        if (new RegExp(pattern, 'i').test(routeText)) { config = sib; routeMatched = true; break }
       } catch { /* bad pattern; ignore */ }
+    }
+    // The keyed config can also declare a pattern; matching it counts as recognized
+    if (!routeMatched && keyConfig.field_map?.route_pattern) {
+      try { routeMatched = new RegExp(keyConfig.field_map.route_pattern, 'i').test(routeText) } catch { /* ignore */ }
     }
 
     // Upsert contact with the lead as a form submission (feeds the AI context)
@@ -3127,7 +3132,8 @@ app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, 
       const generateRes = await fetch(`http://localhost:${PORT}/api/ai-followup/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contactId, configId: config.id }),
+        // Unrecognized capture pages never auto-send — they wait in the approval queue
+        body: JSON.stringify({ contactId, configId: config.id, forcePending: !routeMatched }),
       })
       if (!generateRes.ok) {
         console.error(`⚠️ Thinkific lead draft generation failed for ${email}:`, (await generateRes.json()).error)
@@ -3144,8 +3150,8 @@ app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, 
         await sgMail.send({
           to: notifyTo,
           from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
-          subject: `New Thinkific lead: ${firstName || email} → "${config.name}" draft ready`,
-          text: `A new Thinkific lead just arrived and a follow-up draft is waiting for approval.\n\nLead: ${firstName || ''} ${lastName || ''} <${email}>\nPage: ${pageUrl || 'unknown'}\nAgent: ${config.name} (from ${config.from_email})\nThinkific account: ${enrichment?.user ? 'yes' : 'no'}\n\nReview and approve: ${process.env.BASE_URL || 'https://mail.sagerock.com'}/ai-agents`,
+          subject: `New Thinkific lead: ${firstName || email} → ${config.auto_send && routeMatched ? 'follow-up sent' : 'draft awaiting approval'} (${config.name})`,
+          text: `A new Thinkific lead just arrived.\n\nLead: ${firstName || ''} ${lastName || ''} <${email}>\nPage: ${pageUrl || 'unknown'}\nAgent: ${config.name} (from ${config.from_email})\nThinkific account: ${enrichment?.user ? 'yes' : 'no'}\n\n${config.auto_send && routeMatched ? 'The follow-up was sent automatically (you are bcc\u2019d on it).' : 'The page was not recognized, so the draft is waiting for review.'}\nQueue: ${process.env.BASE_URL || 'https://mail.sagerock.com'}/ai-agents`,
         })
       } catch (notifyErr) {
         console.error('⚠️ Lead notification email failed:', notifyErr.message)
@@ -7342,7 +7348,7 @@ app.delete('/api/ai-followup/configs/:id', async (req, res) => {
 // Generate an AI draft for a specific contact
 app.post('/api/ai-followup/generate', async (req, res) => {
   try {
-    const { contactId, configId } = req.body
+    const { contactId, configId, forcePending } = req.body
     if (!contactId || !configId) {
       return res.status(400).json({ error: 'contactId and configId are required' })
     }
@@ -7497,7 +7503,7 @@ ${contactContext}${formContext}${resourceContext}${previousContext}`
 
     // Auto-send: skip the approval queue when the agent is configured for it.
     // If the send fails, the draft stays 'pending' and falls back to the manual queue.
-    if (config.auto_send) {
+    if (config.auto_send && !forcePending) {
       try {
         const { messageId } = await sendAiFollowupDraft(draft.id, null)
         console.log(`🚀 Auto-sent AI draft to ${contact.email} (${config.name} step ${stepNumber})`)
@@ -7635,7 +7641,7 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null) {
     to: draft.contact.email,
     from: { email: draft.config.from_email, name: draft.config.from_name },
     replyTo: draft.config.reply_to || undefined,
-    bcc: draft.config.bcc_email ? [{ email: draft.config.bcc_email }] : undefined,
+    bcc: draft.config.bcc_email ? draft.config.bcc_email.split(',').map(e => ({ email: e.trim() })).filter(b => b.email) : undefined,
     subject: draft.subject,
     html: draft.html_content,
     text: draft.plain_text,
