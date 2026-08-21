@@ -2958,6 +2958,208 @@ app.post('/api/webhook/gravity-forms', webhookLimiter, async (req, res) => {
 })
 
 /**
+ * Thinkific lead webhook (lead.created)
+ * Thinkific pushes new leads here the moment someone leaves their email on a
+ * lead-capture page. We enrich against the Thinkific API (already a student?
+ * which page did they come from?), route to the right AI agent by page URL,
+ * and enroll them for a human-approved follow-up draft. Leads who already
+ * hold an activated enrollment are logged but never pitched.
+ * Envelope: { resource: 'lead', action: 'created', payload: { email, first_name, last_name, ... } }
+ */
+async function thinkificApiLookup(email) {
+  const apiKey = process.env.CFA_THINKIFIC_API_KEY
+  const subdomain = process.env.CFA_THINKIFIC_SUBDOMAIN || 'centerforanthroposophy'
+  if (!apiKey) return null
+  const headers = {
+    'X-Auth-API-Key': apiKey,
+    'X-Auth-Subdomain': subdomain,
+    // Thinkific's CDN rejects default library user agents
+    'User-Agent': 'Mozilla/5.0 (compatible; mail.sagerock.com lead enrichment)',
+  }
+  try {
+    const uRes = await fetch(`https://api.thinkific.com/api/public/v1/users?query%5Bemail%5D=${encodeURIComponent(email)}`, { headers })
+    if (!uRes.ok) return null
+    const users = (await uRes.json()).items || []
+    if (users.length === 0) return { user: null, enrollments: [] }
+    const user = users[0]
+    const eRes = await fetch(`https://api.thinkific.com/api/public/v1/enrollments?query%5Buser_id%5D=${user.id}`, { headers })
+    const enrollments = eRes.ok ? ((await eRes.json()).items || []) : []
+    return { user, enrollments }
+  } catch (err) {
+    console.error('⚠️ Thinkific enrichment failed (continuing without):', err.message)
+    return null
+  }
+}
+
+app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, res) => {
+  try {
+    const { webhookKey } = req.params
+    const envelope = req.body || {}
+    const lead = envelope.payload || envelope
+    console.log(`📥 Thinkific lead webhook hit: key=${webhookKey?.slice(0, 8)}… action=${envelope.action || '?'} leadKeys=[${Object.keys(lead).join(', ')}]`)
+
+    // Default config = the one this webhook key belongs to
+    const { data: keyConfig, error: configError } = await supabase
+      .from('ai_followup_config')
+      .select('*')
+      .eq('webhook_key', webhookKey)
+      .single()
+    if (configError || !keyConfig) {
+      console.error(`❌ Thinkific lead webhook: invalid webhook key (${webhookKey})`)
+      return res.status(404).json({ error: 'Invalid webhook key' })
+    }
+    if (!keyConfig.enabled) return res.status(400).json({ error: 'Agent is disabled' })
+
+    // Only lead.created is interesting; ack everything else so Thinkific doesn't retry
+    if (envelope.resource && envelope.resource !== 'lead') {
+      return res.json({ success: true, action: 'ignored_resource', resource: envelope.resource })
+    }
+
+    const email = (lead.email || '').trim().toLowerCase()
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      console.error('❌ Thinkific lead webhook: no usable email in payload', lead)
+      return res.status(400).json({ error: 'No email in payload' })
+    }
+    const firstName = (lead.first_name || '').trim() || null
+    const lastName = (lead.last_name || '').trim() || null
+
+    // Any URL Thinkific includes tells us which page captured the lead
+    const pageUrl = Object.values(lead).find(v => typeof v === 'string' && /^https?:\/\//.test(v)) || null
+
+    // Enrich: existing student? Activated enrollments mean we welcome, not pitch.
+    const enrichment = await thinkificApiLookup(email)
+    const activeEnrollments = (enrichment?.enrollments || []).filter(e => e.activated_at)
+
+    // Route: sibling thinkific agents for this client can claim a lead via a
+    // route_pattern (regex, in field_map) matched against the capture URL.
+    let config = keyConfig
+    const routeText = `${pageUrl || ''} ${JSON.stringify(lead)}`
+    const { data: siblings } = await supabase
+      .from('ai_followup_config')
+      .select('*')
+      .eq('client_id', keyConfig.client_id)
+      .eq('enabled', true)
+      .eq('trigger_type', 'webhook')
+    for (const sib of siblings || []) {
+      const pattern = sib.field_map?.route_pattern
+      if (!pattern || sib.id === keyConfig.id) continue
+      try {
+        if (new RegExp(pattern, 'i').test(routeText)) { config = sib; break }
+      } catch { /* bad pattern; ignore */ }
+    }
+
+    // Upsert contact with the lead as a form submission (feeds the AI context)
+    const formSubmission = {
+      form_name: 'Thinkific Lead',
+      submitted_at: new Date().toISOString(),
+      fields: {
+        'Signup Page': pageUrl || 'unknown',
+        'Has Thinkific Account': enrichment?.user ? 'yes' : 'no',
+        'Existing Enrollments': activeEnrollments.map(e => e.course_name).join('; ') || 'none',
+        ...lead,
+      },
+    }
+    delete formSubmission.fields.email
+
+    const { data: existing } = await supabase
+      .from('contacts')
+      .select('id, first_name, last_name, form_submissions')
+      .eq('client_id', config.client_id)
+      .eq('email', email)
+      .single()
+
+    let contactId
+    if (existing) {
+      const updates = { form_submissions: [...(existing.form_submissions || []), formSubmission] }
+      if (!existing.first_name && firstName) updates.first_name = firstName
+      if (!existing.last_name && lastName) updates.last_name = lastName
+      await supabase.from('contacts').update(updates).eq('id', existing.id)
+      contactId = existing.id
+    } else {
+      const { data: created, error: createError } = await supabase
+        .from('contacts')
+        .insert({
+          client_id: config.client_id,
+          email,
+          first_name: firstName,
+          last_name: lastName,
+          form_submissions: [formSubmission],
+          unsubscribed: false,
+        })
+        .select('id')
+        .single()
+      if (createError) throw createError
+      contactId = created.id
+    }
+
+    // Already an activated student → no pitch. Log and stop.
+    if (activeEnrollments.length > 0) {
+      console.log(`🎓 Thinkific lead ${email} already enrolled (${activeEnrollments.map(e => e.course_name).join(', ')}) — skipping follow-up`)
+      return res.json({ success: true, action: 'skipped_already_enrolled', contact_id: contactId, enrollments: activeEnrollments.map(e => e.course_name) })
+    }
+
+    // Enroll in the routed agent (idempotent per config+contact)
+    const { data: existingEnrollment } = await supabase
+      .from('ai_followup_contacts')
+      .select('id')
+      .eq('config_id', config.id)
+      .eq('contact_id', contactId)
+      .limit(1)
+    if (existingEnrollment && existingEnrollment.length > 0) {
+      return res.json({ success: true, action: 'already_enrolled_in_agent', contact_id: contactId })
+    }
+
+    const { error: enrollError } = await supabase
+      .from('ai_followup_contacts')
+      .upsert({
+        config_id: config.id,
+        contact_id: contactId,
+        client_id: config.client_id,
+        status: 'in_progress',
+        current_step: 0,
+        next_followup_at: new Date().toISOString(),
+      }, { onConflict: 'config_id,contact_id' })
+    if (enrollError) throw enrollError
+    console.log(`🤖 Thinkific lead ${email} enrolled in agent "${config.name}"`)
+
+    // Draft immediately; the cron sweeps up any failure
+    try {
+      const generateRes = await fetch(`http://localhost:${PORT}/api/ai-followup/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contactId, configId: config.id }),
+      })
+      if (!generateRes.ok) {
+        console.error(`⚠️ Thinkific lead draft generation failed for ${email}:`, (await generateRes.json()).error)
+      }
+    } catch (genError) {
+      console.error('⚠️ Thinkific lead draft generation error:', genError.message)
+    }
+
+    // Heads-up to the humans watching the queue
+    const notifyTo = (process.env.CFA_LEAD_NOTIFY || '').split(',').map(s => s.trim()).filter(Boolean)
+    if (notifyTo.length > 0 && process.env.CONTACT_SENDGRID_API_KEY) {
+      try {
+        sgMail.setApiKey(process.env.CONTACT_SENDGRID_API_KEY)
+        await sgMail.send({
+          to: notifyTo,
+          from: { email: 'ai@sagerock.com', name: 'SageRock AI Assistant' },
+          subject: `New Thinkific lead: ${firstName || email} → "${config.name}" draft ready`,
+          text: `A new Thinkific lead just arrived and a follow-up draft is waiting for approval.\n\nLead: ${firstName || ''} ${lastName || ''} <${email}>\nPage: ${pageUrl || 'unknown'}\nAgent: ${config.name} (from ${config.from_email})\nThinkific account: ${enrichment?.user ? 'yes' : 'no'}\n\nReview and approve: ${process.env.BASE_URL || 'https://mail.sagerock.com'}/ai-agents`,
+        })
+      } catch (notifyErr) {
+        console.error('⚠️ Lead notification email failed:', notifyErr.message)
+      }
+    }
+
+    res.json({ success: true, action: 'enrolled', contact_id: contactId, agent: config.name })
+  } catch (error) {
+    console.error('❌ Thinkific lead webhook error:', error)
+    res.status(500).json({ error: error.message })
+  }
+})
+
+/**
  * Upsert contact endpoint
  * Creates or updates a contact and merges tags
  * Used by external integrations (Make.com, Zapier, etc.)
