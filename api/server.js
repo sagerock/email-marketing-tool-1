@@ -29,6 +29,7 @@ const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require(
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
 const { filenameFromUrl, scanClientHtml } = require('./media-scan')
 const { markConversationTailForCaching } = require('./email-builder-cache')
+const { createAskEmailDesignHandler } = require('./ask-email-design')
 const {
   CampaignClaimConflictError,
   canonicalEmail,
@@ -272,6 +273,8 @@ app.use('/api', (req, res, next) => {
   if (req.path.startsWith('/webhook/')) return next()
   // Skip auth for contacts/upsert (uses API key auth)
   if (req.path === '/contacts/upsert') return next()
+  // Private Ask/Polaris integration uses its own fixed-client bearer auth.
+  if (req.path === '/ask/email-design-drafts') return next()
   // Skip auth for public signup (rate-limited, no sensitive data)
   if (req.path === '/public/signup') return next()
   // Skip auth for AWSNA 2026 booth resource signup (rate-limited, no sensitive data)
@@ -2385,6 +2388,16 @@ const { SHARED_HEAD_STYLES } = require('./email-templates')
 
 // ─── AI Email Builder ──────────────────────────────────────────────────────
 const emailBuilderRateLimit = { timestamps: [] }
+
+// Polaris may create a design in SageRock's template library, but this route
+// cannot create campaigns, choose recipients, schedule, or send. The client id
+// comes only from server configuration; caller input can never select a tenant.
+app.post('/api/ask/email-design-drafts', createAskEmailDesignHandler({
+  supabase,
+  apiKey: process.env.ASK_EMAIL_DESIGN_API_KEY,
+  clientId: process.env.ASK_EMAIL_DESIGN_CLIENT_ID,
+  baseUrl: process.env.FRONTEND_URL || 'https://mail.sagerock.com',
+}))
 
 // Get lightweight template index for AI context
 app.get('/api/email-builder/templates', authenticateUser, async (req, res) => {

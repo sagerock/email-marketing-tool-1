@@ -60,6 +60,17 @@ npm start            # Start server (serves both frontend and API)
   - `/api/webhook/sendgrid` - Process SendGrid events
   - `/api/ip-pools` - IP pool management
 
+### Ask / Polaris Email Design Drafts
+
+`POST /api/ask/email-design-drafts` lets SageRock's internal Ask agent create
+an email design in the SageRock template library. It uses a dedicated bearer
+secret and a server-configured `ASK_EMAIL_DESIGN_CLIENT_ID`; the request cannot
+select another tenant. The endpoint generates through the platform's existing
+Claude email-builder rules and brand/reference templates, validates required
+CAN-SPAM tags and passive email-safe HTML, and inserts only a template. It has
+no campaign, recipient, schedule, or send path. `Idempotency-Key` is embedded
+as a hidden template marker so inbound retries reuse the first draft.
+
 ### Salesforce Integration
 Uses **OAuth 2.0 Client Credentials Flow** - no user interaction or callback URLs needed.
 
@@ -283,6 +294,8 @@ AWS_ACCESS_KEY_ID=         # IAM user with PutObject/DeleteObject/ListBucket on 
 AWS_SECRET_ACCESS_KEY=
 AWS_REGION=us-east-2
 S3_MEDIA_BUCKET=sagerock-email-images
+ASK_EMAIL_DESIGN_API_KEY=  # Shared only with Ask/Polaris
+ASK_EMAIL_DESIGN_CLIENT_ID= # Fixed SageRock clients.id; caller cannot override
 ```
 
 Note: SendGrid API keys and Salesforce credentials are stored per-client in the `clients` database table, not in environment variables.
