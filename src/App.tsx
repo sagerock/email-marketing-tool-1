@@ -21,6 +21,7 @@ import BounceRecovery from './pages/BounceRecovery'
 import ContactDetail from './pages/ContactDetail'
 import EmailBuilder from './pages/EmailBuilder'
 import Media from './pages/Media'
+import Engagement from './pages/Engagement'
 import DebugAuth from './pages/DebugAuth'
 
 function App() {
@@ -44,6 +45,16 @@ function App() {
                 <ProtectedRoute>
                   <Layout>
                     <Contacts />
+                  </Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/engagement"
+              element={
+                <ProtectedRoute>
+                  <Layout>
+                    <Engagement />
                   </Layout>
                 </ProtectedRoute>
               }

@@ -25,6 +25,7 @@ const puppeteer = require('puppeteer')
 require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
 const { webhookLimiter, upsertLimiter } = require('./rate-limiters')
+const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
 const { filenameFromUrl, scanClientHtml } = require('./media-scan')
@@ -4976,8 +4977,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Leads
     const leadsQuery = syncSince
-      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null AND LastModifiedDate > ${syncSince}`
-      : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
+      ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastActivityDate, Status, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null AND LastModifiedDate > ${syncSince}`
+      : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastActivityDate, Status, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
 
     console.log(`📥 Querying Salesforce Leads...`)
 
@@ -5008,6 +5009,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
             source_code: lead.Source_code__c || null,
             source_code_history: lead.Source_Code_History__c || null,
             salesforce_created_date: lead.CreatedDate || null,
+            salesforce_last_activity_date: lead.LastActivityDate || null,
+            salesforce_lead_status: lead.Status || null,
             is_converted: lead.IsConverted ?? null,
             converted_date: lead.ConvertedDate || null,
             state: lead.State || null,
@@ -5043,8 +5046,8 @@ app.post('/api/salesforce/sync', async (req, res) => {
 
     // Sync Contacts — try with Account.Name first, fall back without if permission denied
     let contactsQuery
-    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
-    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
+    const contactFieldsWithAccount = 'Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
+    const contactFieldsWithout = 'Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c'
     let hasAccountAccess = true
 
     contactsQuery = syncSince
@@ -5094,6 +5097,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
             source_code: contact.Source_Code1__c || null,
             source_code_history: contact.Source_Code_History__c || null,
             salesforce_created_date: contact.CreatedDate || null,
+            salesforce_last_activity_date: contact.LastActivityDate || null,
             state: contact.MailingState || null,
             country: contact.MailingCountry || null,
             job_function: contact.Job_Function__c || null,
@@ -5124,6 +5128,13 @@ app.post('/api/salesforce/sync', async (req, res) => {
       }
     } catch (contactError) {
       console.error('Error syncing contacts:', contactError.message)
+    }
+
+    // Opportunities (sample-request pipeline) — non-blocking
+    try {
+      await syncSalesforceOpportunities({ supabase, getSalesforceConnection }, clientId, syncSince)
+    } catch (oppError) {
+      console.error('Error syncing opportunities:', oppError.message)
     }
 
     // Update sync status
@@ -5499,7 +5510,7 @@ app.post('/api/salesforce/backfill', async (req, res) => {
       const BATCH_SIZE = 100
 
       // Leads — no date filter
-      const leadsQuery = `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
+      const leadsQuery = `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastActivityDate, Status, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
       let leads = await conn.query(leadsQuery)
       console.log(`🔄 Backfill: ${leads.totalSize} total leads`)
 
@@ -5519,6 +5530,8 @@ app.post('/api/salesforce/backfill', async (req, res) => {
             source_code: lead.Source_code__c || null,
             source_code_history: lead.Source_Code_History__c || null,
             salesforce_created_date: lead.CreatedDate || null,
+            salesforce_last_activity_date: lead.LastActivityDate || null,
+            salesforce_lead_status: lead.Status || null,
             is_converted: lead.IsConverted ?? null,
             converted_date: lead.ConvertedDate || null,
             state: lead.State || null,
@@ -5545,14 +5558,14 @@ app.post('/api/salesforce/backfill', async (req, res) => {
 
       // Contacts — no date filter
       let hasAccountAccess = true
-      let contactsQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
+      let contactsQuery = `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
       let contacts
       try {
         contacts = await conn.query(contactsQuery)
       } catch (err) {
         if (err.message?.includes('Account') || err.message?.includes('relationship')) {
           hasAccountAccess = false
-          contactsQuery = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
+          contactsQuery = `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
           contacts = await conn.query(contactsQuery)
         } else throw err
       }
@@ -5574,6 +5587,7 @@ app.post('/api/salesforce/backfill', async (req, res) => {
             source_code: contact.Source_Code1__c || null,
             source_code_history: contact.Source_Code_History__c || null,
             salesforce_created_date: contact.CreatedDate || null,
+            salesforce_last_activity_date: contact.LastActivityDate || null,
             state: contact.MailingState || null,
             country: contact.MailingCountry || null,
             job_function: contact.Job_Function__c || null,
@@ -8367,6 +8381,9 @@ app.use(express.static(path.join(__dirname, '../dist')))
 // Campaign reply receiver (client-branded reply subdomains, e.g. email.alconox.com)
 require('./campaign-replies')(app, { supabase, decryptClient, webhookLimiter })
 
+// Engagement page API (client-scoped by the global /api middleware)
+require('./engagement')(app, { supabase })
+
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing
 app.get('*', (req, res) => {
@@ -9069,8 +9086,8 @@ app.listen(PORT, () => {
 
           // Sync Leads
           const leadsQuery = lastSync
-            ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
-            : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
+            ? `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastActivityDate, Status, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null AND LastModifiedDate > ${lastSync}`
+            : `SELECT Id, Email, FirstName, LastName, Company, Industry, Source_code__c, Source_Code_History__c, CreatedDate, LastActivityDate, Status, IsConverted, ConvertedDate, State, Country, Job_Funtion__c, Product_Classification__c FROM Lead WHERE Email != null`
 
           let leads = await conn.query(leadsQuery)
           console.log(`  📥 Found ${leads.totalSize} leads to sync`)
@@ -9091,6 +9108,8 @@ app.listen(PORT, () => {
                 source_code: lead.Source_code__c || null,
                 source_code_history: lead.Source_Code_History__c || null,
                 salesforce_created_date: lead.CreatedDate || null,
+                salesforce_last_activity_date: lead.LastActivityDate || null,
+                salesforce_lead_status: lead.Status || null,
                 is_converted: lead.IsConverted ?? null,
                 converted_date: lead.ConvertedDate || null,
                 state: lead.State || null,
@@ -9121,16 +9140,16 @@ app.listen(PORT, () => {
           let cronHasAccountAccess = true
           try {
             cronContactsQuery = lastSync
-              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-              : `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
+              ? `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+              : `SELECT Id, Email, FirstName, LastName, Account.Name, Account.Type, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
             var contacts = await conn.query(cronContactsQuery)
           } catch (accountErr) {
             if (accountErr.message?.includes('Account') || accountErr.message?.includes('relationship')) {
               console.warn(`  ⚠️ No Account access for ${client.name}, falling back`)
               cronHasAccountAccess = false
               cronContactsQuery = lastSync
-                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
-                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
+                ? `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null AND LastModifiedDate > ${lastSync}`
+                : `SELECT Id, Email, FirstName, LastName, Industry__c, Source_Code1__c, Source_Code_History__c, CreatedDate, LastActivityDate, MailingState, MailingCountry, Job_Function__c, Product_Classification__c, Type__c FROM Contact WHERE Email != null`
               var contacts = await conn.query(cronContactsQuery)
             } else {
               throw accountErr
@@ -9154,6 +9173,7 @@ app.listen(PORT, () => {
                 source_code: contact.Source_Code1__c || null,
                 source_code_history: contact.Source_Code_History__c || null,
                 salesforce_created_date: contact.CreatedDate || null,
+                salesforce_last_activity_date: contact.LastActivityDate || null,
                 state: contact.MailingState || null,
                 country: contact.MailingCountry || null,
                 job_function: contact.Job_Function__c || null,
@@ -9177,6 +9197,13 @@ app.listen(PORT, () => {
             } else {
               break
             }
+          }
+
+          // Opportunities (sample-request pipeline) — non-blocking
+          try {
+            await syncSalesforceOpportunities({ supabase, getSalesforceConnection }, client.id, lastSync ? `${lastSync}` : null)
+          } catch (oppError) {
+            console.error(`  ⚠️ Opportunity sync failed for ${client.name}:`, oppError.message)
           }
 
           // Update sync status

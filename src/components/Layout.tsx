@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { cn } from '../lib/utils'
-import { Users, Mail, BarChart3, FileText, Settings, Building2, LogOut, Shield, Zap, ShieldAlert, Bot, BookOpen, Image as ImageIcon } from 'lucide-react'
+import { Users, Mail, BarChart3, FileText, Settings, Building2, LogOut, Shield, Zap, ShieldAlert, Bot, BookOpen, Image as ImageIcon, Activity } from 'lucide-react'
 import { useClient } from '../context/ClientContext'
 import { useAuth } from '../contexts/AuthContext'
 import Button from './ui/Button'
@@ -12,6 +12,7 @@ interface LayoutProps {
 
 const navigation = [
   { name: 'Contacts', href: '/', icon: Users },
+  { name: 'Engagement', href: '/engagement', icon: Activity },
   { name: 'Email Designs', href: '/templates', icon: FileText },
   { name: 'Media', href: '/media', icon: ImageIcon },
   { name: 'Campaigns', href: '/campaigns', icon: Mail },

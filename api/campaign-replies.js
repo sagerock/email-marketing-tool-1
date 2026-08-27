@@ -156,9 +156,9 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
     // 3. Mark replied + stop automations
     if (contact) {
       const tags = Array.isArray(contact.tags) ? contact.tags : []
-      if (!tags.includes('Replied')) {
-        await supabase.from('contacts').update({ tags: [...tags, 'Replied'] }).eq('id', contact.id)
-      }
+      const patch = { last_replied_at: new Date().toISOString() }
+      if (!tags.includes('Replied')) patch.tags = [...tags, 'Replied']
+      await supabase.from('contacts').update(patch).eq('id', contact.id)
       await supabase.from('ai_followup_contacts')
         .update({ replied: true })
         .eq('contact_id', contact.id)
