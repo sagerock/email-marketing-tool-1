@@ -8364,6 +8364,9 @@ app.post('/resubscribe', async (req, res) => {
 // Serve static files from the dist directory
 app.use(express.static(path.join(__dirname, '../dist')))
 
+// Campaign reply receiver (client-branded reply subdomains, e.g. email.alconox.com)
+require('./campaign-replies')(app, { supabase, decryptClient, webhookLimiter })
+
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing
 app.get('*', (req, res) => {
