@@ -14,7 +14,7 @@ import {
 // Data: GET /api/engagement/overview (SQL fn engagement_overview, migration 083).
 
 type Totals = {
-  arrivals: number; replies: number; waiting: number; engaged: number
+  arrivals: number; replies: number; waiting: number; waiting_replied?: number; waiting_clicked?: number; engaged: number
   open_opps: number; stalled: number; opps_synced_at: string | null; contacts_synced_at: string | null
 }
 type Person = {
@@ -106,7 +106,7 @@ export default function Engagement() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label="Waiting on a person" value={t?.waiting ?? '–'} active={tab === 'waiting'} onClick={() => setTab('waiting')} />
+        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label="Waiting on a person" value={t?.waiting ?? '–'} sub={t && t.waiting_replied != null ? `${t.waiting_replied} replied · ${t.waiting_clicked} clicked` : undefined} active={tab === 'waiting'} onClick={() => setTab('waiting')} />
         <Stat icon={<MessageSquare className="h-5 w-5 text-blue-600" />} label={`Replies, ${days}d`} value={t?.replies ?? '–'} active={tab === 'replies'} onClick={() => setTab('replies')} />
         <Stat icon={<Inbox className="h-5 w-5 text-green-600" />} label={`New contacts, ${days}d`} value={t?.arrivals ?? '–'} active={tab === 'arrivals'} onClick={() => setTab('arrivals')} />
         <Stat icon={<Briefcase className="h-5 w-5 text-purple-600" />} label="Open opportunities" value={t?.open_opps ?? '–'} sub={t?.stalled ? `${t.stalled} stalled 14d+` : undefined} active={tab === 'pipeline'} onClick={() => setTab('pipeline')} />

@@ -54,25 +54,34 @@ function mapOpp(o, clientId) {
  */
 async function syncSalesforceOpportunities({ supabase, getSalesforceConnection }, clientId, since) {
   const conn = await getSalesforceConnection(clientId)
+  // jsforce defaults to an old API version where Opportunity.ContactId doesn't exist.
+  if (!conn.version || parseFloat(conn.version) < 50) conn.version = '61.0'
   const where = since ? ` WHERE LastModifiedDate > ${since}` : ''
 
+  // Drop any field the org/user can't see and retry, so a missing custom field
+  // never blocks the sync.
   let fields = [...STANDARD_FIELDS, ...CUSTOM_FIELDS]
   let result
-  try {
-    result = await conn.query(`SELECT ${fields.join(', ')} FROM Opportunity${where} ORDER BY LastModifiedDate`)
-  } catch (err) {
-    const msg = err?.message || ''
-    if (/No such column|INVALID_FIELD/i.test(msg)) {
-      console.warn(`⚠️ Opportunity sync: custom field missing (${msg.split('\n')[0]}), retrying with standard fields`)
-      fields = [...STANDARD_FIELDS]
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
       result = await conn.query(`SELECT ${fields.join(', ')} FROM Opportunity${where} ORDER BY LastModifiedDate`)
-    } else if (/sObject type 'Opportunity' is not supported/i.test(msg)) {
-      console.warn('⚠️ Opportunity sync: object not visible to integration user, skipping')
-      return 0
-    } else {
+      break
+    } catch (err) {
+      const msg = err?.message || ''
+      const m = msg.match(/No such column '([^']+)'/i)
+      if (m && fields.some(f => f.toLowerCase() === m[1].toLowerCase())) {
+        console.warn(`⚠️ Opportunity sync: field ${m[1]} not available, dropping it`)
+        fields = fields.filter(f => f.toLowerCase() !== m[1].toLowerCase())
+        continue
+      }
+      if (/sObject type 'Opportunity' is not supported/i.test(msg)) {
+        console.warn('⚠️ Opportunity sync: object not visible to integration user, skipping')
+        return 0
+      }
       throw err
     }
   }
+  if (!result) throw new Error('Opportunity query failed after dropping unavailable fields')
 
   let total = 0
   const BATCH = 200
