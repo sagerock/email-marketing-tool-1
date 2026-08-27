@@ -268,3 +268,23 @@ Migration files: `supabase/migrations/` — see `038_add_contact_type.sql`, `046
 | `Account.Type` always null | Field-level security on Account.Type blocked | Admin grants FLS Read on `Account.Type` |
 | OrderItem query returns empty | See Order/OrderItem section above | Run `/api/salesforce/diagnose-orders` for specific error |
 | Sync misses records | Incremental based on `LastModifiedDate` | Run Full Sync to re-fetch everything |
+
+---
+
+## Campaign reply tracking (our side) — live 2026-08-27
+
+Alconox's Salesforce admin is building Email Service → Apex → Case + CampaignMember "Responded" in a
+**sandbox**, with no production date. We run reply tracking ourselves in parallel and do not depend on it.
+
+- `email.alconox.com` MX → `mx.sendgrid.net`; SendGrid Inbound Parse (parent account, same user as the
+  `em890` domain auth) posts to `POST /api/webhook/campaign-reply`.
+- Handler: `api/campaign-replies.js`. Routing table `REPLY_DOMAINS` maps reply subdomain → client,
+  forward address, from identity. Adding another client = one entry + their MX + Inbound Parse.
+- Per reply: log to `email_conversations` (inbound; body prefixed with `[ref:…] [message-id:…]
+  [in-reply-to:…]`), tag contact `Replied`, set `ai_followup_contacts.replied`, cancel active
+  `sequence_enrollments`, forward to the client's inbox with Reply-To = customer, on the client's IP pool.
+  Never auto-replies. Auto-responders (OOO, bounces) are logged only.
+- Campaign Reply-To must be `<local>@email.alconox.com` for any of this to fire; the client default and
+  existing campaigns still say `cleaning@alconox.com` until the client is told.
+- When the Salesforce Case flow reaches production, the forwarded message already carries the visible
+  `Ref:` code and `X-Original-Message-ID`, so Apex can parse it unchanged.
