@@ -14,8 +14,14 @@ import {
 // Data: GET /api/engagement/overview (SQL fn engagement_overview, migration 083).
 
 type Totals = {
-  arrivals: number; replies: number; waiting: number; waiting_replied?: number; waiting_clicked?: number; engaged: number
+  arrivals: number; replies: number; engaged: number
+  form_leads: number; form_leads_uncontacted: number; form_leads_replied: number; form_leads_contacted: number; form_leads_new: number; form_submissions: number
   open_opps: number; stalled: number; opps_synced_at: string | null; contacts_synced_at: string | null
+}
+type FormLead = Person & {
+  last_form: string; forms: string; last_form_on: string; first_form_on: string; forms_in_window: number
+  opens_since_form: number; clicks_since_form: number; our_reply_at: string | null; sf_touched: boolean; open_opps: number
+  status: 'replied, no response' | 'not contacted' | 'new' | 'contacted'
 }
 type Person = {
   id: string; email: string; first_name: string | null; last_name: string | null; company: string | null
@@ -38,11 +44,13 @@ type Opp = {
 type Overview = {
   days: number; totals: Totals
   sources: { source: string; n: number }[]
-  arrivals: Person[]; replies: Reply[]; waiting: Person[]
+  forms: { form: string; n: number; people: number }[]
+  form_leads: FormLead[]
+  arrivals: Person[]; replies: Reply[]
   pipeline: { stage: string; n: number }[]; stalled: Opp[]; engaged: Person[]
 }
 
-type Tab = 'waiting' | 'replies' | 'arrivals' | 'pipeline' | 'engaged'
+type Tab = 'forms' | 'replies' | 'arrivals' | 'pipeline' | 'engaged'
 
 const DAY_OPTIONS = [7, 14, 30, 60, 90]
 
@@ -52,7 +60,7 @@ export default function Engagement() {
   const [data, setData] = useState<Overview | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('waiting')
+  const [tab, setTab] = useState<Tab>('forms')
 
   const load = async () => {
     if (!selectedClient) return
@@ -106,7 +114,7 @@ export default function Engagement() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label="Waiting on a person" value={t?.waiting ?? '–'} sub={t && t.waiting_replied != null ? `${t.waiting_replied} replied · ${t.waiting_clicked} clicked` : undefined} active={tab === 'waiting'} onClick={() => setTab('waiting')} />
+        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label={`Form leads, ${days}d`} value={t?.form_leads ?? '–'} sub={t ? `${t.form_leads_uncontacted} not contacted${t.form_leads_replied ? ` · ${t.form_leads_replied} replied, no response` : ''}` : undefined} active={tab === 'forms'} onClick={() => setTab('forms')} />
         <Stat icon={<MessageSquare className="h-5 w-5 text-blue-600" />} label={`Replies, ${days}d`} value={t?.replies ?? '–'} active={tab === 'replies'} onClick={() => setTab('replies')} />
         <Stat icon={<Inbox className="h-5 w-5 text-green-600" />} label={`New contacts, ${days}d`} value={t?.arrivals ?? '–'} active={tab === 'arrivals'} onClick={() => setTab('arrivals')} />
         <Stat icon={<Briefcase className="h-5 w-5 text-purple-600" />} label="Open opportunities" value={t?.open_opps ?? '–'} sub={t?.stalled ? `${t.stalled} stalled 14d+` : undefined} active={tab === 'pipeline'} onClick={() => setTab('pipeline')} />
@@ -117,7 +125,7 @@ export default function Engagement() {
         <div className="flex items-center gap-2 text-gray-500 p-8"><Loader2 className="h-5 w-5 animate-spin" /> Loading…</div>
       ) : data && (
         <>
-          {tab === 'waiting' && <WaitingTab rows={data.waiting} />}
+          {tab === 'forms' && <FormLeadsTab rows={data.form_leads} forms={data.forms} totals={data.totals} />}
           {tab === 'replies' && <RepliesTab rows={data.replies} />}
           {tab === 'arrivals' && <ArrivalsTab rows={data.arrivals} sources={data.sources} />}
           {tab === 'pipeline' && <PipelineTab pipeline={data.pipeline} stalled={data.stalled} syncedAt={data.totals.opps_synced_at} />}
@@ -130,27 +138,79 @@ export default function Engagement() {
 
 // ---------- tabs ----------
 
-function WaitingTab({ rows }: { rows: Person[] }) {
+type LeadFilter = 'all' | 'not contacted' | 'replied, no response' | 'new' | 'contacted'
+
+function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form: string; n: number; people: number }[]; totals: Totals }) {
+  const [filter, setFilter] = useState<LeadFilter>('all')
+  const shown = filter === 'all' ? rows : rows.filter(r => r.status === filter)
+  const chips: { key: LeadFilter; label: string; n: number }[] = [
+    { key: 'all', label: 'All', n: totals.form_leads },
+    { key: 'not contacted', label: 'Not contacted', n: totals.form_leads_uncontacted },
+    { key: 'replied, no response', label: 'Replied, no response', n: totals.form_leads_replied },
+    { key: 'new', label: 'New (last few days)', n: totals.form_leads_new },
+    { key: 'contacted', label: 'Contacted', n: totals.form_leads_contacted },
+  ]
   return (
-    <Section
-      title="Waiting on a person"
-      blurb="People who replied or clicked and have had no Salesforce activity or reply from us since. Oldest first."
-      empty="Nobody is waiting. Nice."
-      count={rows.length}
-    >
-      <Table head={['Person', 'Why', 'Waiting since', 'Source', 'Last Salesforce touch']}>
-        {rows.map(r => (
-          <tr key={r.id} className="border-t border-gray-100 hover:bg-gray-50">
-            <td className="py-2.5 px-4"><PersonCell p={r} /></td>
-            <td className="py-2.5 px-4"><Badge variant={r.reason === 'replied, no response' ? 'danger' : 'warning'}>{r.reason}</Badge></td>
-            <td className="py-2.5 px-4 text-sm text-gray-900 whitespace-nowrap">{relTime(r.last_inbound)}</td>
-            <td className="py-2.5 px-4 text-sm text-gray-600">{r.source_code || '–'}</td>
-            <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'never'}</td>
-          </tr>
-        ))}
-      </Table>
-    </Section>
+    <div className="space-y-4">
+      <Card>
+        <CardContent className="p-4">
+          <h3 className="text-sm font-semibold text-gray-900 mb-3">Form submissions <span className="text-gray-400 font-normal">({totals.form_submissions} from {totals.form_leads} people)</span></h3>
+          <div className="flex flex-wrap gap-2">
+            {forms.map(f => (
+              <div key={f.form} className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-1.5">
+                <span className="text-sm text-gray-800">{f.form}</span>
+                <span className="text-sm font-semibold text-gray-900">{f.n}</span>
+                {f.people !== f.n && <span className="text-xs text-gray-400">{f.people} people</span>}
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      <Section
+        title="People who filled out a form"
+        blurb="Each person's latest form, what they did with our emails since, and whether anyone at the company has logged activity on them in Salesforce since the form. Urgent first, then most engaged."
+        empty="No form submissions in this window."
+        count={shown.length}
+        controls={
+          <div className="flex flex-wrap gap-1">
+            {chips.map(c => (
+              <button key={c.key} onClick={() => setFilter(c.key)}
+                className={cn('px-2.5 py-1 rounded-full text-xs border', filter === c.key ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-700 border-gray-200 hover:bg-gray-50')}>
+                {c.label} <span className={filter === c.key ? 'text-gray-300' : 'text-gray-400'}>{c.n}</span>
+              </button>
+            ))}
+          </div>
+        }
+      >
+        <Table head={['Person', 'Form', 'Filled out', 'Status', 'Since the form', 'Salesforce touch', 'Open opps']}>
+          {shown.map(r => (
+            <tr key={r.id} className="border-t border-gray-100 hover:bg-gray-50">
+              <td className="py-2.5 px-4"><PersonCell p={r} /></td>
+              <td className="py-2.5 px-4 text-sm text-gray-800">
+                {r.last_form}
+                {r.forms_in_window > 1 && <div className="text-xs text-gray-400">{r.forms_in_window} submissions: {r.forms}</div>}
+              </td>
+              <td className="py-2.5 px-4 text-sm text-gray-900 whitespace-nowrap">{fmtDate(r.last_form_on)} <span className="text-gray-400">({relTime(r.last_form_on)})</span></td>
+              <td className="py-2.5 px-4"><StatusBadge status={r.status} /></td>
+              <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">
+                {r.opens_since_form} opens · {r.clicks_since_form} clicks{r.last_replied_at && r.last_replied_at >= r.last_form_on ? ' · replied' : ''}
+              </td>
+              <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">
+                {r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'never'}
+                {r.our_reply_at && <div className="text-xs text-gray-400">we replied {relTime(r.our_reply_at)}</div>}
+              </td>
+              <td className="py-2.5 px-4 text-sm text-gray-600">{r.open_opps || '–'}</td>
+            </tr>
+          ))}
+        </Table>
+      </Section>
+    </div>
   )
+}
+
+function StatusBadge({ status }: { status: FormLead['status'] }) {
+  const v = status === 'replied, no response' ? 'danger' : status === 'not contacted' ? 'warning' : status === 'new' ? 'info' : 'success'
+  return <Badge variant={v}>{status}</Badge>
 }
 
 function RepliesTab({ rows }: { rows: Reply[] }) {
@@ -296,13 +356,16 @@ function Stat({ icon, label, value, sub, active, onClick }: { icon: React.ReactN
   )
 }
 
-function Section({ title, blurb, empty, count, children }: { title: string; blurb: string; empty: string; count: number; children: React.ReactNode }) {
+function Section({ title, blurb, empty, count, controls, children }: { title: string; blurb: string; empty: string; count: number; controls?: React.ReactNode; children: React.ReactNode }) {
   return (
     <Card>
       <CardContent className="p-0">
-        <div className="px-4 py-3 border-b border-gray-100">
-          <h3 className="text-sm font-semibold text-gray-900">{title} <span className="text-gray-400 font-normal">({count})</span></h3>
-          <p className="text-xs text-gray-500 mt-0.5">{blurb}</p>
+        <div className="px-4 py-3 border-b border-gray-100 flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">{title} <span className="text-gray-400 font-normal">({count})</span></h3>
+            <p className="text-xs text-gray-500 mt-0.5">{blurb}</p>
+          </div>
+          {controls}
         </div>
         {count === 0 ? <p className="p-6 text-sm text-gray-500">{empty}</p> : <div className="overflow-x-auto">{children}</div>}
       </CardContent>
