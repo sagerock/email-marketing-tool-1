@@ -143,7 +143,10 @@ type LeadFilter = 'all' | 'not contacted' | 'auto follow-up only' | 'replied, no
 
 function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form: string; n: number; people: number }[]; totals: Totals }) {
   const [filter, setFilter] = useState<LeadFilter>('all')
-  const shown = filter === 'all' ? rows : rows.filter(r => r.status === filter)
+  const [formFilter, setFormFilter] = useState<string | null>(null)
+  const shown = rows
+    .filter(r => filter === 'all' || r.status === filter)
+    .filter(r => !formFilter || r.forms.split(', ').includes(formFilter))
   const chips: { key: LeadFilter; label: string; n: number }[] = [
     { key: 'all', label: 'All', n: totals.form_leads },
     { key: 'not contacted', label: 'Not contacted', n: totals.form_leads_uncontacted },
@@ -158,13 +161,20 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
         <CardContent className="p-4">
           <h3 className="text-sm font-semibold text-gray-900 mb-3">Form submissions <span className="text-gray-400 font-normal">({totals.form_submissions} from {totals.form_leads} people)</span></h3>
           <div className="flex flex-wrap gap-2">
-            {forms.map(f => (
-              <div key={f.form} className="flex items-center gap-2 rounded-lg bg-gray-50 px-3 py-1.5">
-                <span className="text-sm text-gray-800">{f.form}</span>
-                <span className="text-sm font-semibold text-gray-900">{f.n}</span>
-                {f.people !== f.n && <span className="text-xs text-gray-400">{f.people} people</span>}
-              </div>
-            ))}
+            {forms.map(f => {
+              const active = formFilter === f.form
+              return (
+                <button key={f.form} onClick={() => setFormFilter(active ? null : f.form)} title={active ? 'Show all forms' : `Show only ${f.form}`}
+                  className={cn('flex items-center gap-2 rounded-lg px-3 py-1.5 border transition', active ? 'bg-gray-900 border-gray-900' : 'bg-gray-50 border-transparent hover:border-gray-300')}>
+                  <span className={cn('text-sm', active ? 'text-white' : 'text-gray-800')}>{f.form}</span>
+                  <span className={cn('text-sm font-semibold', active ? 'text-white' : 'text-gray-900')}>{f.n}</span>
+                  {f.people !== f.n && <span className={cn('text-xs', active ? 'text-gray-300' : 'text-gray-400')}>{f.people} people</span>}
+                </button>
+              )
+            })}
+            {formFilter && (
+              <button onClick={() => setFormFilter(null)} className="text-xs text-gray-500 underline px-1">show all forms</button>
+            )}
           </div>
         </CardContent>
       </Card>
