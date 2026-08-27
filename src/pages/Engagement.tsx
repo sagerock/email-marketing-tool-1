@@ -302,7 +302,7 @@ function PipelineTab({ pipeline, stalled, syncedAt }: { pipeline: { stage: strin
           )}
         </CardContent>
       </Card>
-      <Section title="Stalled opportunities" blurb="Open in Salesforce with no activity or stage change in 14+ days. Oldest first." empty="No stalled opportunities." count={stalled.length}>
+      <Section title="Stalled opportunities" blurb="Open in Salesforce with no activity or stage change in 14+ days. Newest first." empty="No stalled opportunities." count={stalled.length}>
         <Table head={['Opportunity', 'Stage', 'Owner', 'Contact', 'Last touch', 'Sample shipped']}>
           {stalled.map(o => (
             <tr key={o.salesforce_id} className="border-t border-gray-100 hover:bg-gray-50">
