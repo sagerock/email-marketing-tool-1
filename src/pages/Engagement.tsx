@@ -15,13 +15,14 @@ import {
 
 type Totals = {
   arrivals: number; replies: number; engaged: number
-  form_leads: number; form_leads_uncontacted: number; form_leads_replied: number; form_leads_contacted: number; form_leads_new: number; form_submissions: number
+  form_leads: number; form_leads_uncontacted: number; form_leads_replied: number; form_leads_contacted: number; form_leads_auto: number; form_leads_new: number; form_submissions: number
   open_opps: number; stalled: number; opps_synced_at: string | null; contacts_synced_at: string | null
 }
 type FormLead = Person & {
   last_form: string; forms: string; last_form_on: string; first_form_on: string; forms_in_window: number
   opens_since_form: number; clicks_since_form: number; our_reply_at: string | null; sf_touched: boolean; open_opps: number
-  status: 'replied, no response' | 'not contacted' | 'new' | 'contacted'
+  auto_followups: number; last_auto_followup_at: string | null
+  status: 'replied, no response' | 'not contacted' | 'auto follow-up only' | 'new' | 'contacted'
 }
 type Person = {
   id: string; email: string; first_name: string | null; last_name: string | null; company: string | null
@@ -114,7 +115,7 @@ export default function Engagement() {
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label={`Form leads, ${days}d`} value={t?.form_leads ?? '–'} sub={t ? `${t.form_leads_uncontacted} not contacted${t.form_leads_replied ? ` · ${t.form_leads_replied} replied, no response` : ''}` : undefined} active={tab === 'forms'} onClick={() => setTab('forms')} />
+        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label={`Form leads, ${days}d`} value={t?.form_leads ?? '–'} sub={t ? `${t.form_leads_uncontacted} not contacted · ${t.form_leads_auto} auto only${t.form_leads_replied ? ` · ${t.form_leads_replied} replied, no response` : ''}` : undefined} active={tab === 'forms'} onClick={() => setTab('forms')} />
         <Stat icon={<MessageSquare className="h-5 w-5 text-blue-600" />} label={`Replies, ${days}d`} value={t?.replies ?? '–'} active={tab === 'replies'} onClick={() => setTab('replies')} />
         <Stat icon={<Inbox className="h-5 w-5 text-green-600" />} label={`New contacts, ${days}d`} value={t?.arrivals ?? '–'} active={tab === 'arrivals'} onClick={() => setTab('arrivals')} />
         <Stat icon={<Briefcase className="h-5 w-5 text-purple-600" />} label="Open opportunities" value={t?.open_opps ?? '–'} sub={t?.stalled ? `${t.stalled} stalled 14d+` : undefined} active={tab === 'pipeline'} onClick={() => setTab('pipeline')} />
@@ -138,7 +139,7 @@ export default function Engagement() {
 
 // ---------- tabs ----------
 
-type LeadFilter = 'all' | 'not contacted' | 'replied, no response' | 'new' | 'contacted'
+type LeadFilter = 'all' | 'not contacted' | 'auto follow-up only' | 'replied, no response' | 'new' | 'contacted'
 
 function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form: string; n: number; people: number }[]; totals: Totals }) {
   const [filter, setFilter] = useState<LeadFilter>('all')
@@ -146,6 +147,7 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
   const chips: { key: LeadFilter; label: string; n: number }[] = [
     { key: 'all', label: 'All', n: totals.form_leads },
     { key: 'not contacted', label: 'Not contacted', n: totals.form_leads_uncontacted },
+    { key: 'auto follow-up only', label: 'Auto follow-up only', n: totals.form_leads_auto },
     { key: 'replied, no response', label: 'Replied, no response', n: totals.form_leads_replied },
     { key: 'new', label: 'New (last few days)', n: totals.form_leads_new },
     { key: 'contacted', label: 'Contacted', n: totals.form_leads_contacted },
@@ -168,7 +170,7 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
       </Card>
       <Section
         title="People who filled out a form"
-        blurb="Each person's latest form, what they did with our emails since, and whether anyone at the company has logged activity on them in Salesforce since the form. Urgent first, then most engaged."
+        blurb="Each person's latest form, what they did with our emails since, and whether anyone at the company has logged activity on them in Salesforce since the form. 'Auto follow-up only' = our automated email went out but no person has touched them. Urgent first, then most engaged."
         empty="No form submissions in this window."
         count={shown.length}
         controls={
@@ -194,6 +196,7 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
               <td className="py-2.5 px-4"><StatusBadge status={r.status} /></td>
               <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">
                 {r.opens_since_form} opens · {r.clicks_since_form} clicks{r.last_replied_at && r.last_replied_at >= r.last_form_on ? ' · replied' : ''}
+                {r.auto_followups > 0 && <div className="text-xs text-gray-400">{r.auto_followups} auto follow-up{r.auto_followups === 1 ? '' : 's'} sent, last {relTime(r.last_auto_followup_at)}</div>}
               </td>
               <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">
                 {r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'never'}
@@ -209,7 +212,7 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
 }
 
 function StatusBadge({ status }: { status: FormLead['status'] }) {
-  const v = status === 'replied, no response' ? 'danger' : status === 'not contacted' ? 'warning' : status === 'new' ? 'info' : 'success'
+  const v = status === 'replied, no response' ? 'danger' : status === 'not contacted' ? 'warning' : status === 'auto follow-up only' ? 'default' : status === 'new' ? 'info' : 'success'
   return <Badge variant={v}>{status}</Badge>
 }
 

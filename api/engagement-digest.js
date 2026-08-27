@@ -28,6 +28,7 @@ const T = {
 function statusPill(s) {
   if (s === 'replied, no response') return `<span style="${T.pill('#fde2e2', '#8a1c1c')}">replied, no response</span>`
   if (s === 'not contacted') return `<span style="${T.pill('#fff1cc', '#7a5200')}">not contacted</span>`
+  if (s === 'auto follow-up only') return `<span style="${T.pill('#eeeeee', '#444')}">auto follow-up only</span>`
   if (s === 'new') return `<span style="${T.pill('#dceeff', '#0b4a8b')}">new</span>`
   return `<span style="${T.pill('#dff3e3', '#1d6b34')}">contacted</span>`
 }
@@ -73,7 +74,7 @@ function buildDigest(o, client, cfg) {
   </tr>`)
 
   const summary = `${t.form_submissions} form submission${t.form_submissions === 1 ? '' : 's'} from ${t.form_leads} people in the last ${days} days. `
-    + `${t.form_leads_uncontacted} not contacted, ${t.form_leads_new} new, ${t.form_leads_replied} replied with no response, ${t.form_leads_contacted} contacted. `
+    + `${t.form_leads_uncontacted} not contacted at all, ${t.form_leads_auto} got only our automated follow-up, ${t.form_leads_new} new, ${t.form_leads_replied} replied with no response, ${t.form_leads_contacted} contacted by a person. `
     + `${t.open_opps} open opportunities, ${t.stalled} with no activity in 14+ days. `
     + `${t.replies} email repl${t.replies === 1 ? 'y' : 'ies'} in the window.`
 
@@ -82,7 +83,7 @@ function buildDigest(o, client, cfg) {
     <p style="${T.sub}">${esc(summary)} <a href="${pageUrl}" style="color:#1d4ed8">Open the full page</a>.</p>
 
     <h2 style="${T.h2}">Form leads that need a person (${attention.length})</h2>
-    <p style="${T.sub}">Filled out a form in the last ${days} days and nobody has logged activity on them in Salesforce since. Urgent first, then most engaged.</p>
+    <p style="${T.sub}">Filled out a form in the last ${days} days and no person has logged activity on them in Salesforce since. "Auto follow-up only" means our automated email went out but nobody has followed up. Urgent first, then most engaged.</p>
     ${attention.length ? table(['Person', 'Form', 'Filled out', 'Status', 'Since the form', 'Salesforce touch'], leadRows) : `<p style="${T.sub}">Everyone has been contacted. Nice.</p>`}
     ${contacted.length ? `<p style="${T.sub};margin-top:8px">${contacted.length} other form lead${contacted.length === 1 ? '' : 's'} already had a Salesforce touch.</p>` : ''}
 
