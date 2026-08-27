@@ -8383,6 +8383,8 @@ require('./campaign-replies')(app, { supabase, decryptClient, webhookLimiter })
 
 // Engagement page API (client-scoped by the global /api middleware)
 require('./engagement')(app, { supabase })
+// Monday engagement digest (form leads + stalled opps + replies), per-client config
+require('./engagement-digest')(app, { supabase, decryptClient, cron })
 
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing
