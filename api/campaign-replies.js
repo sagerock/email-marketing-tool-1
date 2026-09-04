@@ -20,6 +20,14 @@ const multer = require('multer')
 const { MailService } = require('@sendgrid/mail')
 
 // Reply subdomain → client routing. forwardTo falls back to clients.default_reply_to_email.
+//
+// Two kinds of route:
+//   - forwarding (Alconox): a reply lands here, gets logged, and is forwarded to staff.
+//   - logOnly (CfA): staff and CfA's inbox agent BCC hello@<subdomain> whenever they write
+//     to a lead. The lead is whoever on the message is NOT internal; direction follows who
+//     wrote it; the contact is created if new; nothing is forwarded and nothing replies.
+//     Added 2026-09-04 (Sage: "get them in the habit of adding that email address so we
+//     know where leads are in the process").
 const REPLY_DOMAINS = {
   'email.alconox.com': {
     clientId: 'ea7f1422-2d20-4299-85a7-c1201e953409',
@@ -28,6 +36,29 @@ const REPLY_DOMAINS = {
     forwardTo: 'cleaning@alconox.com',
     bcc: ['sage@sagerock.com'],
   },
+  'email.centerforanthroposophy.org': {
+    clientId: '22500cd6-052a-42ff-a0cb-4f3ba9125dfd',
+    logOnly: true,
+    internalDomains: ['centerforanthroposophy.org', 'email.centerforanthroposophy.org', 'sagerock.com', 'sagelewis.com'],
+    createContacts: true,
+    newContactTags: ['hello-bcc'],
+    newContactSource: 'hello-bcc',
+  },
+}
+
+// "Name <a@b>, c@d" → [{ email, name }]
+function parseAddressList(raw) {
+  if (!raw) return []
+  return String(raw).split(',').map(part => {
+    const m = part.match(/^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/)
+    const email = (m ? m[2] : part).trim().toLowerCase()
+    const name = m ? m[1].trim() : ''
+    return email.includes('@') ? { email, name } : null
+  }).filter(Boolean)
+}
+
+function domainOf(email) {
+  return (email || '').split('@')[1] || ''
 }
 
 // Visible ref line we plan to put in campaign footers, e.g. "Ref: Campaign1234".
@@ -119,6 +150,11 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
     const cleanBody = stripQuoted(text || fullText) || fullText
     const refMatch = fullText.match(REF_RE)
     const refCode = refMatch ? refMatch[1] : null
+
+    if (route.logOnly) {
+      await handleLogOnly(route, { rawFrom, senderEmail, body, headers, subject, cleanBody, auto, files, domain })
+      return
+    }
 
     // 1. Contact
     const { data: contact } = await supabase
@@ -220,5 +256,82 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
     sg.setApiKey(client.sendgrid_api_key)
     await sg.send(msg)
     console.log(`📤 campaign-reply: forwarded ${senderEmail} → ${forwardTo}`)
+  }
+
+  // Log-only routes (the CfA hello@ address). Never forwards, never replies.
+  async function handleLogOnly(route, { rawFrom, senderEmail, body, headers, subject, cleanBody, auto, files, domain }) {
+    const internal = new Set(route.internalDomains || [])
+    const isInternal = email => internal.has(domainOf(email))
+    const participants = [
+      ...parseAddressList(rawFrom),
+      ...parseAddressList(body.to || headers['to']),
+      ...parseAddressList(body.cc || headers['cc']),
+    ].filter(p => domainOf(p.email) !== domain)          // drop the hello@ address itself
+
+    const senderInternal = isInternal(senderEmail)
+    const lead = senderInternal
+      ? participants.find(p => !isInternal(p.email))
+      : (participants.find(p => p.email === senderEmail) || { email: senderEmail, name: '' })
+    if (!lead) {
+      console.warn(`⚠️ campaign-reply(log-only): no external participant on "${subject}" from ${senderEmail}, dropping`)
+      return
+    }
+    const direction = senderInternal ? 'outbound' : 'inbound'
+
+    // Contact: find, or create so the conversation has somewhere to live.
+    let { data: contact } = await supabase
+      .from('contacts')
+      .select('id, email, first_name, last_name, tags')
+      .eq('client_id', route.clientId)
+      .eq('email', lead.email)
+      .maybeSingle()
+    if (!contact && route.createContacts) {
+      const [first = '', ...rest] = (lead.name || '').split(/\s+/)
+      const { data: created, error: createErr } = await supabase
+        .from('contacts')
+        .insert({
+          client_id: route.clientId,
+          email: lead.email,
+          first_name: first,
+          last_name: rest.join(' '),
+          tags: route.newContactTags || [],
+          source_code: route.newContactSource || null,
+        })
+        .select('id, email, first_name, last_name, tags')
+        .single()
+      if (createErr) console.error('❌ campaign-reply(log-only): contact create failed:', createErr.message)
+      else { contact = created; console.log(`➕ campaign-reply(log-only): new contact ${lead.email}`) }
+    }
+
+    const noteBits = [
+      auto ? '[auto-response]' : null,
+      `[via:${domain}]`,
+      `[${direction === 'outbound' ? 'from' : 'to'}:${senderInternal ? senderEmail : (parseAddressList(body.to || headers['to'])[0]?.email || '')}]`,
+      headers['message-id'] ? `[message-id:${headers['message-id']}]` : null,
+      headers['in-reply-to'] ? `[in-reply-to:${headers['in-reply-to']}]` : null,
+      files.length ? `[attachments:${files.length}]` : null,
+    ].filter(Boolean).join(' ')
+
+    const { error: logErr } = await supabase.from('email_conversations').insert({
+      client_id: route.clientId,
+      contact_id: contact?.id || null,
+      direction,
+      subject: subject || '(no subject)',
+      body: noteBits + '\n\n' + (cleanBody || '(empty)'),
+      ai_generated: false,
+      escalated: false,
+    })
+    if (logErr) console.error('❌ campaign-reply(log-only): log insert failed:', logErr.message)
+
+    if (contact) {
+      const patch = { last_activity_at: new Date().toISOString() }
+      if (direction === 'inbound' && !auto) {
+        patch.last_replied_at = patch.last_activity_at
+        const tags = Array.isArray(contact.tags) ? contact.tags : []
+        if (!tags.includes('Replied')) patch.tags = [...tags, 'Replied']
+      }
+      await supabase.from('contacts').update(patch).eq('id', contact.id)
+    }
+    console.log(`📝 campaign-reply(log-only): ${direction} with ${lead.email} logged (${contact ? 'contact ' + contact.id : 'no contact'})`)
   }
 }
