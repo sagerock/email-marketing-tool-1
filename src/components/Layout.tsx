@@ -11,7 +11,8 @@ interface LayoutProps {
 }
 
 const navigation = [
-  { name: 'Contacts', href: '/', icon: Users },
+  { name: 'Newsletters', href: '/', icon: Mail },
+  { name: 'Contacts', href: '/contacts', icon: Users },
   { name: 'Engagement', href: '/engagement', icon: Activity },
   { name: 'Email Designs', href: '/templates', icon: FileText },
   { name: 'Media', href: '/media', icon: ImageIcon },
@@ -42,8 +43,8 @@ export default function Layout({ children }: LayoutProps) {
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Sidebar */}
-      <aside className="fixed inset-y-0 left-0 w-64 bg-white border-r border-gray-200">
-        <div className="flex h-16 items-center justify-center px-4 border-b border-gray-200">
+      <aside className="fixed inset-y-0 left-0 w-64 bg-white border-r border-gray-200 flex flex-col overflow-y-auto">
+        <div className="flex h-16 items-center justify-center px-4 border-b border-slate-800 bg-slate-900">
           <img
             src="/sagerock-logo.png"
             alt="SageRock Email Marketing"
@@ -93,8 +94,8 @@ export default function Layout({ children }: LayoutProps) {
           {navigation.map((item) => {
             const Icon = item.icon
             const isActive = item.href === '/'
-              ? location.pathname === '/' || location.pathname.startsWith('/contacts/')
-              : location.pathname === item.href
+              ? location.pathname === '/'
+              : location.pathname === item.href || location.pathname.startsWith(item.href + '/')
             return (
               <Link
                 key={item.name}
@@ -149,6 +150,20 @@ export default function Layout({ children }: LayoutProps) {
 
       {/* Main content */}
       <main className="pl-64">
+        <header className="bg-white border-b border-gray-200 px-8 py-3 flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Working in</p>
+            <p className="font-semibold text-gray-900 break-words">{loading ? 'Loading workspace…' : selectedClient?.name || 'No client selected'}</p>
+          </div>
+          <div className="text-right min-w-0">
+            <p className="text-sm text-gray-700 break-all">{user?.email}</p>
+            <button onClick={async () => {
+              const next = location.pathname + location.search
+              try { await signOut(); window.location.assign(`/login?next=${encodeURIComponent(next)}`) }
+              catch (error) { console.error('Error switching account:', error) }
+            }} className="text-xs font-medium text-blue-700 hover:underline">Switch account</button>
+          </div>
+        </header>
         <div className="px-8 py-6">{children}</div>
       </main>
     </div>

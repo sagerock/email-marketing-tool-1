@@ -8,6 +8,7 @@ import Login from './pages/auth/Login'
 import Signup from './pages/auth/Signup'
 import SetPassword from './pages/auth/SetPassword'
 import Contacts from './pages/Contacts'
+import NewsletterHome from './pages/NewsletterHome'
 import Templates from './pages/Templates'
 import Campaigns from './pages/Campaigns'
 import Automations from './pages/Automations'
@@ -44,11 +45,12 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Layout>
-                    <Contacts />
+                    <NewsletterHome />
                   </Layout>
                 </ProtectedRoute>
               }
             />
+            <Route path="/contacts" element={<ProtectedRoute><Layout><Contacts /></Layout></ProtectedRoute>} />
             <Route
               path="/engagement"
               element={

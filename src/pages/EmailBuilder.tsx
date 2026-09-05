@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
@@ -39,7 +39,7 @@ interface Folder {
 
 export default function EmailBuilder() {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const editTemplateId = searchParams.get('templateId')
   const { selectedClient, setSelectedClient, clients, loading: clientsLoading } = useClient()
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -64,6 +64,28 @@ export default function EmailBuilder() {
   const [referenceTemplateIds, setReferenceTemplateIds] = useState<string[]>([])
   const [showReferencePicker, setShowReferencePicker] = useState(false)
   const [referenceSearch, setReferenceSearch] = useState('')
+
+  const [savedSnapshot, setSavedSnapshot] = useState('')
+  const [saveError, setSaveError] = useState('')
+  const [saveAsCopy, setSaveAsCopy] = useState(false)
+  const justSavedId = useRef<{ id: string; clientId: string } | null>(null)
+  const snapshot = JSON.stringify([currentHtml, currentSubject, currentPreviewText])
+  const hasUnsavedChanges = Boolean(currentHtml) && snapshot !== savedSnapshot
+  const previewImages = useMemo(() => {
+    if (!currentHtml) return []
+    const doc = new DOMParser().parseFromString(currentHtml, 'text/html')
+    return Array.from(doc.querySelectorAll('img')).map((img, i) => ({
+      name: img.getAttribute('alt') || img.getAttribute('src')?.split('/').pop()?.split('?')[0] || `Image ${i + 1}`,
+      needsSource: !/^(https:\/\/|data:image\/)/i.test(img.getAttribute('src') || ''),
+    }))
+  }, [currentHtml])
+
+  useEffect(() => {
+    if (!hasUnsavedChanges) return
+    const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [hasUnsavedChanges])
 
   // Save state
   const [showSaveForm, setShowSaveForm] = useState(false)
@@ -96,7 +118,7 @@ export default function EmailBuilder() {
 
   // Load existing template when editTemplateId is in URL
   useEffect(() => {
-    if (!editTemplateId || clientsLoading) return
+    if (!editTemplateId || clientsLoading || (editTemplateId === justSavedId.current?.id && selectedClient?.id === justSavedId.current?.clientId)) return
     let cancelled = false
     setTemplateLoading(true)
     setTemplateLoadError('')
@@ -116,6 +138,7 @@ export default function EmailBuilder() {
         if (!owner) throw new Error('Your account doesn’t have access to this draft’s client. Sign in with the account you use for that client.')
         if (!data.html_content) throw new Error('This draft has no email content yet.')
         if (selectedClient?.id !== owner.id) setSelectedClient(owner)
+        setSavedSnapshot(JSON.stringify([data.html_content, data.subject || '', data.preview_text || '']))
         setCurrentHtml(data.html_content)
         setCurrentSubject(data.subject || '')
         setCurrentPreviewText(data.preview_text || '')
@@ -123,7 +146,7 @@ export default function EmailBuilder() {
         setMessages([{
           id: 'edit-init', role: 'assistant',
           content: `I've loaded your "${data.name}" template. What would you like to change?`,
-          htmlContent: data.html_content,
+          htmlContent: data.html_content, subject: data.subject || '', previewText: data.preview_text || '',
         }])
       } catch (error) {
         if (!cancelled) setTemplateLoadError(error instanceof Error ? error.message : 'We couldn’t open this draft. Please try again.')
@@ -219,7 +242,7 @@ export default function EmailBuilder() {
         id: 'starter-init',
         role: 'assistant',
         content: `Started from the "${data.name}" layout — an Outlook-safe base. Tell me what to change (swap the copy, update the product, adjust sections) and I'll keep the structure intact.`,
-        htmlContent: data.html_content || undefined,
+        htmlContent: data.html_content || undefined, subject: data.subject || '', previewText: data.preview_text || '',
       }])
     } catch (err) {
       console.error('Failed to start from starter:', err)
@@ -244,7 +267,7 @@ export default function EmailBuilder() {
 
   const handleSend = async () => {
     const trimmed = input.trim()
-    if (!trimmed || isStreaming || !selectedClient) return
+    if (!trimmed || isStreaming || saving || !selectedClient) return
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -370,44 +393,39 @@ export default function EmailBuilder() {
   }
 
   const handleSave = async () => {
-    if (!saveName || !currentHtml || !selectedClient) return
+    if (!saveName.trim() || !currentHtml || !selectedClient || isStreaming) return
     setSaving(true)
+    setSaveError('')
     try {
-      if (editTemplateId) {
-        const { error } = await supabase.from('templates').update({
-          name: saveName,
-          subject: saveSubject,
-          preview_text: savePreviewText,
-          html_content: currentHtml,
-          updated_at: new Date().toISOString(),
-        }).eq('id', editTemplateId).eq('client_id', selectedClient.id)
-        if (error) throw error
-      } else {
-        const { error } = await supabase.from('templates').insert({
-          name: saveName,
-          subject: saveSubject,
-          preview_text: savePreviewText,
-          html_content: currentHtml,
-          folder_id: saveFolderId,
-          client_id: selectedClient.id,
-        })
-        if (error) throw error
-      }
+      const values = { name: saveName.trim(), subject: saveSubject, preview_text: savePreviewText,
+        html_content: currentHtml, updated_at: new Date().toISOString() }
+      const query = editTemplateId && !saveAsCopy
+        ? supabase.from('templates').update(values).eq('id', editTemplateId).eq('client_id', selectedClient.id)
+        : supabase.from('templates').insert({ ...values, folder_id: saveFolderId, client_id: selectedClient.id })
+      const { data, error } = await query.select('id').single()
+      if (error || !data) throw error || new Error('No saved draft returned')
+      setCurrentSubject(saveSubject)
+      setCurrentPreviewText(savePreviewText)
+      setSavedSnapshot(JSON.stringify([currentHtml, saveSubject, savePreviewText]))
+      setEditTemplateName(saveName.trim())
+      justSavedId.current = { id: data.id, clientId: selectedClient.id }
+      setSearchParams({ templateId: data.id }, { replace: true })
       setShowSaveForm(false)
-      navigate('/templates')
     } catch (err) {
       console.error('Failed to save template:', err)
-      alert('Failed to save template')
+      setSaveError('Your changes haven’t been saved. Please try again; your preview is still here.')
     } finally {
       setSaving(false)
     }
   }
 
-  const openSaveForm = () => {
-    setSaveName(editTemplateName || currentSubject || 'Untitled Email')
+  const openSaveForm = (asCopy = false) => {
+    setSaveAsCopy(asCopy)
+    setSaveName((editTemplateName || currentSubject || 'Untitled Email') + (asCopy ? ' — new version' : ''))
     setSaveSubject(currentSubject)
     setSavePreviewText(currentPreviewText)
     setSaveFolderId(null)
+    setSaveError('')
     setShowSaveForm(true)
   }
 
@@ -450,9 +468,9 @@ export default function EmailBuilder() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-2rem)]">
+    <div className="flex flex-col h-[calc(100vh-8rem)] min-h-[650px]">
       {/* Top Bar */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
+      <div className="flex flex-wrap gap-3 items-center justify-between px-4 py-3 border-b border-gray-200 bg-white flex-shrink-0">
         <div className="flex items-center gap-4">
           <button
             onClick={() => navigate('/templates')}
@@ -467,7 +485,11 @@ export default function EmailBuilder() {
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <span role="status" className={cn('text-xs font-medium', hasUnsavedChanges ? 'text-amber-700' : 'text-green-700')}>
+            {saving ? 'Saving…' : isStreaming ? 'Updating preview…' : !currentHtml ? 'No draft yet' : hasUnsavedChanges ? 'Unsaved changes' : 'Draft saved'}
+          </span>
+          {editTemplateId && <Button variant="secondary" size="sm" disabled={isStreaming || saving || !currentHtml} onClick={() => openSaveForm(true)}>Save a new version</Button>}
           {complianceWarnings.length > 0 && (
             <div className="flex items-center gap-1 text-amber-600 text-xs">
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -477,21 +499,22 @@ export default function EmailBuilder() {
           <Button
             variant="primary"
             size="sm"
-            onClick={openSaveForm}
-            disabled={!currentHtml}
+            onClick={() => openSaveForm()}
+            disabled={!currentHtml || isStreaming || saving}
           >
             <Save className="h-4 w-4 mr-1" />
-            {editTemplateId ? 'Save Changes' : 'Save as Template'}
+            {editTemplateId ? 'Save changes' : 'Save draft'}
           </Button>
         </div>
       </div>
 
+      {saveError && <p role="alert" className="px-4 py-3 text-sm text-red-800 bg-red-50">{saveError}</p>}
       {/* Save Form (inline, slides down) */}
       {showSaveForm && (
         <div className="px-4 py-3 bg-blue-50 border-b border-blue-200 flex-shrink-0">
           <div className="flex items-end gap-3">
             <div className="flex-1">
-              <label className="block text-xs font-medium text-gray-700 mb-1">Template Name *</label>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Draft name *</label>
               <input
                 type="text"
                 value={saveName}
@@ -517,7 +540,7 @@ export default function EmailBuilder() {
                 className="w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm"
               />
             </div>
-            {!editTemplateId && (
+            {(!editTemplateId || saveAsCopy) && (
               <div className="w-40">
                 <label className="block text-xs font-medium text-gray-700 mb-1">Folder</label>
                 <select
@@ -532,8 +555,8 @@ export default function EmailBuilder() {
                 </select>
               </div>
             )}
-            <Button size="sm" onClick={handleSave} disabled={saving || !saveName}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : editTemplateId ? 'Update Template' : 'Save'}
+            <Button size="sm" onClick={handleSave} disabled={saving || isStreaming || !saveName.trim()}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : saveAsCopy ? 'Save new version' : 'Save draft'}
             </Button>
             <button onClick={() => setShowSaveForm(false)} className="text-gray-400 hover:text-gray-600 pb-1">
               <X className="h-4 w-4" />
@@ -546,6 +569,15 @@ export default function EmailBuilder() {
       <div className="flex flex-1 min-h-0">
         {/* Chat Panel */}
         <div className="w-[45%] flex flex-col border-r border-gray-200 bg-white">
+          <details className="px-4 py-3 border-b border-gray-200 text-sm">
+            <summary className="cursor-pointer font-medium text-gray-800">In this preview · {previewImages.length} image{previewImages.length === 1 ? '' : 's'}</summary>
+            <div className="mt-2 max-h-40 overflow-auto space-y-1 text-xs text-gray-600">
+              <p>{currentHtml ? 'Email design loaded' : 'No email design yet'}</p>
+              {previewImages.map((img, i) => <p key={i} className={img.needsSource ? 'text-amber-700' : ''}>{img.name} · {img.needsSource ? 'Needs an image link' : 'Image linked'}</p>)}
+              <button onClick={() => setPickerOpen(true)} className="text-blue-700 hover:underline">Open image library</button>
+              <p>Files sent by email are collected in that email thread. Images included in a saved draft appear here.</p>
+            </div>
+          </details>
           {/* Messages Area */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {/* Welcome message */}
@@ -555,7 +587,7 @@ export default function EmailBuilder() {
                   <span className="text-purple-600 text-sm font-medium">AI</span>
                 </div>
                 <div className="flex-1 bg-gray-50 rounded-lg p-3 text-sm text-gray-700">
-                  <p>Hi! I'm your email design assistant. I can help you create or refine HTML email designs that render perfectly across all email clients.</p>
+                  <p>Hi! I'm your email design assistant. I can help you create or refine HTML email designs that work across email clients.</p>
                   <p className="mt-2">You can:</p>
                   <ul className="mt-1 ml-4 list-disc space-y-1">
                     <li>Describe what you want and I'll build it</li>
@@ -606,7 +638,12 @@ export default function EmailBuilder() {
                   <div className="whitespace-pre-wrap">{msg.content}</div>
                   {msg.htmlContent && (
                     <div className="mt-2 text-xs text-green-600 font-medium">
-                      Preview updated
+                      {msg.htmlContent === currentHtml ? 'Current preview' : <button disabled={isStreaming || saving} onClick={() => {
+                        setCurrentHtml(msg.htmlContent!)
+                        setCurrentSubject(msg.subject || '')
+                        setCurrentPreviewText(msg.previewText || '')
+                        setMessages(prev => [...prev, { ...msg, id: crypto.randomUUID(), content: 'Restored this earlier preview. Save it to keep these changes.' }])
+                      }} className="text-blue-700 underline disabled:opacity-50">Restore this preview</button>}
                     </div>
                   )}
                 </div>
@@ -705,14 +742,16 @@ export default function EmailBuilder() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
+                aria-label="Newsletter instructions"
                 placeholder="Describe what you want to build or change..."
                 className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 rows={2}
-                disabled={isStreaming}
+                disabled={isStreaming || saving}
               />
               <button
+                aria-label="Send instructions"
                 onClick={handleSend}
-                disabled={!input.trim() || isStreaming}
+                disabled={!input.trim() || isStreaming || saving}
                 className={cn(
                   'flex-shrink-0 p-2 rounded-md transition-colors',
                   input.trim() && !isStreaming
@@ -818,6 +857,7 @@ export default function EmailBuilder() {
           open={pickerOpen}
           onClose={() => setPickerOpen(false)}
           clientId={selectedClient.id}
+          onSelect={url => { setInput(previous => `${previous}${previous ? '\n' : ''}Use this image: ${url}`); inputRef.current?.focus() }}
         />
       )}
     </div>
