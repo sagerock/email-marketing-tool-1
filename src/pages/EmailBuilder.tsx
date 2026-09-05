@@ -41,7 +41,7 @@ export default function EmailBuilder() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
   const editTemplateId = searchParams.get('templateId')
-  const { selectedClient } = useClient()
+  const { selectedClient, setSelectedClient, clients, loading: clientsLoading } = useClient()
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -79,6 +79,9 @@ export default function EmailBuilder() {
 
   // Edit mode state
   const [editTemplateName, setEditTemplateName] = useState<string | null>(null)
+  const [templateLoading, setTemplateLoading] = useState(Boolean(editTemplateId))
+  const [templateLoadError, setTemplateLoadError] = useState('')
+  const [templateLoadAttempt, setTemplateLoadAttempt] = useState(0)
 
   // Media picker state
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -93,27 +96,44 @@ export default function EmailBuilder() {
 
   // Load existing template when editTemplateId is in URL
   useEffect(() => {
-    if (!editTemplateId || !selectedClient) return
-    supabase
-      .from('templates')
-      .select('id, name, subject, preview_text, html_content')
-      .eq('id', editTemplateId)
-      .eq('client_id', selectedClient.id)
-      .single()
-      .then(({ data, error }) => {
-        if (error || !data) return
-        setCurrentHtml(data.html_content || '')
+    if (!editTemplateId || clientsLoading) return
+    let cancelled = false
+    setTemplateLoading(true)
+    setTemplateLoadError('')
+    setCurrentHtml('')
+    setEditTemplateName(null)
+    const load = async () => {
+      try {
+        // RLS limits this lookup to templates the signed-in user can access.
+        // Resolve the owning client from the draft, not a stale client picker.
+        const { data, error } = await supabase.from('templates')
+          .select('id, client_id, name, subject, preview_text, html_content')
+          .eq('id', editTemplateId)
+          .single()
+        if (cancelled) return
+        if (error || !data) throw new Error('We couldn’t open this draft. Check your connection and try again. If it still won’t open, the draft may have been removed or your account may not have access.')
+        const owner = clients.find(client => client.id === data.client_id)
+        if (!owner) throw new Error('Your account doesn’t have access to this draft’s client. Sign in with the account you use for that client.')
+        if (!data.html_content) throw new Error('This draft has no email content yet.')
+        if (selectedClient?.id !== owner.id) setSelectedClient(owner)
+        setCurrentHtml(data.html_content)
         setCurrentSubject(data.subject || '')
         setCurrentPreviewText(data.preview_text || '')
         setEditTemplateName(data.name)
         setMessages([{
-          id: 'edit-init',
-          role: 'assistant',
+          id: 'edit-init', role: 'assistant',
           content: `I've loaded your "${data.name}" template. What would you like to change?`,
-          htmlContent: data.html_content || undefined,
+          htmlContent: data.html_content,
         }])
-      })
-  }, [editTemplateId, selectedClient])
+      } catch (error) {
+        if (!cancelled) setTemplateLoadError(error instanceof Error ? error.message : 'We couldn’t open this draft. Please try again.')
+      } finally {
+        if (!cancelled) setTemplateLoading(false)
+      }
+    }
+    void load()
+    return () => { cancelled = true }
+  }, [editTemplateId, selectedClient?.id, clients, clientsLoading, setSelectedClient, templateLoadAttempt])
 
   // Auto-scroll to bottom of messages
   useEffect(() => {
@@ -360,7 +380,7 @@ export default function EmailBuilder() {
           preview_text: savePreviewText,
           html_content: currentHtml,
           updated_at: new Date().toISOString(),
-        }).eq('id', editTemplateId)
+        }).eq('id', editTemplateId).eq('client_id', selectedClient.id)
         if (error) throw error
       } else {
         const { error } = await supabase.from('templates').insert({
@@ -400,6 +420,26 @@ export default function EmailBuilder() {
     const t = templateIndex.find(t => t.id === id)
     return t ? t.name : id
   })
+
+  if (editTemplateId && (templateLoading || clientsLoading || templateLoadError)) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center" role="status">
+        {templateLoadError ? (
+          <>
+            <AlertTriangle className="h-8 w-8 text-amber-600 mb-3" />
+            <h1 className="text-lg font-semibold text-gray-900 mb-2">Unable to open draft</h1>
+            <p className="text-gray-600 max-w-lg mb-4">{templateLoadError}</p>
+            <div className="flex gap-3">
+              <Button onClick={() => setTemplateLoadAttempt(attempt => attempt + 1)}>Try again</Button>
+              <Button variant="secondary" onClick={() => navigate('/templates')}>Back to Email Designs</Button>
+            </div>
+          </>
+        ) : (
+          <><Loader2 className="h-7 w-7 animate-spin text-blue-600 mb-3" /><p>Opening your draft…</p></>
+        )}
+      </div>
+    )
+  }
 
   if (!selectedClient) {
     return (

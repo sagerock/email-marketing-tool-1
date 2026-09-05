@@ -1,9 +1,10 @@
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useEffect, useState } from 'react'
 import { ShieldX, RefreshCw } from 'lucide-react'
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const location = useLocation()
   const { user, loading, adminUser, adminLoading, adminCheckFailed, refreshAdminStatus } = useAuth()
   const [showTimeout, setShowTimeout] = useState(false)
   const [retrying, setRetrying] = useState(false)
@@ -45,7 +46,8 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
   }
 
   if (!user) {
-    return <Navigate to="/welcome" replace />
+    const destination = location.pathname + location.search + location.hash
+    return <Navigate to={destination === '/' ? '/welcome' : `/login?next=${encodeURIComponent(destination)}`} replace />
   }
 
   // Admin check failed due to network/timeout - offer retry instead of blocking

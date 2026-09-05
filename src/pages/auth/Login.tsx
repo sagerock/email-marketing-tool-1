@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, useSearchParams, Link } from 'react-router-dom'
 import { useAuth } from '../../contexts/AuthContext'
 import Button from '../../components/ui/Button'
 import Input from '../../components/ui/Input'
@@ -7,6 +7,7 @@ import { Mail, Lock, AlertCircle } from 'lucide-react'
 
 export default function Login() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const { signIn } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -20,7 +21,11 @@ export default function Login() {
 
     try {
       await signIn(email, password)
-      navigate('/')
+      const next = searchParams.get('next')
+      // Only return to a local app route, never an external redirect supplied
+      // in a login link. The query string survives refreshes on the login page.
+      const safeNext = next?.startsWith('/') && !next.startsWith('//') && !/[\\\s]/.test(next)
+      navigate(safeNext && next ? next : '/', { replace: true })
     } catch (err: any) {
       setError(err.message || 'Failed to sign in')
     } finally {

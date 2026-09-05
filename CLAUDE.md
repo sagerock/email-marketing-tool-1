@@ -79,6 +79,19 @@ HTML outside the model context into its normal threaded reply to the requester.
 Rocky can request a newsletter from `rocky@sagerock.com` by emailing
 `polaris@ask.sagerock.com`, then reply with edits. Gmail access is not enabled.
 
+The draft endpoint also accepts `attachedHtml` (up to 500,000 characters) and
+`attachmentImages` (up to six image records under `sagerock/email-drafts/`). Ask
+reads selected inbound HTML files and re-encodes PNG/JPEG/WebP attachments before
+uploading their pixels to SageRock's media library. HTML is builder input only,
+never published directly. Relative/CID image links are resolved from the selected
+attachments. The generated draft still passes the existing passive-HTML checks.
+
+Review links retain their destination through sign-in. The builder resolves the
+draft's owning client using the user's RLS-scoped template lookup, switches to an
+accessible client, and shows an explicit loading/error state instead of silently
+leaving the preview empty. `scripts/test-newsletter-review.cjs` exercises this
+flow in Chromium with mocked authentication and data (see its build command).
+
 ### Salesforce Integration
 Uses **OAuth 2.0 Client Credentials Flow** - no user interaction or callback URLs needed.
 
