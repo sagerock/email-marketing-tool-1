@@ -26,6 +26,7 @@ function validateDraftRequest(body, idempotencyKey) {
   const brief = String(body?.brief || '').trim()
   const name = String(body?.name || '').trim()
   const referenceTemplateIds = body?.referenceTemplateIds || []
+  const sourceTemplateId = body?.sourceTemplateId ?? null
   const requestKey = String(idempotencyKey || '').trim()
 
   if (!brief) throw new AskEmailDesignError('brief is required', 400)
@@ -42,7 +43,10 @@ function validateDraftRequest(body, idempotencyKey) {
       referenceTemplateIds.some(id => !UUID_RE.test(String(id)))) {
     throw new AskEmailDesignError('referenceTemplateIds must contain at most two UUIDs', 400)
   }
-  return { brief, name, referenceTemplateIds, requestKey }
+  if (sourceTemplateId !== null && !UUID_RE.test(String(sourceTemplateId))) {
+    throw new AskEmailDesignError('sourceTemplateId must be a UUID', 400)
+  }
+  return { brief, name, referenceTemplateIds, sourceTemplateId, requestKey }
 }
 
 function normalizeGeneratedDesign(input) {
@@ -74,7 +78,7 @@ function normalizeGeneratedDesign(input) {
   return { name, subject, preview_text: previewText, html_content: html }
 }
 
-function automatedBuilderPrompt(brandReference, referenceEmails) {
+function automatedBuilderPrompt(brandReference, referenceEmails, sourceTemplate) {
   const brand = brandReference
     ? `\nBRAND REFERENCE (copy its visual system, not its wording):\n${brandReference}\n`
     : ''
@@ -102,7 +106,12 @@ EMAIL HTML RULES:
 
 RESPONSIVE STYLE REFERENCE:
 ${SHARED_HEAD_STYLES}
-${brand}${references}`
+${brand}${references}
+${sourceTemplate ? `REVISION OF AN EXISTING DRAFT:
+Apply the user's requested changes to the source design below. Preserve all other
+copy, links, subject, preheader, and layout unless the requested changes require
+altering them. Return the complete revised document as a NEW saved version.
+${templateContext('source_design', sourceTemplate)}` : ''}`
 }
 
 async function getSingleClient(supabase, clientId) {
@@ -118,7 +127,7 @@ async function getSingleClient(supabase, clientId) {
 async function getTemplateById(supabase, clientId, templateId) {
   const { data, error } = await supabase
     .from('templates')
-    .select('id, name, subject, html_content')
+    .select('id, name, subject, preview_text, html_content')
     .eq('client_id', clientId)
     .eq('id', templateId)
     .single()
@@ -144,8 +153,17 @@ async function getBrandReference(supabase, clientId, client) {
 
 function templateContext(tag, template) {
   if (!template?.html_content) return ''
-  return `<${tag} name="${template.name || ''}" subject="${template.subject || ''}">\n` +
+  return `<${tag} name="${template.name || ''}" subject="${template.subject || ''}" preheader="${template.preview_text || ''}">\n` +
     `${template.html_content}\n</${tag}>`
+}
+
+// A preview travels back through Ask's normal reply to the requester. It has
+// no real unsubscribe action or recipient-specific merge values.
+function previewHtml(html) {
+  normalizeGeneratedDesign({ name: 'Preview', subject: 'Preview', html_content: html })
+  return html.replace(/<!--\s*polaris-ask-email-design:[\s\S]*?-->/g, '')
+    .replace(/\{\{unsubscribe_url\}\}/gi, '#draft-unsubscribe')
+    .replace(/\{\{([a-z_]+)\}\}/gi, '[$1]')
 }
 
 async function createEmailDesignDraft({
@@ -155,6 +173,7 @@ async function createEmailDesignDraft({
   brief,
   requestedName,
   referenceTemplateIds,
+  sourceTemplateId = null,
   requestKey,
   anthropic,
 }) {
@@ -165,24 +184,28 @@ async function createEmailDesignDraft({
 
   const { data: existing, error: existingError } = await supabase
     .from('templates')
-    .select('id, name, subject, preview_text')
+    .select('id, name, subject, preview_text, html_content')
     .eq('client_id', clientId)
     .like('html_content', `%${marker}%`)
     .order('created_at', { ascending: false })
     .limit(1)
   if (existingError) throw existingError
   if (existing?.[0]) {
-    const found = existing[0]
+    const { html_content, ...found } = existing[0]
     return {
       created: false,
       duplicate_prevented: true,
       status: 'design_draft',
       ...found,
+      preview_html: previewHtml(html_content),
       review_url: `${baseUrl}/email-builder?templateId=${found.id}`,
     }
   }
 
   const client = await getSingleClient(supabase, clientId)
+  const sourceTemplate = sourceTemplateId
+    ? await getTemplateById(supabase, clientId, sourceTemplateId)
+    : null
   const brandTemplate = await getBrandReference(supabase, clientId, client)
   const referenceTemplates = await Promise.all(
     referenceTemplateIds.map(id => getTemplateById(supabase, clientId, id))
@@ -193,7 +216,7 @@ async function createEmailDesignDraft({
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 16384,
-    system: automatedBuilderPrompt(brandReference, references),
+    system: automatedBuilderPrompt(brandReference, references, sourceTemplate),
     messages: [{ role: 'user', content: brief }],
     tools: [{
       name: 'save_email_design_draft',
@@ -242,6 +265,8 @@ async function createEmailDesignDraft({
     duplicate_prevented: false,
     status: 'design_draft',
     ...created,
+    source_template_id: sourceTemplateId,
+    preview_html: previewHtml(design.html_content),
     review_url: `${baseUrl}/email-builder?templateId=${created.id}`,
   }
 }
@@ -273,6 +298,7 @@ function createAskEmailDesignHandler({
         brief: input.brief,
         requestedName: input.name,
         referenceTemplateIds: input.referenceTemplateIds,
+        sourceTemplateId: input.sourceTemplateId,
         requestKey: input.requestKey,
         anthropic: anthropicFactory(),
       })
@@ -294,4 +320,5 @@ module.exports = {
   normalizeGeneratedDesign,
   createEmailDesignDraft,
   createAskEmailDesignHandler,
+  previewHtml,
 }

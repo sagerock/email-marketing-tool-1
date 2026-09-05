@@ -6,6 +6,8 @@ const {
   validateDraftRequest,
   normalizeGeneratedDesign,
   createAskEmailDesignHandler,
+  createEmailDesignDraft,
+  previewHtml,
 } = require('./ask-email-design')
 
 
@@ -40,6 +42,7 @@ test('draft request is bounded and requires idempotency', () => {
       brief: 'Make a welcome email',
       name: 'Welcome',
       referenceTemplateIds: [],
+      sourceTemplateId: null,
       requestKey: 'mail-1',
     }
   )
@@ -53,6 +56,89 @@ test('draft request is bounded and requires idempotency', () => {
     }, 'mail-1'),
     /at most two UUIDs/
   )
+})
+
+test('revision source must be a UUID', () => {
+  assert.throws(() => validateDraftRequest({ brief: 'Shorten it', sourceTemplateId: 'bad' }, 'r1'), /sourceTemplateId/)
+})
+
+test('preview disables unsubscribe actions and replaces personalization fields', () => {
+  const html = '<!DOCTYPE html><html><body><!-- polaris-ask-email-design:abc -->Hi {{first_name}}<a href="{{unsubscribe_url}}">Unsubscribe</a>{{mailing_address}}</body></html>'
+  const preview = previewHtml(html)
+  assert.match(preview, /Hi \[first_name\]/)
+  assert.match(preview, /href="#draft-unsubscribe"/)
+  assert.doesNotMatch(preview, /polaris-ask-email-design|\{\{/)
+  assert.throws(() => previewHtml(html.replace('Hi', '<script>bad()</script>Hi')), /unsafe HTML/)
+})
+
+const SOURCE_ID = 'a1234567-1234-4234-8234-123456789012'
+const DESIGN_HTML = '<!DOCTYPE html><html><body>Revised intro<a href="{{unsubscribe_url}}">Unsubscribe</a>{{mailing_address}}</body></html>'
+
+function designStore({ sourceMissing = false, existing = null } = {}) {
+  const calls = []
+  return {
+    calls,
+    from(table) {
+      const call = { table, filters: [] }
+      calls.push(call)
+      const query = {
+        select() { return query },
+        eq(k, v) { call.filters.push([k, v]); return query },
+        like() { call.lookup = true; return query },
+        order() { return query },
+        limit() { return Promise.resolve({ data: call.lookup && existing ? [existing] : [], error: null }) },
+        insert(value) { call.insert = value; return query },
+        single() {
+          if (table === 'clients') return Promise.resolve({ data: { id: 'sagerock' } })
+          if (call.insert) return Promise.resolve({ data: { id: 'new-version', name: call.insert.name } })
+          return Promise.resolve({ data: sourceMissing ? null : { id: SOURCE_ID, name: 'Prior draft', subject: 'Original subject', preview_text: 'Original preheader', html_content: 'ORIGINAL CONTENT TO PRESERVE' } })
+        },
+      }
+      return query
+    },
+  }
+}
+
+test('revision loads a tenant-scoped source and inserts a separate version', async () => {
+  const supabase = designStore()
+  let request
+  const result = await createEmailDesignDraft({
+    supabase, clientId: 'sagerock', baseUrl: 'https://mail.sagerock.com',
+    brief: 'Shorten the introduction', referenceTemplateIds: [], sourceTemplateId: SOURCE_ID, requestKey: 'revision-1',
+    anthropic: { messages: { create: async args => {
+      request = args
+      return { content: [{ type: 'tool_use', name: 'save_email_design_draft', input: {
+        name: 'Revised newsletter', subject: 'Original subject', preview_text: 'Original preheader', html_content: DESIGN_HTML,
+      } }] }
+    } } },
+  })
+  assert.match(request.system, /ORIGINAL CONTENT TO PRESERVE/)
+  assert.match(request.system, /Original preheader/)
+  assert.match(request.system, /Preserve all other/)
+  const source = supabase.calls.find(c => c.filters.some(([k, v]) => k === 'id' && v === SOURCE_ID))
+  assert.ok(source.filters.some(([k, v]) => k === 'client_id' && v === 'sagerock'))
+  assert.equal(supabase.calls.filter(c => c.insert).length, 1)
+  assert.equal(result.id, 'new-version')
+  assert.equal(result.source_template_id, SOURCE_ID)
+  assert.match(result.preview_html, /Revised intro/)
+})
+
+test('missing or other-tenant revision source fails before generation or insertion', async () => {
+  const supabase = designStore({ sourceMissing: true })
+  await assert.rejects(createEmailDesignDraft({
+    supabase, clientId: 'sagerock', referenceTemplateIds: [], sourceTemplateId: SOURCE_ID, requestKey: 'r2',
+    anthropic: { messages: { create: () => { throw Error('must not generate') } } },
+  }), /was not found/)
+  assert.equal(supabase.calls.some(c => c.insert), false)
+})
+
+test('retry returns the saved preview without generating another version', async () => {
+  const supabase = designStore({ existing: { id: 'existing', name: 'Draft', html_content: DESIGN_HTML } })
+  const result = await createEmailDesignDraft({ supabase, clientId: 'sagerock', baseUrl: 'https://mail.sagerock.com', requestKey: 'retry' })
+  assert.equal(result.duplicate_prevented, true)
+  assert.match(result.preview_html, /Revised intro/)
+  assert.equal(result.html_content, undefined)
+  assert.equal(supabase.calls.some(c => c.insert), false)
 })
 
 

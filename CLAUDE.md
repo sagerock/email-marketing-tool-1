@@ -71,6 +71,14 @@ CAN-SPAM tags and passive email-safe HTML, and inserts only a template. It has
 no campaign, recipient, schedule, or send path. `Idempotency-Key` is embedded
 as a hidden template marker so inbound retries reuse the first draft.
 
+`sourceTemplateId` requests a revision of an existing SageRock template. The
+builder loads that tenant-scoped source and saves the result as a new template;
+the source stays intact. Responses include `preview_html`, with personalization
+shown as placeholders and the unsubscribe action disabled. Ask carries this
+HTML outside the model context into its normal threaded reply to the requester.
+Rocky can request a newsletter from `rocky@sagerock.com` by emailing
+`polaris@ask.sagerock.com`, then reply with edits. Gmail access is not enabled.
+
 ### Salesforce Integration
 Uses **OAuth 2.0 Client Credentials Flow** - no user interaction or callback URLs needed.
 
