@@ -84,3 +84,34 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Add comment explaining the roles
 COMMENT ON TABLE admin_users IS 'Manages administrative access to the system. Roles: super_admin (full access), admin (all clients), client_admin (specific client only)';
+
+-- ---------------------------------------------------------------------------
+-- Added 2026-07-28.
+--
+-- can_access_client() is the function every multi-tenant RLS policy in this
+-- database calls -- 131 policies across 48 tables, including `contacts`. It was
+-- originally created by hand in the SQL editor and defined only in
+-- 034_lock_down_rls_policies.sql, which was never registered in the migration
+-- ledger. The result was that a from-scratch replay of this history built a
+-- database in which every one of those policies failed to create, and the
+-- replay died at 052 (the first migration to reference it).
+--
+-- It belongs here: beside is_admin/is_super_admin, immediately after
+-- admin_users exists, and before anything uses it.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.can_access_client(target_client_id uuid)
+  RETURNS boolean
+  LANGUAGE sql
+  SECURITY DEFINER
+  SET search_path TO 'public'
+AS $function$
+  SELECT EXISTS (
+    SELECT 1 FROM admin_users
+    WHERE user_id = auth.uid()
+      AND (
+        role IN ('super_admin', 'admin')
+        OR (role = 'client_admin' AND client_id = target_client_id)
+      )
+  );
+$function$;
