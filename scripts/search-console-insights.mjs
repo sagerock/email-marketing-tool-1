@@ -63,6 +63,36 @@ WITH target AS (
   WHERE query ILIKE '%shoulder%'
   ORDER BY impressions DESC, clicks DESC
   LIMIT 25
+), shoulder_pages AS (
+  SELECT
+    page,
+    sum(clicks)::bigint AS clicks,
+    sum(impressions)::bigint AS impressions,
+    CASE WHEN sum(impressions) = 0 THEN 0 ELSE sum(clicks) / sum(impressions) END AS ctr,
+    CASE WHEN sum(impressions) = 0 THEN 0 ELSE sum(position * impressions) / sum(impressions) END AS position
+  FROM public.search_console_query_page_daily d
+  JOIN target t USING (client_id)
+  CROSS JOIN period p
+  WHERE d.data_date BETWEEN p.start_date AND p.end_date
+    AND query ILIKE '%shoulder%'
+  GROUP BY page
+  ORDER BY impressions DESC, clicks DESC
+  LIMIT 15
+), hand_pain_pages AS (
+  SELECT
+    page,
+    sum(clicks)::bigint AS clicks,
+    sum(impressions)::bigint AS impressions,
+    CASE WHEN sum(impressions) = 0 THEN 0 ELSE sum(clicks) / sum(impressions) END AS ctr,
+    CASE WHEN sum(impressions) = 0 THEN 0 ELSE sum(position * impressions) / sum(impressions) END AS position
+  FROM public.search_console_query_page_daily d
+  JOIN target t USING (client_id)
+  CROSS JOIN period p
+  WHERE d.data_date BETWEEN p.start_date AND p.end_date
+    AND (query ILIKE '%hands hurt when i wake up%' OR query ILIKE '%hands sore when i wake up%')
+  GROUP BY page
+  ORDER BY impressions DESC, clicks DESC
+  LIMIT 15
 )
 SELECT jsonb_build_object(
   'period', (SELECT to_jsonb(period) FROM period),
@@ -76,7 +106,9 @@ SELECT jsonb_build_object(
   ),
   'totals', (SELECT to_jsonb(totals) FROM totals),
   'opportunities', COALESCE((SELECT jsonb_agg(to_jsonb(opportunities)) FROM opportunities), '[]'::jsonb),
-  'shoulder_queries', COALESCE((SELECT jsonb_agg(to_jsonb(shoulder)) FROM shoulder), '[]'::jsonb)
+  'shoulder_queries', COALESCE((SELECT jsonb_agg(to_jsonb(shoulder)) FROM shoulder), '[]'::jsonb),
+  'shoulder_pages', COALESCE((SELECT jsonb_agg(to_jsonb(shoulder_pages)) FROM shoulder_pages), '[]'::jsonb),
+  'hand_pain_pages', COALESCE((SELECT jsonb_agg(to_jsonb(hand_pain_pages)) FROM hand_pain_pages), '[]'::jsonb)
 ) AS report;
 `
 
