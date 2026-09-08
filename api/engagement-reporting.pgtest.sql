@@ -52,6 +52,11 @@ INSERT INTO contacts(
   '90000000-0000-0000-0000-000000000001',
   'one@example.test', '003000000000001AAA', 'contact', false,
   '2026-09-07T12:00:00Z'
+), (
+  '90000000-0000-0000-0000-000000000004',
+  '90000000-0000-0000-0000-000000000001',
+  'two@example.test', '003000000000002AAA', 'contact', false,
+  '2026-09-06T12:00:00Z'
 );
 
 DO $$
@@ -61,10 +66,20 @@ BEGIN
     INTO candidates, reported_total
     FROM engagement_reporting_candidates(
       '90000000-0000-0000-0000-000000000001',
-      '2026-08-09T16:00:00Z', '2026-09-08T16:00:00Z', 5000
+      '2026-08-09T16:00:00Z', '2026-09-08T16:00:00Z', 5000, 0
     );
-  IF candidates <> 1 OR reported_total <> 1 THEN
+  IF candidates <> 2 OR reported_total <> 2 THEN
     RAISE EXCEPTION 'dashboard cohort enumeration was not exact';
+  END IF;
+
+  SELECT count(*), max(total_count)
+    INTO candidates, reported_total
+    FROM engagement_reporting_candidates(
+      '90000000-0000-0000-0000-000000000001',
+      '2026-08-09T16:00:00Z', '2026-09-08T16:00:00Z', 1, 1
+    );
+  IF candidates <> 1 OR reported_total <> 2 THEN
+    RAISE EXCEPTION 'dashboard cohort pagination was not stable';
   END IF;
 END $$;
 INSERT INTO engagement_refresh_runs(

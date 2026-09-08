@@ -19,9 +19,6 @@ module.exports = function mountEngagement(app, { supabase, reporting }) {
           freshness = await reporting.ensureFresh(clientId, {
             scope: 'known_people', days, maxAgeMinutes: 15,
           })
-          if (freshness.status !== 'complete') {
-            throw new Error('Salesforce verification did not complete')
-          }
         } catch (refreshError) {
           const previous = await reporting.latestComplete(clientId, 'known_people', 525600)
           if (!previous) return res.status(503).json({

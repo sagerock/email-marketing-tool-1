@@ -3,6 +3,7 @@ const assert = require('node:assert/strict')
 
 const {
   createEngagementReporting,
+  defaultLoadKnownCandidates,
   mapSalesforceRecord,
   mountEngagementReporting,
   queryAll,
@@ -12,6 +13,35 @@ const {
 const CLIENT = '00000000-0000-0000-0000-000000000001'
 const LEAD = '00Q000000000001AAA'
 const CONTACT = '003000000000001AAA'
+
+test('known dashboard candidates page past the PostgREST row cap', async () => {
+  const calls = []
+  const allRows = Array.from({ length: 1001 }, (_, index) => ({
+    id: `local-${index}`,
+    salesforce_id: `00Q${String(index).padStart(15, '0')}`,
+    record_type: 'lead',
+    email: `person-${index}@example.test`,
+    total_count: 1001,
+  }))
+  const supabase = {
+    async rpc(name, params) {
+      calls.push({ name, params })
+      return {
+        data: allRows.slice(params.p_offset, params.p_offset + params.p_limit),
+        error: null,
+      }
+    },
+  }
+  const result = await defaultLoadKnownCandidates(supabase, CLIENT, 5000, {
+    start: '2026-08-09T16:00:00Z',
+    endExclusive: '2026-09-08T16:00:00Z',
+  })
+  assert.equal(result.rows.length, 1001)
+  assert.equal(result.totalCount, 1001)
+  assert.equal(result.complete, true)
+  assert.deepEqual(calls.map(call => call.params.p_offset), [0, 1000])
+  assert.deepEqual(calls.map(call => call.params.p_limit), [1000, 1000])
+})
 
 function fakeSupabase({ failRecords = false } = {}) {
   const state = { runs: [], records: [], runUpdates: [], rpcs: [] }
