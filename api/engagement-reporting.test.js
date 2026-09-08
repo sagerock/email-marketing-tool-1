@@ -367,6 +367,31 @@ test('fresh snapshot reuse requires the same cohort parameters', async () => {
   assert.equal(run.id, 'match')
 })
 
+test('interactive reads reuse a recent partial snapshot with its warning intact', async () => {
+  let acceptedStatuses
+  const partial = {
+    id: 'partial-run', status: 'partial',
+    parameters: { days: 90, include_contacts: false },
+    source_limitations: ['Salesforce result exceeded the record budget.'],
+  }
+  const query = {
+    select() { return this }, eq() { return this }, gte() { return this },
+    order() { return this },
+    in(_column, values) { acceptedStatuses = values; return this },
+    async limit() { return { data: [partial], error: null } },
+  }
+  const service = createEngagementReporting({
+    supabase: { from: () => query },
+    getSalesforceConnection: async () => { throw new Error('must reuse the snapshot') },
+    now: () => new Date('2026-09-08T16:00:00Z'),
+  })
+  const run = await service.ensureFresh(CLIENT, {
+    scope: 'salesforce_people', days: 90, includeContacts: false,
+  })
+  assert.equal(run, partial)
+  assert.deepEqual(acceptedStatuses, ['complete', 'partial'])
+})
+
 test('internal API rejects the wrong secret and ignores caller-supplied tenant IDs', async () => {
   const previous = {
     key: process.env.ASK_ENGAGEMENT_API_KEY,

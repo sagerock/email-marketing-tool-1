@@ -453,11 +453,15 @@ function createEngagementReporting({
     return flight
   }
 
-  async function latestComplete(clientId, scope, maxAgeMinutes, requested = {}) {
+  async function latestComplete(clientId, scope, maxAgeMinutes, requested = {}, includePartial = false) {
     const cutoff = new Date(now().getTime() - maxAgeMinutes * 60000).toISOString()
-    const { data, error } = await supabase.from('engagement_refresh_runs')
-      .select('*').eq('client_id', clientId).eq('scope', scope).eq('status', 'complete')
-      .gte('completed_at', cutoff).order('completed_at', { ascending: false }).limit(20)
+    let query = supabase.from('engagement_refresh_runs')
+      .select('*').eq('client_id', clientId).eq('scope', scope)
+    query = includePartial
+      ? query.in('status', ['complete', 'partial'])
+      : query.eq('status', 'complete')
+    const { data, error } = await query.gte('completed_at', cutoff)
+      .order('completed_at', { ascending: false }).limit(20)
     if (error) throw error
     const expectedDays = clampInt(requested.days, 30, 1, 365)
     const expectedContacts = Boolean(requested.includeContacts)
@@ -471,7 +475,7 @@ function createEngagementReporting({
   async function ensureFresh(clientId, requested = {}) {
     const scope = requested.scope || 'recent_leads'
     const maxAgeMinutes = clampInt(requested.maxAgeMinutes, 15, 1, 1440)
-    const current = await latestComplete(clientId, scope, maxAgeMinutes, requested)
+    const current = await latestComplete(clientId, scope, maxAgeMinutes, requested, true)
     if (current) return current
     return refreshSnapshot(clientId, { ...requested, scope })
   }
