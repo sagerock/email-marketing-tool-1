@@ -26,11 +26,11 @@ const T = {
 }
 
 function statusPill(s) {
-  if (s === 'replied, no response') return `<span style="${T.pill('#fde2e2', '#8a1c1c')}">replied, no response</span>`
-  if (s === 'not contacted') return `<span style="${T.pill('#fff1cc', '#7a5200')}">not contacted</span>`
-  if (s === 'auto follow-up only') return `<span style="${T.pill('#eeeeee', '#444')}">auto follow-up only</span>`
-  if (s === 'new') return `<span style="${T.pill('#dceeff', '#0b4a8b')}">new</span>`
-  return `<span style="${T.pill('#dff3e3', '#1d6b34')}">contacted</span>`
+  if (s === 'reply awaiting verified response') return `<span style="${T.pill('#fde2e2', '#8a1c1c')}">${esc(s)}</span>`
+  if (s === 'no follow-up recorded') return `<span style="${T.pill('#fff1cc', '#7a5200')}">${esc(s)}</span>`
+  if (s === 'automation only' || s === 'unable to verify' || /ambiguous|unknown/.test(s)) return `<span style="${T.pill('#eeeeee', '#444')}">${esc(s)}</span>`
+  if (s === 'new — within follow-up window' || s === 'Salesforce activity recorded') return `<span style="${T.pill('#dceeff', '#0b4a8b')}">${esc(s)}</span>`
+  return `<span style="${T.pill('#dff3e3', '#1d6b34')}">${esc(s)}</span>`
 }
 
 function table(head, rows) {
@@ -43,8 +43,12 @@ function table(head, rows) {
 function buildDigest(o, client, cfg) {
   const t = o.totals
   const days = o.days
-  const attention = o.form_leads.filter(l => l.status !== 'contacted')
-  const contacted = o.form_leads.filter(l => l.status === 'contacted')
+  const completed = new Set(['verified human follow-up', 'Salesforce activity recorded'])
+  const attention = o.form_leads.filter(l => !completed.has(l.status))
+  const completedRows = o.form_leads.filter(l => completed.has(l.status))
+  const attentionTotal = t.form_leads_no_follow_up + t.form_leads_automation +
+    t.form_leads_reply_waiting + t.form_leads_ambiguous + t.form_leads_unable_to_verify +
+    t.form_leads_within_grace
   const stalled = o.stalled.slice(0, 25)
   const replies = o.replies.slice(0, 15)
   const pageUrl = `${SITE}/engagement`
@@ -54,8 +58,8 @@ function buildDigest(o, client, cfg) {
     <td style="${T.td}">${esc(l.last_form)}${l.forms_in_window > 1 ? `<br><span style="${T.muted}">${l.forms_in_window} submissions</span>` : ''}</td>
     <td style="${T.td}">${fmtDate(l.last_form_on)}<br><span style="${T.muted}">${daysAgo(l.last_form_on)}</span></td>
     <td style="${T.td}">${statusPill(l.status)}</td>
-    <td style="${T.td}">${l.opens_since_form} opens · ${l.clicks_since_form} clicks${l.last_replied_at && l.last_replied_at >= l.last_form_on ? ' · replied' : ''}</td>
-    <td style="${T.td}">${l.salesforce_last_activity_date ? fmtDate(l.salesforce_last_activity_date) : '<span style="color:#b45309">never</span>'}</td>
+    <td style="${T.td}">${l.opens_since_form} opens · ${l.clicks_since_form} clicks${l.genuine_reply_at ? ' · genuine reply' : ''}</td>
+    <td style="${T.td}">${l.salesforce_last_activity_date ? fmtDate(l.salesforce_last_activity_date) : '<span style="color:#b45309">No activity date recorded</span>'}</td>
   </tr>`)
 
   const oppRows = stalled.map(s => `<tr>
@@ -69,12 +73,13 @@ function buildDigest(o, client, cfg) {
   const replyRows = replies.map(r => `<tr>
     <td style="${T.td}">${r.contact_id ? `<a href="${SITE}/contacts/${r.contact_id}" style="color:#1d4ed8;text-decoration:none">${esc(name(r) || r.email)}</a>` : esc(r.email)}${r.company ? `<br><span style="${T.muted}">${esc(r.company)}</span>` : ''}</td>
     <td style="${T.td}">${fmtDate(r.created_at)}</td>
-    <td style="${T.td}">${r.answered_at ? `<span style="${T.pill('#dff3e3', '#1d6b34')}">answered</span>` : `<span style="${T.pill('#fde2e2', '#8a1c1c')}">unanswered</span>`}</td>
+    <td style="${T.td}">${r.answered_at ? `<span style="${T.pill('#dff3e3', '#1d6b34')}">verified human response</span>` : `<span style="${T.pill('#fde2e2', '#8a1c1c')}">no verified response</span>`}</td>
     <td style="${T.td}"><b>${esc(r.subject || '(no subject)')}</b><br><span style="${T.muted}">${esc(stripMeta(r.body).slice(0, 220))}</span></td>
   </tr>`)
 
   const summary = `${t.form_submissions} form submission${t.form_submissions === 1 ? '' : 's'} from ${t.form_leads} people in the last ${days} days. `
-    + `${t.form_leads_uncontacted} not contacted at all, ${t.form_leads_auto} got only our automated follow-up, ${t.form_leads_new} new, ${t.form_leads_replied} replied with no response, ${t.form_leads_contacted} contacted by a person. `
+    + `${t.form_leads_no_follow_up} have no follow-up recorded, ${t.form_leads_automation} have automation only, ${t.form_leads_within_grace} are within the follow-up window, ${t.form_leads_reply_waiting} have a reply awaiting a verified response, ${t.form_leads_human_follow_up} have verified human follow-up, and ${t.form_leads_salesforce_activity} have later Salesforce activity recorded. `
+    + `${t.form_leads_ambiguous} have ambiguous evidence and ${t.form_leads_unable_to_verify} could not be verified. `
     + `${t.open_opps} open opportunities, ${t.stalled} with no activity in 14+ days. `
     + `${t.replies} email repl${t.replies === 1 ? 'y' : 'ies'} in the window.`
 
@@ -82,10 +87,11 @@ function buildDigest(o, client, cfg) {
     <h1 style="font:700 20px Arial,sans-serif;margin:0 0 6px">${esc(client.name)} engagement, week of ${new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })}</h1>
     <p style="${T.sub}">${esc(summary)} <a href="${pageUrl}" style="color:#1d4ed8">Open the full page</a>.</p>
 
-    <h2 style="${T.h2}">Form leads that need a person (${attention.length})</h2>
-    <p style="${T.sub}">Filled out a form in the last ${days} days and no person has logged activity on them in Salesforce since. "Auto follow-up only" means our automated email went out but nobody has followed up. Urgent first, then most engaged.</p>
-    ${attention.length ? table(['Person', 'Form', 'Filled out', 'Status', 'Since the form', 'Salesforce touch'], leadRows) : `<p style="${T.sub}">Everyone has been contacted. Nice.</p>`}
-    ${contacted.length ? `<p style="${T.sub};margin-top:8px">${contacted.length} other form lead${contacted.length === 1 ? '' : 's'} already had a Salesforce touch.</p>` : ''}
+    <h2 style="${T.h2}">Form leads needing follow-up or review (${attentionTotal})</h2>
+    <p style="${T.sub}">Evidence is separated into verified human follow-up, Salesforce's date-only activity rollup, automation, genuine replies, and unresolved or ambiguous coverage.</p>
+    ${attention.length ? table(['Person', 'Form', 'Filled out', 'Status', 'Since the form', 'Salesforce activity date'], leadRows) : `<p style="${T.sub}">No leads need follow-up or evidence review in this verified cohort.</p>`}
+    ${attention.length < attentionTotal ? `<p style="${T.sub};margin-top:8px">${attention.length} of ${attentionTotal} matching leads shown. Open the full page for the rest.</p>` : ''}
+    ${completedRows.length ? `<p style="${T.sub};margin-top:8px">${t.form_leads_human_follow_up} have verified human follow-up; ${t.form_leads_salesforce_activity} have later Salesforce activity recorded.</p>` : ''}
 
     <h2 style="${T.h2}">Stalled opportunities (${t.stalled}${stalled.length < t.stalled ? `, newest ${stalled.length} shown` : ''})</h2>
     <p style="${T.sub}">Open in Salesforce with no activity or stage change in 14+ days. Newest first.</p>
@@ -101,19 +107,19 @@ function buildDigest(o, client, cfg) {
     </p>
   </div>`
 
-  const text = `${client.name} engagement digest\n\n${summary}\n\nForm leads that need a person (${attention.length}):\n`
+  const text = `${client.name} engagement digest\n\n${summary}\n\nForm leads needing follow-up or review (${attentionTotal}; ${attention.length} shown):\n`
     + attention.map(l => `- ${name(l)}${l.company ? ` (${l.company})` : ''}: ${l.last_form}, ${fmtDate(l.last_form_on)}, ${l.status}, ${l.opens_since_form} opens / ${l.clicks_since_form} clicks`).join('\n')
     + `\n\nStalled opportunities (${t.stalled}):\n` + stalled.map(s => `- ${s.name} [${s.stage}] ${s.owner_name || ''} last touch ${fmtDate(s.last_touch)}`).join('\n')
-    + `\n\nReplies (${t.replies}):\n` + replies.map(r => `- ${name(r) || r.email}: ${r.subject || '(no subject)'} (${r.answered_at ? 'answered' : 'unanswered'})`).join('\n')
+    + `\n\nReplies (${t.replies}):\n` + replies.map(r => `- ${name(r) || r.email}: ${r.subject || '(no subject)'} (${r.answered_at ? 'verified human response' : 'no verified response'})`).join('\n')
     + `\n\nFull page: ${pageUrl}\n\n— Claude, for Sage`
 
   // House pattern for this client's subjects: "<short phrase> — <Company>" (subject_prefix holds the company)
-  const phrase = `${attention.length} form lead${attention.length === 1 ? '' : 's'} need a person`
+  const phrase = `${attentionTotal} form lead${attentionTotal === 1 ? '' : 's'} need review`
   const subject = cfg.subject_prefix ? `${phrase} — ${cfg.subject_prefix}` : `${phrase}, ${t.stalled} stalled opportunities`
-  return { html, text, subject, attention: attention.length }
+  return { html, text, subject, attention: attentionTotal }
 }
 
-module.exports = function mountEngagementDigest(app, { supabase, decryptClient, cron }) {
+module.exports = function mountEngagementDigest(app, { supabase, decryptClient, cron, reporting }) {
   async function sendDigest(clientId, { to, dryRun } = {}) {
     const [{ data: cfg }, { data: clientRow }, { data: lastCampaign }] = await Promise.all([
       supabase.from('engagement_digest_config').select('*').eq('client_id', clientId).maybeSingle(),
@@ -128,6 +134,18 @@ module.exports = function mountEngagementDigest(app, { supabase, decryptClient, 
     const conf = cfg || { enabled: true, recipients: [], bcc: [], days: 14, subject_prefix: null }
     const recipients = to ? [].concat(to) : conf.recipients
     if (!recipients.length) throw new Error('no recipients configured')
+
+    if (reporting && process.env.ENGAGEMENT_REPORTING_ENABLED === 'true') {
+      const freshness = await reporting.refreshSnapshot(clientId, {
+        scope: 'known_people', days: conf.days,
+      })
+      if (freshness.status !== 'complete' || freshness.unresolved_count || freshness.failed_count) {
+        throw new Error(
+          `Engagement digest withheld: Salesforce verification incomplete ` +
+          `(status=${freshness.status}, unresolved=${freshness.unresolved_count}, failed=${freshness.failed_count})`
+        )
+      }
+    }
 
     const { data: o, error } = await supabase.rpc('engagement_overview', { p_client_id: clientId, p_days: conf.days, p_wait_days: 3 })
     if (error) throw error

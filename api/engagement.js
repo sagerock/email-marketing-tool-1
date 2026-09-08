@@ -5,7 +5,7 @@
 // wrapper. Routes live under /api so authenticateUser + validateClientAccess apply
 // automatically (client_admin users are force-scoped to their own client).
 
-module.exports = function mountEngagement(app, { supabase }) {
+module.exports = function mountEngagement(app, { supabase, reporting }) {
   // GET /api/engagement/overview?clientId=&days=30&waitDays=3
   app.get('/api/engagement/overview', async (req, res) => {
     try {
@@ -13,11 +13,29 @@ module.exports = function mountEngagement(app, { supabase }) {
       if (!clientId) return res.status(400).json({ error: 'clientId required' })
       const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365)
       const waitDays = Math.min(Math.max(parseInt(req.query.waitDays, 10) || 3, 0), 60)
+      let freshness = null
+      if (reporting && process.env.ENGAGEMENT_REPORTING_ENABLED === 'true') {
+        try {
+          freshness = await reporting.ensureFresh(clientId, {
+            scope: 'known_people', days, maxAgeMinutes: 15,
+          })
+          if (freshness.status !== 'complete') {
+            throw new Error('Salesforce verification did not complete')
+          }
+        } catch (refreshError) {
+          const previous = await reporting.latestComplete(clientId, 'known_people', 525600)
+          if (!previous) return res.status(503).json({
+            error: 'Engagement verification is unavailable',
+            detail: refreshError.message,
+          })
+          freshness = previous
+        }
+      }
       const { data, error } = await supabase.rpc('engagement_overview', {
         p_client_id: clientId, p_days: days, p_wait_days: waitDays,
       })
       if (error) throw error
-      res.json(data)
+      res.json({ ...data, freshness })
     } catch (err) {
       console.error('❌ engagement/overview:', err.message)
       res.status(500).json({ error: err.message })
@@ -50,13 +68,29 @@ module.exports = function mountEngagement(app, { supabase }) {
 
       const timeline = []
       for (const e of events.data || []) timeline.push({ at: e.timestamp, kind: e.event_type, label: e.campaign?.name || null, detail: e.url || null })
-      for (const c of conversations.data || []) timeline.push({ at: c.created_at, kind: c.direction === 'inbound' ? 'reply' : (c.ai_generated ? 'ai_sent' : 'sent_by_us'), label: c.subject, detail: (c.body || '').slice(0, 400) })
+      for (const c of conversations.data || []) {
+        const autoResponse = c.direction === 'inbound' && (
+          /^\[auto-response\]/i.test(c.body || '') ||
+          /^(automatic reply|auto.?reply|out of office|undeliverable|delivery status|test($|:))/i.test(c.subject || '')
+        )
+        const kind = c.direction === 'inbound'
+          ? (autoResponse ? 'automatic_response' : 'reply')
+          : c.ai_generated === true ? 'automation_sent'
+            : c.ai_generated === false ? 'verified_human_outbound'
+              : 'outbound_provenance_unknown'
+        timeline.push({ at: c.created_at, kind, label: c.subject, detail: (c.body || '').slice(0, 400) })
+      }
       for (const o of opps.data || []) {
         timeline.push({ at: o.sf_created_date, kind: 'opportunity', label: `${o.name} (${o.stage})`, detail: o.owner_name })
         if (o.sample_shipped_at) timeline.push({ at: o.sample_shipped_at, kind: 'sample_shipped', label: o.name, detail: o.owner_name })
       }
       if (contact.salesforce_created_date) timeline.push({ at: contact.salesforce_created_date, kind: 'arrived', label: contact.source_code || '(no source code)', detail: contact.record_type })
-      if (contact.salesforce_last_activity_date) timeline.push({ at: contact.salesforce_last_activity_date, kind: 'sf_activity', label: 'Last Salesforce activity', detail: null })
+      if (contact.salesforce_last_activity_date) timeline.push({
+        at: contact.salesforce_last_activity_date,
+        kind: 'sf_activity_date',
+        label: 'Salesforce activity date (date-only; actor and sequence unavailable)',
+        detail: contact.salesforce_activity_verification_status || 'unverified',
+      })
       timeline.sort((a, b) => new Date(b.at) - new Date(a.at))
 
       // Source-code history: "CODE @ timestamp" lines from Salesforce
@@ -64,7 +98,13 @@ module.exports = function mountEngagement(app, { supabase }) {
         .split(/\r?\n/).map(l => l.trim()).filter(Boolean)
         .map(l => { const [code, at] = l.split(' @ '); return { code: (code || '').trim(), at: (at || '').trim() || null } })
 
-      res.json({ contact, timeline, sourceHistory: history, opportunities: opps.data || [] })
+      res.json({
+        contact, timeline, sourceHistory: history, opportunities: opps.data || [],
+        coverage: {
+          status: contact.salesforce_activity_verification_status || 'unverified',
+          verified_at: contact.salesforce_activity_verified_at || null,
+        },
+      })
     } catch (err) {
       console.error('❌ engagement/contact:', err.message)
       res.status(500).json({ error: err.message })
