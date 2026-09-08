@@ -112,6 +112,25 @@ Uses **OAuth 2.0 Client Credentials Flow** - no user interaction or callback URL
 
 **How it works:** Each API call gets a fresh access token using the Client Credentials flow (no refresh tokens needed).
 
+### Google Search Console Warehouse
+
+Search Console reporting is stored by client in `search_console_site_daily` and
+`search_console_query_page_daily`. The service-role-only
+`search_console_credentials` table holds encrypted, read-only OAuth credentials;
+normal authenticated users cannot select that table. When `RUN_SCHEDULER=true`,
+the server syncs finalized data daily at 07:15 UTC and re-fetches a seven-day
+window to repair Google's late revisions.
+
+Operational commands:
+
+```bash
+node scripts/apply-search-console-migration.mjs          # read-only check
+node scripts/apply-search-console-migration.mjs --apply  # install migration 090
+node scripts/search-console-auth.mjs url                 # begin read-only OAuth
+node scripts/search-console-auth.mjs code URL --install  # encrypt/install token
+node scripts/search-console-sync.mjs --start=YYYY-MM-DD --end=YYYY-MM-DD
+```
+
 ## Setting Up Salesforce for a New Client
 
 ### Step 1: Salesforce Admin Creates Connected App
@@ -270,7 +289,8 @@ Email security scanners (Barracuda, Proofpoint, Mimecast, etc.) automatically cl
 - `src/lib/supabase.ts` - Supabase client initialization
 - `src/lib/utils.ts` - Utilities: `cn()` (class merging), `formatDate()`, `formatDateTime()`
 - `api/server.js` - Express backend with SendGrid and Salesforce integration
-- `supabase/migrations/` - Database schema (run in order: 001-018)
+- `supabase/baseline/` - Replayable schema snapshot; follow its README, then apply post-baseline migrations
+- `supabase/migrations/` - Incremental schema changes and scoped production migration sources
 
 ## Database Schema
 

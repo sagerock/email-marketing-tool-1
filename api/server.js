@@ -31,6 +31,7 @@ const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
 const { filenameFromUrl, scanClientHtml } = require('./media-scan')
 const { markConversationTailForCaching } = require('./email-builder-cache')
 const { createAskEmailDesignHandler } = require('./ask-email-design')
+const { runAllSearchConsoleSyncs } = require('./search-console-sync')
 const {
   CampaignClaimConflictError,
   canonicalEmail,
@@ -9486,4 +9487,27 @@ app.listen(PORT, () => {
   })
 
   console.log('✅ Daily WooCommerce sync cron job started (runs at 6:30 AM UTC)')
+
+  // Search Console typically settles a few days late. Sync at 7:15 AM UTC and
+  // re-fetch the trailing seven finalized dates so late revisions are repaired.
+  cron.schedule('15 7 * * *', async () => {
+    console.log('🔄 Starting daily Google Search Console sync...')
+    try {
+      const results = await runAllSearchConsoleSyncs({ supabase, encryptionKey: ENCRYPTION_KEY })
+      const failures = results.filter(result => !result.ok)
+      for (const result of results) {
+        if (result.ok) {
+          console.log(`  ✅ ${result.siteUrl}: ${result.startDate || 'n/a'} through ${result.endDate || 'n/a'} (${result.detailRowsProcessed || 0} detail rows)`)
+        } else {
+          console.error(`  ❌ ${result.siteUrl}: ${result.error}`)
+        }
+      }
+      if (failures.length) throw new Error(`${failures.length} Search Console integration(s) failed`)
+      console.log('✅ Daily Google Search Console sync complete')
+    } catch (error) {
+      console.error('❌ Daily Google Search Console sync failed:', error.message)
+    }
+  })
+
+  console.log('✅ Daily Google Search Console sync cron job started (runs at 7:15 AM UTC)')
 })
