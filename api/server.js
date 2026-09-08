@@ -24,8 +24,9 @@ const jsforce = require('jsforce')
 const puppeteer = require('puppeteer')
 require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
-const { webhookLimiter, upsertLimiter } = require('./rate-limiters')
+const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
+const { mountEngagementReporting } = require('./engagement-reporting')
 const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
 const { filenameFromUrl, scanClientHtml } = require('./media-scan')
@@ -277,6 +278,8 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/contacts/upsert') return next()
   // Private Ask/Polaris integration uses its own fixed-client bearer auth.
   if (req.path === '/ask/email-design-drafts') return next()
+  // Athena's CRM reporting transport has its own fixed-tenant bearer secret.
+  if (req.path === '/internal/engagement/report') return next()
   // Skip auth for public signup (rate-limited, no sensitive data)
   if (req.path === '/public/signup') return next()
   // Skip auth for AWSNA 2026 booth resource signup (rate-limited, no sensitive data)
@@ -8382,10 +8385,19 @@ app.use(express.static(path.join(__dirname, '../dist')))
 // Campaign reply receiver (client-branded reply subdomains, e.g. email.alconox.com)
 require('./campaign-replies')(app, { supabase, decryptClient, webhookLimiter })
 
+const engagementReporting = mountEngagementReporting(app, {
+  supabase,
+  getSalesforceConnection,
+  reportingLimiter: engagementReportingLimiter,
+  syncOpportunities: clientId => syncSalesforceOpportunities(
+    { supabase, getSalesforceConnection }, clientId, null,
+    { authoritative: true, returnManifest: true }
+  ),
+})
 // Engagement page API (client-scoped by the global /api middleware)
-require('./engagement')(app, { supabase })
+require('./engagement')(app, { supabase, reporting: engagementReporting })
 // Monday engagement digest (form leads + stalled opps + replies), per-client config
-require('./engagement-digest')(app, { supabase, decryptClient, cron })
+require('./engagement-digest')(app, { supabase, decryptClient, cron, reporting: engagementReporting })
 
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing

@@ -16,13 +16,19 @@ import {
 type Totals = {
   arrivals: number; replies: number; engaged: number
   form_leads: number; form_leads_uncontacted: number; form_leads_replied: number; form_leads_contacted: number; form_leads_auto: number; form_leads_new: number; form_submissions: number
+  form_leads_no_follow_up: number; form_leads_reply_waiting: number; form_leads_human_follow_up: number
+  form_leads_salesforce_activity: number; form_leads_automation: number; form_leads_within_grace: number
+  form_leads_ambiguous: number; form_leads_unable_to_verify: number
   open_opps: number; stalled: number; opps_synced_at: string | null; contacts_synced_at: string | null
 }
 type FormLead = Person & {
   last_form: string; forms: string; last_form_on: string; first_form_on: string; forms_in_window: number
   opens_since_form: number; clicks_since_form: number; our_reply_at: string | null; sf_touched: boolean; open_opps: number
-  auto_followups: number; last_auto_followup_at: string | null
-  status: 'replied, no response' | 'not contacted' | 'auto follow-up only' | 'new' | 'contacted'
+  auto_followups: number; last_auto_followup_at: string | null; genuine_reply_at: string | null
+  status: 'reply awaiting verified response' | 'no follow-up recorded' | 'automation only'
+    | 'new — within follow-up window' | 'verified human follow-up' | 'Salesforce activity recorded'
+    | 'same-day activity — sequence unknown' | 'future activity date — ambiguous'
+    | 'outbound provenance unknown' | 'unable to verify'
 }
 type Person = {
   id: string; email: string; first_name: string | null; last_name: string | null; company: string | null
@@ -49,6 +55,10 @@ type Overview = {
   form_leads: FormLead[]
   arrivals: Person[]; replies: Reply[]
   pipeline: { stage: string; n: number }[]; stalled: Opp[]; engaged: Person[]
+  freshness?: {
+    status: string; completed_at?: string | null; verification_completed_at?: string | null
+    resolved_count?: number; unresolved_count?: number; failed_count?: number
+  } | null
 }
 
 type Tab = 'forms' | 'replies' | 'arrivals' | 'pipeline' | 'engaged'
@@ -70,8 +80,8 @@ export default function Engagement() {
       const res = await apiFetch(`/api/engagement/overview?clientId=${selectedClient.id}&days=${days}`)
       if (!res.ok) throw new Error((await res.json()).error || res.statusText)
       setData(await res.json())
-    } catch (e: any) {
-      setError(e.message)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setLoading(false)
     }
@@ -114,8 +124,17 @@ export default function Engagement() {
         </div>
       )}
 
+      {data?.freshness && (
+        <div className="mb-4 p-3 rounded-lg bg-blue-50 text-blue-800 text-sm">
+          Salesforce activity verified through {fmtDateTime(data.freshness.completed_at || data.freshness.verification_completed_at)}.
+          {' '}{data.freshness.resolved_count ?? 0} records resolved
+          {(data.freshness.unresolved_count ?? 0) > 0 && ` · ${data.freshness.unresolved_count} unresolved`}
+          {(data.freshness.failed_count ?? 0) > 0 && ` · ${data.freshness.failed_count} failed`}.
+        </div>
+      )}
+
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label={`Form leads, ${days}d`} value={t?.form_leads ?? '–'} sub={t ? `${t.form_leads_uncontacted} not contacted · ${t.form_leads_auto} auto only${t.form_leads_replied ? ` · ${t.form_leads_replied} replied, no response` : ''}` : undefined} active={tab === 'forms'} onClick={() => setTab('forms')} />
+        <Stat icon={<Clock className="h-5 w-5 text-amber-600" />} label={`Form leads, ${days}d`} value={t?.form_leads ?? '–'} sub={t ? `${t.form_leads_no_follow_up} no follow-up recorded · ${t.form_leads_automation} automation only${t.form_leads_unable_to_verify ? ` · ${t.form_leads_unable_to_verify} unverified` : ''}` : undefined} active={tab === 'forms'} onClick={() => setTab('forms')} />
         <Stat icon={<MessageSquare className="h-5 w-5 text-blue-600" />} label={`Replies, ${days}d`} value={t?.replies ?? '–'} active={tab === 'replies'} onClick={() => setTab('replies')} />
         <Stat icon={<Inbox className="h-5 w-5 text-green-600" />} label={`New contacts, ${days}d`} value={t?.arrivals ?? '–'} active={tab === 'arrivals'} onClick={() => setTab('arrivals')} />
         <Stat icon={<Briefcase className="h-5 w-5 text-purple-600" />} label="Open opportunities" value={t?.open_opps ?? '–'} sub={t?.stalled ? `${t.stalled} stalled 14d+` : undefined} active={tab === 'pipeline'} onClick={() => setTab('pipeline')} />
@@ -139,21 +158,28 @@ export default function Engagement() {
 
 // ---------- tabs ----------
 
-type LeadFilter = 'all' | 'not contacted' | 'auto follow-up only' | 'replied, no response' | 'new' | 'contacted'
+type LeadFilter = 'all' | 'ambiguous' | FormLead['status']
 
 function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form: string; n: number; people: number }[]; totals: Totals }) {
   const [filter, setFilter] = useState<LeadFilter>('all')
   const [formFilter, setFormFilter] = useState<string | null>(null)
   const shown = rows
-    .filter(r => filter === 'all' || r.status === filter)
+    .filter(r => filter === 'all' || r.status === filter || (filter === 'ambiguous' && (
+      r.status === 'same-day activity — sequence unknown' ||
+      r.status === 'future activity date — ambiguous' ||
+      r.status === 'outbound provenance unknown'
+    )))
     .filter(r => !formFilter || r.forms.split(', ').includes(formFilter))
   const chips: { key: LeadFilter; label: string; n: number }[] = [
     { key: 'all', label: 'All', n: totals.form_leads },
-    { key: 'not contacted', label: 'Not contacted', n: totals.form_leads_uncontacted },
-    { key: 'auto follow-up only', label: 'Auto follow-up only', n: totals.form_leads_auto },
-    { key: 'replied, no response', label: 'Replied, no response', n: totals.form_leads_replied },
-    { key: 'new', label: 'New (last few days)', n: totals.form_leads_new },
-    { key: 'contacted', label: 'Contacted', n: totals.form_leads_contacted },
+    { key: 'no follow-up recorded', label: 'No follow-up recorded', n: totals.form_leads_no_follow_up },
+    { key: 'automation only', label: 'Automation only', n: totals.form_leads_automation },
+    { key: 'reply awaiting verified response', label: 'Reply awaiting response', n: totals.form_leads_reply_waiting },
+    { key: 'new — within follow-up window', label: 'Within follow-up window', n: totals.form_leads_within_grace },
+    { key: 'verified human follow-up', label: 'Verified human follow-up', n: totals.form_leads_human_follow_up },
+    { key: 'Salesforce activity recorded', label: 'Salesforce activity recorded', n: totals.form_leads_salesforce_activity },
+    { key: 'ambiguous', label: 'Ambiguous', n: totals.form_leads_ambiguous },
+    { key: 'unable to verify', label: 'Unable to verify', n: totals.form_leads_unable_to_verify },
   ]
   return (
     <div className="space-y-4">
@@ -180,7 +206,7 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
       </Card>
       <Section
         title="People who filled out a form"
-        blurb="Each person's latest form, what they did with our emails since, and whether anyone at the company has logged activity on them in Salesforce since the form. 'Auto follow-up only' = our automated email went out but no person has touched them. Urgent first, then most engaged."
+        blurb="Each person's latest form and the available Salesforce, human-reply, automation, and marketing evidence since then. Salesforce activity is date-only; same-day activity cannot establish event order."
         empty="No form submissions in this window."
         count={shown.length}
         controls={
@@ -209,8 +235,8 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
                 {r.auto_followups > 0 && <div className="text-xs text-gray-400">{r.auto_followups} auto follow-up{r.auto_followups === 1 ? '' : 's'} sent, last {relTime(r.last_auto_followup_at)}</div>}
               </td>
               <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">
-                {r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'never'}
-                {r.our_reply_at && <div className="text-xs text-gray-400">we replied {relTime(r.our_reply_at)}</div>}
+                {r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'No activity date recorded'}
+                {r.our_reply_at && <div className="text-xs text-gray-400">verified human reply {relTime(r.our_reply_at)}</div>}
               </td>
               <td className="py-2.5 px-4 text-sm text-gray-600">{r.open_opps || '–'}</td>
             </tr>
@@ -222,7 +248,10 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
 }
 
 function StatusBadge({ status }: { status: FormLead['status'] }) {
-  const v = status === 'replied, no response' ? 'danger' : status === 'not contacted' ? 'warning' : status === 'auto follow-up only' ? 'default' : status === 'new' ? 'info' : 'success'
+  const v = status === 'reply awaiting verified response' ? 'danger'
+    : status === 'no follow-up recorded' ? 'warning'
+      : status === 'automation only' || status.includes('ambiguous') || status === 'outbound provenance unknown' || status === 'unable to verify' ? 'default'
+        : status === 'new — within follow-up window' || status === 'Salesforce activity recorded' ? 'info' : 'success'
   return <Badge variant={v}>{status}</Badge>
 }
 
@@ -240,10 +269,12 @@ function RepliesTab({ rows }: { rows: Reply[] }) {
               <div className="text-xs text-gray-400 mt-1">{relTime(r.created_at)}</div>
               <div className="mt-1">
                 {r.answered_at
-                  ? <Badge variant="success">answered</Badge>
-                  : r.salesforce_last_activity_date && r.salesforce_last_activity_date >= r.created_at.slice(0, 10)
-                    ? <Badge variant="info">Salesforce activity</Badge>
-                    : <Badge variant="danger">unanswered</Badge>}
+                  ? <Badge variant="success">verified human response</Badge>
+                  : r.salesforce_last_activity_date && r.salesforce_last_activity_date > r.created_at.slice(0, 10)
+                    ? <Badge variant="info">later Salesforce activity date</Badge>
+                    : r.salesforce_last_activity_date === r.created_at.slice(0, 10)
+                      ? <Badge variant="default">same-day activity — sequence unknown</Badge>
+                      : <Badge variant="danger">no verified response</Badge>}
               </div>
             </div>
             <div className="min-w-0">
@@ -285,7 +316,7 @@ function ArrivalsTab({ rows, sources }: { rows: Person[]; sources: { source: str
               <td className="py-2.5 px-4 text-sm text-gray-600">{r.record_type}{r.salesforce_lead_status ? ` · ${r.salesforce_lead_status}` : ''}</td>
               <td className="py-2.5 px-4 text-sm text-gray-600">{r.total_opens ?? 0} / {r.total_clicks ?? 0}</td>
               <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{r.last_engaged_at ? relTime(r.last_engaged_at) : '–'}</td>
-              <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'never'}</td>
+              <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'No activity date recorded'}</td>
             </tr>
           ))}
         </Table>
@@ -346,7 +377,7 @@ function EngagedTab({ rows }: { rows: Person[] }) {
             <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{relTime(r.last_engaged_at)}</td>
             <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{r.last_replied_at ? relTime(r.last_replied_at) : '–'}</td>
             <td className="py-2.5 px-4 text-sm text-gray-600">{r.source_code || '–'}</td>
-            <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'never'}</td>
+            <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">{r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'No activity date recorded'}</td>
           </tr>
         ))}
       </Table>
@@ -419,6 +450,12 @@ function fmtDate(s?: string | null) {
   if (!s) return '–'
   const d = new Date(s)
   return isNaN(d.getTime()) ? s : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+}
+
+function fmtDateTime(s?: string | null) {
+  if (!s) return 'an unavailable time'
+  const d = new Date(s)
+  return isNaN(d.getTime()) ? s : d.toLocaleString()
 }
 
 function relTime(s?: string | null) {

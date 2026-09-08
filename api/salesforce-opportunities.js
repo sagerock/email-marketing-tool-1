@@ -52,17 +52,20 @@ function mapOpp(o, clientId) {
  * @param {string|null} since ISO timestamp; null = everything
  * @returns {Promise<number>} rows upserted
  */
-async function syncSalesforceOpportunities({ supabase, getSalesforceConnection }, clientId, since) {
+async function syncSalesforceOpportunities({ supabase, getSalesforceConnection }, clientId, since, options = {}) {
   const conn = await getSalesforceConnection(clientId)
   // jsforce defaults to an old API version where Opportunity.ContactId doesn't exist.
   if (!conn.version || parseFloat(conn.version) < 50) conn.version = '61.0'
-  const where = since ? ` WHERE LastModifiedDate > ${since}` : ''
+  const authoritative = options.authoritative === true
+  const maxRecords = Math.min(Math.max(Number.parseInt(options.maxRecords, 10) || 5000, 1), 20000)
+  const where = since && !authoritative ? ` WHERE LastModifiedDate > ${since}` : ''
 
   // Drop any field the org/user can't see and retry, so a missing custom field
   // never blocks the sync.
   let fields = [...STANDARD_FIELDS, ...CUSTOM_FIELDS]
+  const droppedFields = []
   let result
-  for (let attempt = 0; attempt < 8; attempt++) {
+  for (let attempt = 0; attempt < 20; attempt++) {
     try {
       result = await conn.query(`SELECT ${fields.join(', ')} FROM Opportunity${where} ORDER BY LastModifiedDate`)
       break
@@ -71,10 +74,12 @@ async function syncSalesforceOpportunities({ supabase, getSalesforceConnection }
       const m = msg.match(/No such column '([^']+)'/i)
       if (m && fields.some(f => f.toLowerCase() === m[1].toLowerCase())) {
         console.warn(`⚠️ Opportunity sync: field ${m[1]} not available, dropping it`)
+        droppedFields.push(m[1])
         fields = fields.filter(f => f.toLowerCase() !== m[1].toLowerCase())
         continue
       }
       if (/sObject type 'Opportunity' is not supported/i.test(msg)) {
+        if (authoritative) throw new Error('Opportunity is not visible to the Salesforce integration user')
         console.warn('⚠️ Opportunity sync: object not visible to integration user, skipping')
         return 0
       }
@@ -83,20 +88,67 @@ async function syncSalesforceOpportunities({ supabase, getSalesforceConnection }
   }
   if (!result) throw new Error('Opportunity query failed after dropping unavailable fields')
 
-  let total = 0
-  const BATCH = 200
+  const sourceTotal = Number.isFinite(result.totalSize) ? result.totalSize : null
+  const sourceRecords = []
+  let complete = true
   while (true) {
-    const rows = (result.records || []).map(o => mapOpp(o, clientId))
-    for (let i = 0; i < rows.length; i += BATCH) {
-      const chunk = rows.slice(i, i + BATCH)
-      const { error } = await supabase
-        .from('salesforce_opportunities')
-        .upsert(chunk, { onConflict: 'client_id,salesforce_id' })
-      if (error) console.error('❌ Opportunity upsert failed:', error.message)
-      else total += chunk.length
+    const incoming = result.records || []
+    const room = maxRecords - sourceRecords.length
+    sourceRecords.push(...incoming.slice(0, Math.max(room, 0)))
+    if (incoming.length > room || (sourceTotal != null && sourceRecords.length < sourceTotal && sourceRecords.length >= maxRecords)) {
+      complete = false
+      break
     }
     if (result.done || !result.nextRecordsUrl) break
     result = await conn.queryMore(result.nextRecordsUrl)
+  }
+  if (sourceTotal != null && sourceRecords.length < sourceTotal) complete = false
+  if (!complete) {
+    throw new Error(`Opportunity enumeration exceeded the configured ${maxRecords}-record budget`)
+  }
+
+  let total = 0
+  const seen = new Set()
+  const BATCH = 200
+  const rows = sourceRecords.map(o => ({
+      ...mapOpp(o, clientId),
+      verification_status: 'resolved',
+      last_verified_at: new Date().toISOString(),
+      visible_in_last_snapshot: true,
+  }))
+  for (const row of rows) seen.add(row.salesforce_id)
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const chunk = rows.slice(i, i + BATCH)
+    const { error } = await supabase
+      .from('salesforce_opportunities')
+      .upsert(chunk, { onConflict: 'client_id,salesforce_id' })
+    if (error) throw new Error(`Opportunity upsert failed: ${error.message}`)
+    total += chunk.length
+  }
+
+  // Only a complete, authoritative enumeration may mark cached rows missing.
+  // Missing means unresolved/not currently visible, never implicitly closed.
+  if (authoritative) {
+    let from = 0
+    while (true) {
+      const { data: cached, error } = await supabase.from('salesforce_opportunities')
+        .select('salesforce_id').eq('client_id', clientId)
+        .order('salesforce_id', { ascending: true }).range(from, from + 999)
+      if (error) throw new Error(`Opportunity reconciliation read failed: ${error.message}`)
+      const missing = (cached || []).map(row => row.salesforce_id).filter(id => !seen.has(id))
+      for (let i = 0; i < missing.length; i += BATCH) {
+        const { error: markError } = await supabase.from('salesforce_opportunities')
+          .update({
+            visible_in_last_snapshot: false,
+            verification_status: 'unresolved',
+            last_verified_at: new Date().toISOString(),
+          })
+          .eq('client_id', clientId).in('salesforce_id', missing.slice(i, i + BATCH))
+        if (markError) throw new Error(`Opportunity reconciliation write failed: ${markError.message}`)
+      }
+      if (!cached || cached.length < 1000) break
+      from += 1000
+    }
   }
 
   // Fill contact_email from the linked contact where the opp itself has none.
@@ -104,7 +156,18 @@ async function syncSalesforceOpportunities({ supabase, getSalesforceConnection }
     if (error && !/does not exist/i.test(error.message)) console.warn('⚠️ fill_opportunity_emails:', error.message)
   })
 
-  console.log(`  📈 Opportunities synced: ${total}`)
+  console.log(`  📈 Opportunities synced: ${total}${authoritative ? ' (authoritative snapshot)' : ''}`)
+  if (options.returnManifest) {
+    const relationshipComplete = !droppedFields.some(field => field.toLowerCase() === 'contactid')
+    return {
+      count: total,
+      cohortDiscoveryComplete: true,
+      relationshipComplete,
+      sourceLimitations: relationshipComplete ? [] : [
+        'Opportunity.ContactId was unavailable; person-level pipeline linkage is incomplete.',
+      ],
+    }
+  }
   return total
 }
 
