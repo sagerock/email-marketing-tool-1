@@ -11,6 +11,7 @@ import Contacts from './pages/Contacts'
 import NewsletterHome from './pages/NewsletterHome'
 import Templates from './pages/Templates'
 import Campaigns from './pages/Campaigns'
+import EmailTracker from './pages/EmailTracker'
 import Automations from './pages/Automations'
 import Analytics from './pages/Analytics'
 import Settings from './pages/Settings'
@@ -51,6 +52,7 @@ function App() {
               }
             />
             <Route path="/contacts" element={<ProtectedRoute><Layout><Contacts /></Layout></ProtectedRoute>} />
+            <Route path="/email-tracker" element={<ProtectedRoute><Layout><EmailTracker /></Layout></ProtectedRoute>} />
             <Route
               path="/engagement"
               element={

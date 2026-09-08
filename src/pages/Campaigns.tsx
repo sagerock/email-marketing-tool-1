@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { apiFetch } from '../lib/api'
 import { useClient } from '../context/ClientContext'
@@ -51,6 +52,7 @@ import Badge from '../components/ui/Badge'
 import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, Download, Copy } from 'lucide-react'
 
 export default function Campaigns() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const { selectedClient } = useClient()
   const [campaigns, setCampaigns] = useState<Campaign[]>([])
   const [allCampaigns, setAllCampaigns] = useState<Campaign[]>([])
@@ -67,6 +69,17 @@ export default function Campaigns() {
   const [editingFolder, setEditingFolder] = useState<Folder | null>(null)
   const [movingCampaign, setMovingCampaign] = useState<Campaign | null>(null)
   const [loading, setLoading] = useState(true)
+
+  // Open the exact campaign selected from the tracker once this tenant loads.
+  useEffect(() => {
+    const target = allCampaigns.find(c => c.id === searchParams.get('campaign') && c.client_id === selectedClient?.id)
+    if (!target) return
+    if (['draft', 'scheduled'].includes(target.status)) setEditingCampaign(target)
+    else document.getElementById(`campaign-${target.id}`)?.scrollIntoView({ block: 'center' })
+    const next = new URLSearchParams(searchParams)
+    next.delete('campaign')
+    setSearchParams(next, { replace: true })
+  }, [allCampaigns, searchParams, selectedClient?.id, setSearchParams])
 
   useEffect(() => {
     if (selectedClient) {
@@ -456,7 +469,7 @@ export default function Campaigns() {
           ) : (
             <div className="space-y-4">
               {campaigns.map((campaign) => (
-                <Card key={campaign.id}>
+                <Card key={campaign.id} id={`campaign-${campaign.id}`}>
                   <CardContent className="pt-6">
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
@@ -467,6 +480,7 @@ export default function Campaigns() {
                           <Badge variant={getStatusColor(campaign.status)}>
                             {campaign.status}
                           </Badge>
+                          <Link className="text-sm text-blue-700 underline" to={`/email-tracker?campaign=${campaign.id}`}>Track / approval history</Link>
                         </div>
                         <div className="grid grid-cols-2 gap-4 text-sm">
                           <div>

@@ -17,6 +17,7 @@ const navigation = [
   { name: 'Email Designs', href: '/templates', icon: FileText },
   { name: 'Media', href: '/media', icon: ImageIcon },
   { name: 'Campaigns', href: '/campaigns', icon: Mail },
+  { name: 'Email Tracker', href: '/email-tracker', icon: FileText },
   { name: 'Automations', href: '/automations', icon: Zap },
   { name: 'AI Agents', href: '/ai-agents', icon: Bot },
   { name: 'Knowledge Base', href: '/knowledge-base', icon: BookOpen },
