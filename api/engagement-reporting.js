@@ -180,15 +180,22 @@ async function queryObject(conn, { object, fields, where, maxRecords }) {
 }
 
 async function defaultLoadKnownCandidates(supabase, clientId, maxRecords, options) {
-  const { data, error } = await supabase.rpc('engagement_reporting_candidates', {
-    p_client_id: clientId,
-    p_start: options.start,
-    p_end_exclusive: options.endExclusive,
-    p_limit: maxRecords,
-  })
-  if (error) throw error
-  const rows = (data || []).map(({ total_count: _totalCount, ...row }) => row)
-  const totalCount = Number(data?.[0]?.total_count || 0)
+  const rows = []
+  let totalCount = 0
+  while (rows.length < maxRecords) {
+    const { data, error } = await supabase.rpc('engagement_reporting_candidates', {
+      p_client_id: clientId,
+      p_start: options.start,
+      p_end_exclusive: options.endExclusive,
+      p_limit: Math.min(PAGE_SIZE, maxRecords - rows.length),
+      p_offset: rows.length,
+    })
+    if (error) throw error
+    if (!data?.length) break
+    totalCount = Number(data[0].total_count || 0)
+    rows.push(...data.map(({ total_count: _totalCount, ...row }) => row))
+    if (rows.length >= totalCount) break
+  }
   return { rows, totalCount, complete: rows.length === totalCount }
 }
 
@@ -546,6 +553,7 @@ function mountEngagementReporting(app, deps) {
 
 module.exports = {
   createEngagementReporting,
+  defaultLoadKnownCandidates,
   mapSalesforceRecord,
   mountEngagementReporting,
   queryAll,

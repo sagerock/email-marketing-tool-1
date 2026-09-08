@@ -18,6 +18,10 @@ visible Opportunity set and freezes exact-ContactId pipeline signals. Cached
 records that disappear become unresolved rather than silently closed; unavailable
 Opportunity access or linkage makes coverage partial instead of producing zero.
 
+The Engagement page returns partial refresh manifests so unresolved people remain
+visible as `unable to verify`. The scheduled digest remains fail-closed and is
+withheld unless the entire bounded dashboard cohort resolves.
+
 Athena calls `POST /api/internal/engagement/report`. The request cannot select a
 tenant: the server binds it to `ASK_ENGAGEMENT_CLIENT_ID` and authenticates with
 `ASK_ENGAGEMENT_API_KEY`. The endpoint is unavailable unless
