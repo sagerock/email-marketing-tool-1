@@ -20,7 +20,9 @@ module.exports = function mountEngagement(app, { supabase, reporting }) {
             scope: 'known_people', days, maxAgeMinutes: 15,
           })
         } catch (refreshError) {
-          const previous = await reporting.latestComplete(clientId, 'known_people', 525600)
+          const previous = await reporting.latestComplete(
+            clientId, 'known_people', 525600, {}, true
+          )
           if (!previous) return res.status(503).json({
             error: 'Engagement verification is unavailable',
             detail: refreshError.message,

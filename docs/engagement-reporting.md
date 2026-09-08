@@ -20,7 +20,9 @@ Opportunity access or linkage makes coverage partial instead of producing zero.
 
 The Engagement page returns partial refresh manifests so unresolved people remain
 visible as `unable to verify`. The scheduled digest remains fail-closed and is
-withheld unless the entire bounded dashboard cohort resolves.
+withheld unless the entire bounded dashboard cohort resolves. Interactive and
+Athena reads may reuse a recent partial snapshot for 15 minutes, preserving its
+coverage warning without repeating the same expensive Salesforce verification.
 
 Athena calls `POST /api/internal/engagement/report`. The request cannot select a
 tenant: the server binds it to `ASK_ENGAGEMENT_CLIENT_ID` and authenticates with
