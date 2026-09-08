@@ -6,6 +6,15 @@ link the campaign created in the existing Campaigns tool. Existing and newly
 created campaigns get a tracker automatically. Linking a plan preserves the
 original plan's history and adds its reference to the campaign's tracker.
 
+The campaign editor also shows a **Workflow stage** dropdown below the campaign
+name. For a saved, unscheduled campaign, choose a preparation stage and click
+**Update stage**. This saves immediately to the same tracker/history; it is
+separate from **Save Changes**, which saves the campaign content. Save any
+content changes first so approval refers to the persisted design. Approval
+requires the current stage to be Waiting for approval and an approval note.
+Scheduled, Sending and Sent are automatic and displayed read-only. New campaigns
+start at Drafted; create them before changing their preparation stage.
+
 Preparation stages are Started, Drafted, Waiting for approval and Approved.
 Scheduled and Sent come from the campaign's actual delivery status. Sending
 appears in Scheduled until the send completes; failed/partial sends show a

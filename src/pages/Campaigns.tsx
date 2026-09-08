@@ -49,6 +49,7 @@ import { Card, CardContent } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
+import CampaignWorkflowField from '../components/CampaignWorkflowField'
 import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, Download, Copy } from 'lucide-react'
 
 export default function Campaigns() {
@@ -834,6 +835,7 @@ function CreateCampaignModal({
     purchase_filter: toPurchaseForm(campaign?.purchase_filter),
   })
   const [submitting, setSubmitting] = useState(false)
+  const savedForm = useRef(JSON.stringify(formData))
 
   useEffect(() => {
     fetchTemplates()
@@ -889,7 +891,7 @@ function CreateCampaignModal({
   // Update form data when campaign prop changes
   useEffect(() => {
     if (campaign) {
-      setFormData({
+      const nextForm = {
         name: campaign.name || '',
         template_id: campaign.template_id || '',
         subject: campaign.subject || '',
@@ -903,7 +905,9 @@ function CreateCampaignModal({
         folder_id: campaign.folder_id || '',
         salesforce_campaign_id: campaign.salesforce_campaign_id || '',
         purchase_filter: toPurchaseForm(campaign.purchase_filter),
-      })
+      }
+      savedForm.current = JSON.stringify(nextForm)
+      setFormData(nextForm)
     }
   }, [campaign])
 
@@ -1091,6 +1095,14 @@ function CreateCampaignModal({
             required
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          />
+
+          <CampaignWorkflowField
+            key={`${clientId}:${campaign?.id || 'new'}`}
+            clientId={clientId}
+            campaignId={campaign?.id}
+            deliveryStatus={campaign?.status}
+            hasUnsavedChanges={JSON.stringify(formData) !== savedForm.current || submitting}
           />
 
           {folders.length > 0 && (
