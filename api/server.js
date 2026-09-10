@@ -33,6 +33,7 @@ const { filenameFromUrl, scanClientHtml } = require('./media-scan')
 const { markConversationTailForCaching } = require('./email-builder-cache')
 const { createAskEmailDesignHandler } = require('./ask-email-design')
 const { runAllSearchConsoleSyncs } = require('./search-console-sync')
+const RSSParser = require('rss-parser')
 const {
   CampaignClaimConflictError,
   canonicalEmail,
@@ -4339,6 +4340,150 @@ function mapWooOrder(order, clientId) {
       : null,
     updated_at: new Date().toISOString(),
   }
+}
+
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]))
+}
+
+function buildRssNotificationHtml({ title, excerpt, link }) {
+  const safeTitle = escapeHtml(title)
+  const safeExcerpt = escapeHtml(excerpt)
+  const safeLink = escapeHtml(link)
+  return `
+  <div style="background:#f7f7f5;padding:28px 0;font-family:Arial,sans-serif;">
+    <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e5e0;border-radius:10px;padding:32px;">
+      <p style="font-size:15px;color:#444;line-height:1.6;">Hi {{first_name}},</p>
+      <h1 style="font-size:22px;color:#222;margin:8px 0 14px;">${safeTitle}</h1>
+      <p style="font-size:15px;color:#444;line-height:1.6;">${safeExcerpt}</p>
+      <p style="margin:20px 0;"><a href="${safeLink}" style="display:inline-block;background:#222;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-size:14px;">Read more</a></p>
+      <p style="font-size:13px;color:#999;margin-top:28px;">{{mailing_address}}</p>
+      <p style="font-size:12px;color:#999;"><a href="{{unsubscribe_url}}" style="color:#999;">Unsubscribe</a></p>
+    </div>
+  </div>`
+}
+
+// Identifies a feed item across checks. guid is more stable than link when a
+// feed sets one; falls back to link for feeds (like this one) that don't.
+function rssItemKey(item) {
+  return item.guid || item.link
+}
+
+/**
+ * Checks one client's RSS feed for new post(s) since the last check and, if
+ * found, sends each one to that client's active contacts through the real
+ * campaign send pipeline (creates a `templates` row + a `campaigns` row, then
+ * calls sendCampaignById) — so unsubscribe links, the mailing-address footer,
+ * and suppression all apply exactly as they do for a manually sent campaign.
+ *
+ * A client's first-ever check only records the current newest item as the
+ * baseline and does not send an email for it, so turning this on doesn't
+ * blast existing subscribers with a post they may have already seen.
+ *
+ * Returns { sent, baselined? }.
+ */
+async function checkRssFeedForClient(client) {
+  const parser = new RSSParser()
+  const feed = await parser.parseURL(client.rss_feed_url)
+  const items = Array.isArray(feed.items) ? feed.items : []
+
+  if (items.length === 0) {
+    await supabase.from('clients').update({
+      last_rss_checked_at: new Date().toISOString(),
+      rss_sync_status: 'success',
+      rss_sync_message: 'Feed has no items',
+    }).eq('id', client.id)
+    return { sent: 0 }
+  }
+
+  if (!client.last_rss_item_link) {
+    await supabase.from('clients').update({
+      last_rss_item_link: rssItemKey(items[0]),
+      last_rss_checked_at: new Date().toISOString(),
+      rss_sync_status: 'success',
+      rss_sync_message: 'Baselined to current newest post (no email sent)',
+    }).eq('id', client.id)
+    return { sent: 0, baselined: true }
+  }
+
+  const lastIndex = items.findIndex(item => rssItemKey(item) === client.last_rss_item_link)
+  if (lastIndex === -1) {
+    // The last-sent item fell out of the feed window (or the feed URL/format
+    // changed) — we can't tell what's actually new, so re-baseline rather
+    // than risk re-sending posts already delivered.
+    await supabase.from('clients').update({
+      last_rss_item_link: rssItemKey(items[0]),
+      last_rss_checked_at: new Date().toISOString(),
+      rss_sync_status: 'success',
+      rss_sync_message: 'Last-sent item no longer in feed window; re-baselined (no email sent)',
+    }).eq('id', client.id)
+    return { sent: 0, baselined: true }
+  }
+
+  const newItems = items.slice(0, lastIndex).reverse() // oldest -> newest
+  if (newItems.length === 0) {
+    await supabase.from('clients').update({
+      last_rss_checked_at: new Date().toISOString(),
+      rss_sync_status: 'success',
+    }).eq('id', client.id)
+    return { sent: 0 }
+  }
+
+  const sender = (client.verified_senders || [])[0]
+  if (!sender || !sender.email) {
+    throw new Error('No verified sender configured for this client')
+  }
+
+  let sentCount = 0
+  for (const item of newItems) {
+    const title = item.title || 'New post'
+    const excerpt = (item.contentSnippet || item.content || item.summary || '').trim().slice(0, 600)
+    const link = item.link || client.rss_feed_url
+    const html = buildRssNotificationHtml({ title, excerpt, link })
+
+    const { data: template, error: templateError } = await supabase
+      .from('templates')
+      .insert({
+        name: `RSS Auto: ${title}`.slice(0, 120),
+        subject: title,
+        html_content: html,
+        client_id: client.id,
+      })
+      .select('id')
+      .single()
+    if (templateError) throw templateError
+
+    const { data: campaign, error: campaignError } = await supabase
+      .from('campaigns')
+      .insert({
+        name: `RSS Auto: ${title}`.slice(0, 120),
+        template_id: template.id,
+        subject: title,
+        from_email: sender.email,
+        from_name: sender.name || client.name,
+        status: 'draft',
+        client_id: client.id,
+      })
+      .select('id')
+      .single()
+    if (campaignError) throw campaignError
+
+    await sendCampaignById(campaign.id)
+    sentCount += 1
+
+    // Persist progress after each send so a later item failing in this same
+    // run doesn't cause an earlier, already-sent item to be resent next time.
+    await supabase.from('clients').update({
+      last_rss_item_link: rssItemKey(item),
+      last_rss_checked_at: new Date().toISOString(),
+      rss_sync_status: 'success',
+      rss_sync_message: `Sent "${title}"`,
+    }).eq('id', client.id)
+  }
+
+  return { sent: sentCount }
 }
 
 /**
@@ -9522,4 +9667,42 @@ app.listen(PORT, () => {
   })
 
   console.log('✅ Daily Google Search Console sync cron job started (runs at 7:15 AM UTC)')
+
+  // RSS "new post" auto-notifications — hourly is plenty for low-frequency
+  // blog feeds (unlike the every-minute campaign/sequence job above).
+  cron.schedule('45 * * * *', async () => {
+    try {
+      const { data: clients, error } = await supabase
+        .from('clients')
+        .select('id, name, rss_feed_url, last_rss_item_link, verified_senders')
+        .not('rss_feed_url', 'is', null)
+
+      if (error) {
+        console.error('❌ Error fetching clients for RSS check:', error.message)
+        return
+      }
+      if (!clients || clients.length === 0) return
+
+      for (const client of clients) {
+        try {
+          const result = await checkRssFeedForClient(client)
+          if (result.sent > 0) {
+            console.log(`  ✅ ${client.name}: sent ${result.sent} RSS notification(s)`)
+          } else if (result.baselined) {
+            console.log(`  ℹ️ ${client.name}: RSS feed baselined, no email sent`)
+          }
+        } catch (clientErr) {
+          console.error(`  ❌ RSS check failed for ${client.name}:`, clientErr.message)
+          await supabase
+            .from('clients')
+            .update({ rss_sync_status: 'error', rss_sync_message: clientErr.message })
+            .eq('id', client.id)
+        }
+      }
+    } catch (error) {
+      console.error('❌ RSS auto-notification check error:', error.message)
+    }
+  })
+
+  console.log('✅ RSS auto-notification cron job started (runs hourly at :45)')
 })
