@@ -4,7 +4,7 @@
 database's `public` schema **as of that date**, not today's security state.
 Use it together with subsequent migrations for recovery; neither alone is current.
 
-**Security recovery requirement (2026-09-11):** apply migrations **095 and 096**
+**Security recovery requirement (2026-09-11):** apply migrations **095, 096 and 097**
 before exposing any rebuilt database to clients. The historical baseline alone
 restores obsolete permissions. See [the access contract and checks](../SECURITY-HARDENING.md).
 

@@ -1,4 +1,4 @@
-// Defaults to read-only inspection. Applies only the two reviewed security files.
+// Defaults to read-only inspection. Applies only the reviewed security files.
 import fs from 'node:fs'
 import os from 'node:os'
 import { createRequire } from 'node:module'
@@ -16,9 +16,9 @@ async function query(sql) {
   return r.json()
 }
 const selected = process.argv.find(a => a.startsWith('--migration='))?.split('=')[1]
-const files = { '095': '095_restrict_execute_sql.sql', '096': '096_client_data_security.sql' }
+const files = { '095': '095_restrict_execute_sql.sql', '096': '096_client_data_security.sql', '097': '097_privileged_function_boundaries.sql' }
 if (process.argv.includes('--apply')) {
-  if (!files[selected]) throw new Error('Specify --migration=095 or --migration=096')
+  if (!files[selected]) throw new Error('Specify --migration=095, --migration=096, or --migration=097')
   await query(fs.readFileSync(new URL(`../supabase/migrations/${files[selected]}`, import.meta.url), 'utf8'))
   console.log(JSON.stringify({ applied: files[selected] }))
 }

@@ -3,6 +3,8 @@
 Migrations 095 and 096 restrict the owner-privileged SQL utility and explicitly
 scope access to contact notes/tasks, knowledge bases, email conversations,
 discovered media, Constant Contact mirrors, and sync-run metadata.
+Migration 097 restricts backend-only reporting/update functions and makes the
+browser tag lookup obey the caller's contact-row permissions.
 
 ## Access contract
 
@@ -21,23 +23,42 @@ discovered media, Constant Contact mirrors, and sync-run metadata.
   anonymous users or ordinary authenticated users.
 - The knowledge API independently checks ownership before changing a record or
   deactivating siblings. Every final edit/delete includes both row and client IDs.
+- Backend-only RPCs covered by 097 retain service-role execution, not browser
+  execution. The tag lookup uses SECURITY INVOKER; the browser tracker mutation
+  retains its existing client-authorization check.
+- New public-schema functions created by `postgres` default to no PUBLIC/anonymous/authenticated
+  execution. Public-schema service access remains explicit in default grants.
+  Browser RPC migrations must deliberately grant the necessary role and enforce
+  caller authorization. Other function-creating roles have separate defaults;
+  this migration does not modify provider-owned roles.
 
 ## Checks and deployment
 
 `node scripts/apply-security-hardening.mjs` is read-only by default. Production
-application requires explicit `--apply --migration=095` or `--migration=096`.
+application requires explicit `--apply --migration=095`, `--migration=096`, or
+`--migration=097` (one migration per invocation, in that order for recovery).
 These files are transactional and repeatable. They change permissions, not data.
 The management-query runner does not register Supabase CLI migration history;
 the checked-in files remain mandatory recovery steps.
 
 `node scripts/verify-security-hardening.mjs` performs live anonymous-denial probes
 and read-only, transaction-local identity checks for the existing application
-users and service role. It returns no client records or credentials.
+users and service role. It also checks backend RPC grants, future function
+defaults, and real client-admin tag isolation. It returns no client records or credentials.
 
 `scripts/test-security-hardening.sql` requires a **disposable** PostgreSQL database
 named `security_hardening_test`; it creates synthetic roles/data and tests allowed
 and denied CRUD, tenant reassignment, contact ownership, reporting/worker access,
 and migration idempotence. Never run that fixture against production.
+Then run `scripts/test-privileged-functions.sql` in the same disposable database
+to test function overloads, browser tag isolation, backend access and defaults
+for newly created functions. Both fixtures require a fresh database for a new run.
+
+`node scripts/audit-security-access.mjs --end=2026-09-11T14:20:00Z --days=7`
+reviews aggregate REST/RPC access for seven daily windows. It emits no raw events
+or client content. Keep results out of this public repository. Check each window's
+coverage and truncation indicator. Missing role attribution is not evidence of
+anonymous access, and absence of recorded calls is not proof of no compromise.
 
 `node --test api/knowledge-security.test.js` tests both the ownership helper and
 the actual edit/delete handlers without starting the application or its schedulers.
