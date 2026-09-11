@@ -7286,6 +7286,7 @@ app.post('/api/contact', async (req, res) => {
 // ============================================================
 // Knowledge Base Endpoints
 // ============================================================
+const { scopeKnowledgeQuery, findOwnedKnowledge } = require('./knowledge-security')
 
 // List knowledge bases for a client
 app.get('/api/knowledge-bases', async (req, res) => {
@@ -7348,14 +7349,20 @@ app.put('/api/knowledge-bases/:id', async (req, res) => {
   try {
     const { id } = req.params
     const { name, description, content, is_active, clientId } = req.body
+    // Authorize the row before any write, including deactivating sibling rows.
+    const owned = await findOwnedKnowledge(supabase, id, req.adminUser)
+    if (clientId && clientId !== owned.client_id) {
+      return res.status(404).json({ error: 'Knowledge base not found' })
+    }
 
     // If setting this one as active, deactivate others first
-    if (is_active && clientId) {
-      await supabase
+    if (is_active) {
+      const { error } = await supabase
         .from('knowledge_bases')
         .update({ is_active: false })
-        .eq('client_id', clientId)
+        .eq('client_id', owned.client_id)
         .neq('id', id)
+      if (error) throw error
     }
 
     const updates = { updated_at: new Date().toISOString() }
@@ -7364,10 +7371,11 @@ app.put('/api/knowledge-bases/:id', async (req, res) => {
     if (content !== undefined) updates.content = content
     if (is_active !== undefined) updates.is_active = is_active
 
-    const { data, error } = await supabase
+    const { data, error } = await scopeKnowledgeQuery(supabase
       .from('knowledge_bases')
       .update(updates)
       .eq('id', id)
+      .eq('client_id', owned.client_id), req.adminUser)
       .select()
       .single()
 
@@ -7375,7 +7383,7 @@ app.put('/api/knowledge-bases/:id', async (req, res) => {
     res.json(data)
   } catch (error) {
     console.error('Error updating knowledge base:', error)
-    res.status(500).json({ error: error.message })
+    res.status(error.status || 500).json({ error: error.message })
   }
 })
 
@@ -7383,16 +7391,18 @@ app.put('/api/knowledge-bases/:id', async (req, res) => {
 app.delete('/api/knowledge-bases/:id', async (req, res) => {
   try {
     const { id } = req.params
-    const { error } = await supabase
+    const owned = await findOwnedKnowledge(supabase, id, req.adminUser)
+    const { error } = await scopeKnowledgeQuery(supabase
       .from('knowledge_bases')
       .delete()
       .eq('id', id)
+      .eq('client_id', owned.client_id), req.adminUser)
 
     if (error) throw error
     res.json({ success: true })
   } catch (error) {
     console.error('Error deleting knowledge base:', error)
-    res.status(500).json({ error: error.message })
+    res.status(error.status || 500).json({ error: error.message })
   }
 })
 
