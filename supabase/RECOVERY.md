@@ -189,5 +189,19 @@ receipt are private local operational state under
 `~/.local/state/sagerock-recovery/s3-destination-*.json`; do not commit these
 receipts or data. The synthetic keys and fixtures are disposable temporary test
 artifacts, never production recovery keys. No expiration/deletion rule or schedule
-is enabled. Production recovery-key custody is pending with Sage; then prepare
-the limited writer, consistent export and isolated full-data recovery test.
+is enabled. Sage subsequently approved the private 1Password vault for recovery-key
+custody. A real passphrase-protected RSA4096 encryption key was generated in a
+private Linux directory under `~/.local/state/sagerock-recovery/pending-key-*`.
+The exported key recovered synthetic ciphertext in a separate keyring; an empty
+passphrase was rejected. The protected key export, public key and recovery document
+remain local, outside Git. No production backup uses this key yet.
+
+The existing Windows Chrome session reached 1Password's Private vault and a new
+Document form titled `SageRock Backup Recovery Key — 2026-09-11` was prepared.
+The browser upload tool refused the private Linux directory because it is outside
+its configured file roots. No recovery document was uploaded or saved, and no key
+was relocated into a shared/public repository to bypass that restriction. The
+local `status.json` records this pending state. Resume by completing the authorized
+private-vault upload and verifying the downloaded recovery document and key before
+declaring custody complete. Reuse the pending key instead of generating another.
+Then prepare the limited writer, consistent export and isolated full-data restore.
