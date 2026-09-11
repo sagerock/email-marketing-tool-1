@@ -2,12 +2,13 @@
 
 ## Current scope
 
-The production recovery inventory is read-only. The encrypted round-trip rehearsal
-uses only synthetic data and a disposable key. A dedicated private S3 destination
-has now been provisioned and tested with synthetic encrypted files, as recorded
-below. **No independent production backup, production-data off-site transfer,
-scheduled backup job, production restore, or knowledge migration is installed by
-these tools.** No paid recovery add-on is enabled.
+One supervised production database export has been encrypted and uploaded to the
+dedicated private S3 destination. All five encrypted objects were downloaded by
+their exact S3 version IDs and matched their recorded SHA-256 hashes. This is a
+manual database backup; no recurring schedule, deletion rule, hosted production
+restore or local-knowledge migration has been enabled. No paid recovery add-on is
+enabled. The latest full-data restore result is recorded at the end of this file;
+earlier dated sections describe the preceding preparation, not the current state.
 
 Provider backups, an independent encrypted copy, and a tested restore solve
 different problems. A fresh provider backup is not a complete disaster-recovery plan.
@@ -82,7 +83,7 @@ Use the official [Supabase restore procedure](https://supabase.com/docs/guides/p
 for provider-managed schemas and target compatibility, not a blind restore of
 the synthetic fixture into a hosted project.
 
-## Gates before an independent production copy or cutover
+## Recovery gates and remaining coverage before cutover
 
 - Sage selects/approves a private off-machine destination and any cost. Do not use
   the existing public media bucket as a backup destination or create a new paid
@@ -111,7 +112,7 @@ Production restores, database SSL enforcement restarts, MFA enrollment and paid
 recovery options require their own scoped operational decisions. This document
 does not authorize sending mail, changing enrollment/payment records, or outages.
 
-## Continuation handoff — September 11, 2026
+## Earlier preparation handoff — September 11, 2026
 
 The resumed session verified fresh completed provider backups and an installed
 PostgreSQL 17 dump client. Five readiness tests and the isolated encrypted restore
@@ -206,7 +207,7 @@ private-vault upload and verifying the downloaded recovery document and key befo
 declaring custody complete. Reuse the pending key instead of generating another.
 Then prepare the limited writer, consistent export and isolated full-data restore.
 
-### Latest custody update — shared-vault save and download verified
+### Custody update — shared-vault save and download verified
 
 Sage changed the approved recovery-key destination from Private to his chosen
 shared 1Password vault for continuity and reported uploading the recovery document
@@ -229,3 +230,135 @@ to Private. The user-requested accessible local copy remains in
 and verification time. No production backup or automatic deletion of local key
 material has been performed. Next: limited backup-writer access, consistent export
 and isolated full-data recovery verification before scheduling.
+
+## Supervised production backup tools
+
+These tools require Python 3 with boto3 and psycopg2, GnuPG, and the PostgreSQL 17
+clients at `/usr/lib/postgresql/17/bin`. Private configuration, the verified key
+status and operational receipts live under `~/.local/state/sagerock-recovery`.
+The public-key hash and verified-vault status are checked before export or upload.
+The supervising operator still has administrative credentials on this machine;
+this workflow is not an unattended worker with independently isolated credentials.
+
+- `scripts/backup-database.py`: obtains a short-lived Supabase CLI administrative
+  login without resetting the main database password. Uses session-pooler port
+  5432 and `sslmode=verify-full` with the official Supabase CA bundle. A read-only
+  repeatable-read transaction exports the snapshot shared by pg_dump and the
+  count/sample evidence. Lock waits are bounded. Roles are a separate catalog
+  read and omit passwords. The Vault recovery root is separately encrypted.
+- `scripts/upload-recovery.py`: accepts only the four expected completed encrypted
+  export files, encrypts the manifest, then assumes the dedicated upload-only IAM
+  role. Each object gets a unique prefix, AES256 bucket encryption and a version
+  ID. The supervising identity separately downloads exact versions and verifies
+  the complete ciphertext hashes. Interrupted uploads require receipt review;
+  blindly rerunning is intentionally refused. No object versions are pruned.
+- `scripts/recovery_s3.py`: defines the dedicated role's trust and prefix-scoped
+  PutObject/multipart permissions. Provisioning requires an IAM administrator.
+  The existing CLI user lacks IAM administration, so the first role and its only
+  inline policy were created in the authorized AWS console session. The role was
+  added to the existing bucket principal allowlist. Temporary-role upload passed;
+  reads, deletion and writes outside its prefixes returned AccessDenied. Account
+  administrators retain the power to change policies; this is not immutable WORM
+  storage. No long-lived writer access key was created.
+- `scripts/verify-recovery.py`: checks the readback against its independent local
+  upload receipt, then runs `restore-recovery-isolated.py` in bubblewrap with all
+  namespaces unshared, no network, a fresh private writable scratch directory and
+  read-only input/key/tool mounts. Ordinary AWS/Supabase credentials and project
+  directories are not mounted. Requires the downloaded vault recovery kit only
+  for decryption. All ciphertexts pass full integrity verification before SQL
+  executes. PostgreSQL listens only on a private Unix socket; cron execution is
+  disabled. The server and GnuPG agent stop on completion or failure. Private
+  scratch holds plaintext restored data and must be reviewed and removed after
+  verification; it is not part of the encrypted off-site backup.
+
+Each command defaults to a plan. Use `--help` for required arguments and pass
+`--apply` only for the intended export, upload or isolated restore. Export/restore
+outputs must remain under the private recovery paths, never inside this checkout.
+Use a new export directory for each backup; preserve the upload intent and
+per-object receipts if a run stops. Do not upload plaintext logs or recovery keys.
+
+Offline failure checks:
+
+```bash
+python3 -B scripts/test-backup-pipeline.py
+```
+
+These verify synthetic encrypt/decrypt integrity, producer failure, encryption
+failure and altered-readback rejection. An export is not marked complete merely
+because GnuPG successfully encrypted a failed producer's partial output.
+
+### Isolated recovery toolchain
+
+The first full-data drill uses a local PostgreSQL 17.11 server distribution under
+`~/.local/share/sagerock-recovery/pg17`; system clients remain unchanged. Official
+APT packages were downloaded and extracted with `dpkg-deb -x`, without installing
+a system database service: `postgresql-17`, `postgresql-17-cron`,
+`postgresql-server-dev-17`, and `libsodium-dev`. Bubblewrap was similarly extracted
+under `~/.local/share/sagerock-recovery/bubblewrap`. The launcher currently assumes
+Ubuntu amd64, the existing system libraries, and Python 3.12 user packages. A new
+machine needs this toolchain assembled and checked before using the launcher.
+
+Supabase Vault 0.3.1 was built from the official
+[`supabase/vault` source](https://github.com/supabase/vault/tree/e68456a5c0a020294b2f4b00400abacd3f857cbb),
+pinned to commit `e68456a5c0a020294b2f4b00400abacd3f857cbb`. Its shared library,
+extension control file (version 0.3.1), and SQL files were placed in the extracted
+PG17 library/share directories. Compilation used `gcc -D_GNU_SOURCE -std=c99
+-shared -fPIC -O2`, the extracted PG17 server headers and libsodium headers,
+`-DEXTVERSION=\"0.3.1\"`, and `-l:libsodium.so.23`. Vault's root is read from the
+decrypted recovery artifact inside the sandbox and is never printed.
+
+The production source is PostgreSQL 17.6. The local pg_cron package is 1.6.8 and
+reports SQL extension version 1.6, versus the source's 1.6.4. This is a recorded
+compatibility difference, not an exact hosted-platform replica. Hosted Auth API,
+Storage bytes, edge functions and application workers need separate recovery tests.
+
+PG17 role membership restoration requires matching Supabase's bootstrap grantor,
+`supabase_admin`. The verifier initializes that bootstrap role and removes only
+its single duplicate `CREATE ROLE` statement from the decrypted in-memory roles
+script; it preserves role attributes and the original membership grants. See the
+[PostgreSQL bootstrap-grantor discussion](https://www.postgresql.org/message-id/afpHwTR1IJypF1md%40nathan).
+The archive itself is not modified. A NULL table ACL is normalized with
+`acldefault('r', owner)` when comparing permissions: pg_dump may omit an explicit
+owner-only grant that is equivalent to the default.
+
+## Latest result — first real S3 backup and isolated restore verified
+
+On September 11, 2026, the first consistent production database export completed.
+Five client-side encrypted artifacts totaling **663,807,551 bytes** were uploaded
+with the temporary upload-only role. All five exact S3 object versions were
+downloaded and matched their recorded SHA-256 hashes. The saved, downloaded vault
+recovery kit decrypted these real archives in the isolated restore environment.
+
+The completed PostgreSQL 17 restore and checks took **122 seconds**, excluding
+export, upload/download, toolchain preparation and troubleshooting. This is a
+same-desktop drill duration, not a promised disaster-recovery time. It verified:
+
+- All **176 table row counts** against the export's consistent snapshot, plus
+  content hashes from five sampled application tables.
+- RLS/force-RLS flags and effective table ACLs for all 176 tables.
+- Two temporary client identities, each limited to its own restored records
+  across ten tables, with cross-client tag RPC access returning no records.
+- Anonymous knowledge denial, the privileged SQL RPC boundary, and restored
+  default permissions for a newly created postgres-owned function.
+- Network/filesystem isolation and disabled database cron execution. Temporary
+  test identities and the function probe were rolled back. Servers were stopped,
+  and all four task-created plaintext restore scratch directories were removed.
+
+Private `manifest.json`, `upload-receipt.json`, per-object version receipts and
+`restore-verification.json` are retained in the dated private backup directory.
+The export manifest records its original pre-upload state; the later upload and
+restore receipts are authoritative for subsequent stages. Never edit encrypted
+archive manifests to imply a later step happened. An accessible status note lives
+beside Sage's local recovery-key copy outside Git.
+
+This covers the logical database, role definitions without passwords and the
+encrypted Vault recovery root. It does **not** cover Supabase/S3 media bytes,
+local temporal-knowledge stores/source evidence, the complete application secret
+inventory, deployment/runtime configuration, hosted Auth/API behavior or recovery
+on a separate machine. The pg_cron version difference above remains recorded.
+Production database contents, mail services and knowledge routing were not changed
+by the restore test. No migration or recurring backup schedule was enabled.
+
+Next: define recurring backup freshness, retention, cost limits and failure
+notification; scope consistent local-knowledge and media backups; then plan the
+knowledge migration with provenance, client ownership and rollback checks intact.
