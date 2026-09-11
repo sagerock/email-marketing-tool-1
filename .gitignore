@@ -31,6 +31,13 @@ dist-ssr
 # Data files
 *.csv
 
+# Recovery artifacts contain private cross-client data; never publish them.
+backups/
+recovery-reports/
+*.dump
+*.dump.gpg
+*.sql.gpg
+
 # Supabase temp files
 supabase/.temp/
 supabase/emails/

@@ -71,3 +71,6 @@ This is targeted remediation, not a full security certification. Other database
 functions, authentication settings, transport settings, access history, independent
 backups, and restore testing require separate review. No local knowledge corpus is
 uploaded by these migrations or scripts.
+
+See [backup coverage, the synthetic restore rehearsal, and remaining recovery
+gates](RECOVERY.md) before treating this database as ready for a knowledge migration.
