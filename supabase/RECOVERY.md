@@ -205,3 +205,27 @@ local `status.json` records this pending state. Resume by completing the authori
 private-vault upload and verifying the downloaded recovery document and key before
 declaring custody complete. Reuse the pending key instead of generating another.
 Then prepare the limited writer, consistent export and isolated full-data restore.
+
+### Latest custody update — shared-vault save and download verified
+
+Sage changed the approved recovery-key destination from Private to his chosen
+shared 1Password vault for continuity and reported uploading the recovery document
+under a more descriptive item title. This supersedes the earlier pending-upload
+destination. The exact vault/title and confirmation provenance are recorded in
+the private local key-status file and `D:\dev\private-recovery-keys\RECOVERY-LOCATION.txt`.
+No key or passphrase is stored in this source repository.
+
+The exact item title and vault location were then verified in the existing Windows
+Chrome session. A newly downloaded attachment exactly matched the original kit's
+SHA-256. Using only that downloaded document, a new isolated keyring imported the
+key, matched its fingerprint and recovered synthetic ciphertext with the supplied
+passphrase; an empty passphrase failed. This verifies the saved recovery document
+and key on this desktop, not a separate-machine or full production restore.
+
+Reuse this existing key and vault item. Do not create a duplicate or move it back
+to Private. The user-requested accessible local copy remains in
+`D:\dev\private-recovery-keys`, outside Git; a verification download remains in
+`D:\Downloads`. The private local status and location note record the exact paths
+and verification time. No production backup or automatic deletion of local key
+material has been performed. Next: limited backup-writer access, consistent export
+and isolated full-data recovery verification before scheduling.
