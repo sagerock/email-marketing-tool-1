@@ -2,13 +2,14 @@
 
 ## Current scope
 
-One supervised production database export has been encrypted and uploaded to the
-dedicated private S3 destination. All five encrypted objects were downloaded by
-their exact S3 version IDs and matched their recorded SHA-256 hashes. This is a
-manual database backup; no recurring schedule, deletion rule, hosted production
-restore or local-knowledge migration has been enabled. No paid recovery add-on is
-enabled. The latest full-data restore result is recorded at the end of this file;
-earlier dated sections describe the preceding preparation, not the current state.
+The first encrypted production database backup passed an isolated restore. A
+second real backup then passed through the scheduled service, including exact S3
+version downloads and SHA-256 checks. **Daily backups are now enabled at 4:30 AM
+America/New_York on the desktop**, monitored by the existing Cron Monitor. The
+first timer-triggered occurrence is still pending; the service was tested manually.
+No deletion rule, hosted production restore, local-knowledge migration or paid
+recovery add-on is enabled. The latest results are recorded at the end of this file;
+earlier dated sections describe preceding preparation, not the current state.
 
 Provider backups, an independent encrypted copy, and a tested restore solve
 different problems. A fresh provider backup is not a complete disaster-recovery plan.
@@ -357,8 +358,48 @@ local temporal-knowledge stores/source evidence, the complete application secret
 inventory, deployment/runtime configuration, hosted Auth/API behavior or recovery
 on a separate machine. The pg_cron version difference above remains recorded.
 Production database contents, mail services and knowledge routing were not changed
-by the restore test. No migration or recurring backup schedule was enabled.
+by the restore test. No migration or recurring schedule was enabled during that
+initial drill; the subsequent automation is recorded below.
 
-Next: define recurring backup freshness, retention, cost limits and failure
-notification; scope consistent local-knowledge and media backups; then plan the
-knowledge migration with provenance, client ownership and rollback checks intact.
+## Automatic backup enabled — September 11, 2026
+
+Sage requested integration with the existing cron project. The canonical registry
+is `/mnt/d/dev/sagerock/cron-monitor`, which monitors the desktop service through
+its existing authenticated heartbeat API. The reviewed systemd unit templates
+live in that project and are installed in `~/.config/systemd/user/`.
+
+- Timer: `sagerock-supabase-backup.timer`, daily 04:30 America/New_York,
+  persistent catch-up when WSL returns. First scheduled occurrence: September 12.
+- Runner: `scripts/run-scheduled-backup.py`, using private configuration at
+  `~/.config/sagerock-recovery-backup.json`. A separately staged public key and
+  verified key metadata are sufficient; the service namespace was tested to deny
+  access to all three existing private recovery-kit locations.
+- Success: five encrypted objects downloaded by exact S3 version and their full
+  SHA-256 hashes checked again against the local upload receipt. Private
+  `scheduled/latest-success.json` is written before the healthy heartbeat.
+  Failures update `latest-attempt.json` without replacing the last success.
+- Monitoring: existing failure/recovery routing and the 07:15 Eastern report;
+  no new recipients. A missed run is failed after 75 minutes. The registry's
+  `live_unproven` status remains until a timer-triggered run succeeds, distinct
+  from the currently healthy manually tested service outcome.
+- Limits: no overlapping runs; 60-minute service limit; 10 GiB minimum local
+  free space; 2 GiB maximum encrypted export before upload. Failed artifacts are
+  retained for review. All local archives/readbacks and S3 versions are retained;
+  no automatic cleanup/expiration is installed. At the measured size, 30 daily
+  backups add approximately 20 GB in S3 and 40 GB of local export/readback files.
+
+The first real service invocation completed on September 11 at 17:04 UTC in about
+5 minutes 27 seconds: 176 tables, five verified S3 artifacts, 663,808,800 encrypted
+bytes. The service exited successfully; the live Cron Monitor showed its matching
+healthy heartbeat. The timer was then enabled and its next 04:30 Eastern occurrence
+verified. Five scheduler failure/outcome tests and eleven Cron Monitor tests passed,
+including yesterday's successful heartbeat becoming overdue the following day.
+
+The service still holds administrative Supabase/AWS supervisor credentials on this
+desktop; uploads assume the restricted writer role. Daily runs do not require a
+private recovery key and do not perform a full restore. Periodic isolated restore
+drills, fully separate backup identities, retention selection, consistent local
+knowledge/media backups and the later knowledge migration remain separate work.
+No mail-service deployment was needed: recovery code is preserved on the email
+tool's review branch, while the Cron Monitor registry was deployed from its own
+canonical `master` branch.
