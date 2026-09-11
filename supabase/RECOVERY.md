@@ -3,9 +3,11 @@
 ## Current scope
 
 The production recovery inventory is read-only. The encrypted round-trip rehearsal
-uses only synthetic data and a disposable key. **No independent production backup,
-off-site transfer, scheduled backup job, production restore, or knowledge migration
-is installed by these tools.** No paid recovery add-on is enabled.
+uses only synthetic data and a disposable key. A dedicated private S3 destination
+has now been provisioned and tested with synthetic encrypted files, as recorded
+below. **No independent production backup, production-data off-site transfer,
+scheduled backup job, production restore, or knowledge migration is installed by
+these tools.** No paid recovery add-on is enabled.
 
 Provider backups, an independent encrypted copy, and a tested restore solve
 different problems. A fresh provider backup is not a complete disaster-recovery plan.
@@ -124,9 +126,9 @@ review branch to preserve it without restarting the email services.
 
 ### Proposed first independent backup
 
-Destination selection is pending with Sage. The recommended cloud option is a
-dedicated private S3 bucket in the existing AWS account, separate from public
-application media. Prepare the following configuration after that choice:
+Sage selected the existing AWS/S3 account on September 11. A dedicated private
+bucket has been provisioned there, separate from public application media. The
+remaining full backup setup follows this plan:
 
 - Block all public access, disable object ACLs, enforce TLS and enable versioning.
 - Encrypt archives before upload using a dedicated recovery public key; use bucket
@@ -146,12 +148,46 @@ application media. Prepare the following configuration after that choice:
   consistently and coordinate the corpus/ledger/queue capture; copying changing
   files independently is not proof of a consistent recovery point.
 
-Before provisioning, verify the actual AWS account, region, bucket name, permissions
-and expected storage/request/transfer charges. No bucket, key, credential, external
-copy or new paid resource was created in this preparation. Destination choice
-alone does not settle the recovery-key location or full-data restore procedure.
+Account, region and bucket permissions were checked during provisioning. Before
+production uploads, estimate storage/request/transfer charges from the actual
+archive size and agreed retention. Destination choice alone does not settle the
+recovery-key location or full-data restore procedure.
 
 References: [S3 security practices](https://docs.aws.amazon.com/AmazonS3/latest/userguide/security-best-practices.html)
 and [S3 pricing](https://aws.amazon.com/s3/pricing/). Actual archive size and retention,
 including media, must inform the estimate; database size is not an archive-size
 measurement.
+
+### S3 destination provisioned and tested — September 11
+
+`scripts/provision-recovery-bucket.py` uses boto3 and the current AWS credential
+chain. It defaults to a read-only plan, verifies the expected account, requires a
+dedicated bucket name, and refuses to adopt or change existing buckets. Its
+explicit `--apply` creates only a new bucket and its protective configuration.
+Failed configuration retains the empty bucket for explicit repair; it does not
+automatically delete resources or upload data.
+
+The new destination passed readback of all public-access blocks, disabled ACLs,
+versioning, AES256 server-side encryption, the exact bucket policy, nonpublic
+policy status and initial emptiness. The policy denies unencrypted transport and
+object/list access outside the provisioning IAM user and account root. This is an
+administrative allowlist, not a dedicated worker identity; no new IAM credential
+was created. A future limited backup identity must be explicitly admitted while
+preserving the separation from existing application media credentials. Account
+administrators with policy-management access can still change these controls.
+
+Anonymous bucket listing and reads of both actual synthetic objects returned 403.
+Two locally encrypted synthetic archives (6,215 bytes total) were uploaded under
+a unique `synthetic-drills/` prefix, returned real object version IDs, downloaded
+by version, matched SHA-256 hashes and passed complete decryption integrity checks.
+The same source archives passed the isolated database/permissions restore before
+upload. No separate full database restore was run from S3; matching ciphertext and
+decryption were the transport checks. No production records were uploaded.
+
+Destination identifiers, object versions, checksums and the dated verification
+receipt are private local operational state under
+`~/.local/state/sagerock-recovery/s3-destination-*.json`; do not commit these
+receipts or data. The synthetic keys and fixtures are disposable temporary test
+artifacts, never production recovery keys. No expiration/deletion rule or schedule
+is enabled. Production recovery-key custody is pending with Sage; then prepare
+the limited writer, consistent export and isolated full-data recovery test.
