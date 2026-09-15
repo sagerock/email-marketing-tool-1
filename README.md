@@ -28,6 +28,7 @@ A modern, full-featured email marketing platform built with React, TypeScript, S
   - Open rates, click rates, bounce tracking
   - SendGrid webhook integration for events
   - Detailed engagement metrics
+  - [Record forwarded AI follow-up replies and report response rates](docs/ai-reply-recording.md)
 
 - **Multi-Client Support**
   - Manage multiple clients/workspaces
