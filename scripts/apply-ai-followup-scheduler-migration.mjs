@@ -26,16 +26,21 @@ async function query(sql) {
 }
 
 const installed = await query(`
-  SELECT EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-    WHERE n.nspname='public' AND p.proname='claim_due_ai_followups'
-  ) AS installed
+  SELECT
+    to_regprocedure('public.claim_due_ai_followups(integer,integer)') IS NOT NULL AS claims_installed,
+    coalesce(
+      position('interval ''72 hours''' in pg_get_functiondef(to_regprocedure('public.claim_due_ai_followups(integer,integer)'))) > 0,
+      false
+    ) AS spacing_installed
 `)
 
-if (installed[0].installed) {
-  console.log('Migration 098 is already installed.')
+if (installed[0].claims_installed && installed[0].spacing_installed) {
+  console.log('AI follow-up scheduler migrations 098-099 are already installed.')
 } else if (!process.argv.includes('--apply')) {
-  console.log('Migration 098 is pending. Pass --apply to install it.')
+  const pending = []
+  if (!installed[0].claims_installed) pending.push('098')
+  if (!installed[0].spacing_installed) pending.push('099')
+  console.log(`AI follow-up scheduler migration${pending.length === 1 ? '' : 's'} ${pending.join(', ')} pending. Pass --apply to install.`)
 } else {
   const before = await query(`
     SELECT
@@ -47,11 +52,21 @@ if (installed[0].installed) {
     throw new Error('An AI follow-up draft is actively sending; retry after it finishes')
   }
 
-  const migration = fs.readFileSync(
-    new URL('../supabase/migrations/098_ai_followup_scheduler_claims.sql', import.meta.url),
-    'utf8',
-  )
-  await query(migration)
+  const applied = []
+  if (!installed[0].claims_installed) {
+    await query(fs.readFileSync(
+      new URL('../supabase/migrations/098_ai_followup_scheduler_claims.sql', import.meta.url),
+      'utf8',
+    ))
+    applied.push('098_ai_followup_scheduler_claims')
+  }
+  if (!installed[0].spacing_installed) {
+    await query(fs.readFileSync(
+      new URL('../supabase/migrations/099_ai_followup_contact_spacing.sql', import.meta.url),
+      'utf8',
+    ))
+    applied.push('099_ai_followup_contact_spacing')
+  }
 
   const after = await query(`
     SELECT
@@ -61,13 +76,14 @@ if (installed[0].installed) {
         WHERE table_schema='public' AND table_name='ai_followup_drafts' AND column_name='generation_key'
       ) AS generation_key_installed,
       to_regclass('public.idx_ai_followup_drafts_generation_key') IS NOT NULL AS unique_index_installed,
+      position('interval ''72 hours''' in pg_get_functiondef(to_regprocedure('public.claim_due_ai_followups(integer,integer)'))) > 0 AS spacing_installed,
       (SELECT count(*)::int FROM public.ai_followup_drafts) AS drafts
   `)
-  if (!after[0].function_installed || !after[0].generation_key_installed || !after[0].unique_index_installed) {
+  if (!after[0].function_installed || !after[0].generation_key_installed || !after[0].unique_index_installed || !after[0].spacing_installed) {
     throw new Error('Migration returned successfully but required scheduler objects are missing')
   }
   if (after[0].drafts !== before[0].drafts) {
     throw new Error('Migration installed, but the AI draft row count changed unexpectedly')
   }
-  console.log(JSON.stringify({ migration: '098_ai_followup_scheduler_claims', verified: after[0] }, null, 2))
+  console.log(JSON.stringify({ applied, verified: after[0] }, null, 2))
 }
