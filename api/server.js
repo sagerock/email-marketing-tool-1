@@ -36,6 +36,9 @@ const { runAllSearchConsoleSyncs } = require('./search-console-sync')
 const RSSParser = require('rss-parser')
 const {
   CampaignClaimConflictError,
+  aiFollowupBatchSize,
+  aiFollowupGenerationKey,
+  aiFollowupSourceSubmission,
   canonicalEmail,
   isCampaignClaimConflictError,
   isSchedulerEnabled,
@@ -43,6 +46,8 @@ const {
 } = require('./send-utils')
 
 const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY
+const AI_FOLLOWUP_LEASE_SECONDS = 15 * 60
+const AI_FOLLOWUP_LEASE_MS = AI_FOLLOWUP_LEASE_SECONDS * 1000
 
 function decryptClient(client) {
   if (!client) return client
@@ -2844,8 +2849,11 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
       return res.json({ success: true, action: 'already_enrolled', contact_id: contactId })
     }
 
-    // Enroll contact with immediate follow-up
-    const { error: enrollError } = await supabase
+    // Lease the enrollment while the immediate generation request runs. Without
+    // this, the minute scheduler can claim the same brand-new enrollment and
+    // generate the same step concurrently with this webhook.
+    const immediateLeaseUntil = new Date(Date.now() + AI_FOLLOWUP_LEASE_MS).toISOString()
+    const { data: enrollment, error: enrollError } = await supabase
       .from('ai_followup_contacts')
       .upsert({
         config_id: config.id,
@@ -2853,8 +2861,10 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
         client_id: clientId,
         status: 'in_progress',
         current_step: 0,
-        next_followup_at: new Date().toISOString(),
+        next_followup_at: immediateLeaseUntil,
       }, { onConflict: 'config_id,contact_id' })
+      .select('id')
+      .single()
 
     if (enrollError) throw enrollError
     console.log(`🤖 Gravity Forms webhook: enrolled ${normalizedEmail} in AI agent "${config.name}"`)
@@ -2870,11 +2880,19 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
       if (!generateRes.ok) {
         const err = await generateRes.json()
         console.error(`⚠️ Immediate AI draft generation failed for ${normalizedEmail}:`, err.error)
+        await supabase.from('ai_followup_contacts')
+          .update({ next_followup_at: new Date().toISOString() })
+          .eq('id', enrollment.id)
+          .eq('next_followup_at', immediateLeaseUntil)
       } else {
         console.log(`✅ AI draft generated immediately for ${normalizedEmail} (agent: ${config.name})`)
       }
     } catch (genError) {
       console.error(`⚠️ Immediate AI draft generation error:`, genError.message)
+      await supabase.from('ai_followup_contacts')
+        .update({ next_followup_at: new Date().toISOString() })
+        .eq('id', enrollment.id)
+        .eq('next_followup_at', immediateLeaseUntil)
       // Don't fail the webhook - the cron will pick it up
     }
 
@@ -3133,7 +3151,8 @@ app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, 
       return res.json({ success: true, action: 'already_enrolled_in_agent', contact_id: contactId })
     }
 
-    const { error: enrollError } = await supabase
+    const immediateLeaseUntil = new Date(Date.now() + AI_FOLLOWUP_LEASE_MS).toISOString()
+    const { data: enrollment, error: enrollError } = await supabase
       .from('ai_followup_contacts')
       .upsert({
         config_id: config.id,
@@ -3141,8 +3160,10 @@ app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, 
         client_id: config.client_id,
         status: 'in_progress',
         current_step: 0,
-        next_followup_at: new Date().toISOString(),
+        next_followup_at: immediateLeaseUntil,
       }, { onConflict: 'config_id,contact_id' })
+      .select('id')
+      .single()
     if (enrollError) throw enrollError
     console.log(`🤖 Thinkific lead ${email} enrolled in agent "${config.name}"`)
 
@@ -3156,9 +3177,17 @@ app.post('/api/webhook/thinkific-lead/:webhookKey', webhookLimiter, async (req, 
       })
       if (!generateRes.ok) {
         console.error(`⚠️ Thinkific lead draft generation failed for ${email}:`, (await generateRes.json()).error)
+        await supabase.from('ai_followup_contacts')
+          .update({ next_followup_at: new Date().toISOString() })
+          .eq('id', enrollment.id)
+          .eq('next_followup_at', immediateLeaseUntil)
       }
     } catch (genError) {
       console.error('⚠️ Thinkific lead draft generation error:', genError.message)
+      await supabase.from('ai_followup_contacts')
+        .update({ next_followup_at: new Date().toISOString() })
+        .eq('id', enrollment.id)
+        .eq('next_followup_at', immediateLeaseUntil)
     }
 
     // Heads-up to the humans watching the queue
@@ -7534,7 +7563,7 @@ app.delete('/api/ai-followup/configs/:id', async (req, res) => {
 // Generate an AI draft for a specific contact
 app.post('/api/ai-followup/generate', async (req, res) => {
   try {
-    const { contactId, configId, forcePending } = req.body
+    const { contactId, configId, forcePending, schedulerRun } = req.body
     if (!contactId || !configId) {
       return res.status(400).json({ error: 'contactId and configId are required' })
     }
@@ -7550,6 +7579,9 @@ app.post('/api/ai-followup/generate', async (req, res) => {
       .eq('id', configId)
       .single()
     if (configError) throw configError
+    if (schedulerRun && !config.enabled) {
+      return res.status(409).json({ error: 'AI agent was disabled before generation began' })
+    }
 
     // Fetch contact
     const { data: contact, error: contactError } = await supabase
@@ -7572,7 +7604,7 @@ app.post('/api/ai-followup/generate', async (req, res) => {
     // Fetch previous drafts for context
     const { data: previousDrafts } = await supabase
       .from('ai_followup_drafts')
-      .select('step_number, subject, plain_text, status')
+      .select('step_number, subject, plain_text, status, ai_prompt_context')
       .eq('config_id', configId)
       .eq('contact_id', contactId)
       .in('status', ['sent', 'approved'])
@@ -7591,16 +7623,20 @@ app.post('/api/ai-followup/generate', async (req, res) => {
       `Follow-up #${stepNumber} of ${config.max_followups}`,
     ].filter(Boolean).join('\n')
 
+    // Keep every step grounded in the submission that started this particular
+    // agent series. A contact may later download another resource handled by a
+    // different agent; that newer form must not change this sequence's topic.
+    const sourceSubmission = aiFollowupSourceSubmission(previousDrafts, contact.form_submissions)
+
     // Include form submission context if available
     let formContext = ''
-    if (contact.form_submissions && contact.form_submissions.length > 0) {
-      const latest = contact.form_submissions[contact.form_submissions.length - 1]
-      const fieldEntries = Object.entries(latest.fields || {})
+    if (sourceSubmission) {
+      const fieldEntries = Object.entries(sourceSubmission.fields || {})
         .filter(([k]) => !['email'].includes(k.toLowerCase()))
         .map(([k, v]) => `  ${k}: ${v}`)
         .join('\n')
       if (fieldEntries) {
-        formContext = `\n\nForm submission (${latest.form_name || 'Web Form'}):\n${fieldEntries}`
+        formContext = `\n\nForm submission (${sourceSubmission.form_name || 'Web Form'}):\n${fieldEntries}`
       }
     }
 
@@ -7610,12 +7646,9 @@ app.post('/api/ai-followup/generate', async (req, res) => {
     // This is the ONLY URL such agents are allowed to reference (no invented links).
     let resourceContext = ''
     if (config.include_resource_link) {
-      const latestSub = contact.form_submissions?.length > 0
-        ? contact.form_submissions[contact.form_submissions.length - 1]
-        : null
       const industryName = contact.industry
-        || latestSub?.fields?.Industry
-        || latestSub?.fields?.industry
+        || sourceSubmission?.fields?.Industry
+        || sourceSubmission?.fields?.industry
         || null
       let approvedResourceUrl = 'https://alconox.com/industries/'
       if (industryName) {
@@ -7664,7 +7697,11 @@ ${contactContext}${formContext}${resourceContext}${previousContext}`
     // Convert plain text body to simple HTML
     const htmlContent = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #333; line-height: 1.6;">${parsed.body.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>').replace(/^/, '<p>').replace(/$/, '</p>')}</div>`
 
-    // Insert the draft
+    const generationKey = aiFollowupGenerationKey(followupContact?.id, stepNumber)
+
+    // Insert the draft. New deployments assign one stable key per enrollment
+    // step, so a concurrent webhook/scheduler request cannot create a second
+    // live copy of the same email.
     const { data: draft, error: draftError } = await supabase
       .from('ai_followup_drafts')
       .insert({
@@ -7677,21 +7714,56 @@ ${contactContext}${formContext}${resourceContext}${previousContext}`
         html_content: htmlContent,
         plain_text: parsed.body,
         ai_model: 'claude-sonnet-4-6',
-        ai_prompt_context: { contact: { first_name: contact.first_name, last_name: contact.last_name, company: contact.company, industry: contact.industry, source_code: contact.source_code }, step: stepNumber, previous_drafts_count: previousDrafts?.length || 0, form_submission: contact.form_submissions?.length > 0 ? contact.form_submissions[contact.form_submissions.length - 1] : null },
+        ai_prompt_context: { contact: { first_name: contact.first_name, last_name: contact.last_name, company: contact.company, industry: contact.industry, source_code: contact.source_code }, step: stepNumber, previous_drafts_count: previousDrafts?.length || 0, form_submission: sourceSubmission },
+        generation_key: generationKey,
         status: 'pending',
       })
       .select()
       .single()
 
+    if (draftError?.code === '23505' && generationKey) {
+      const { data: existingDraft } = await supabase
+        .from('ai_followup_drafts')
+        .select('*')
+        .eq('generation_key', generationKey)
+        .in('status', ['pending', 'approved', 'sending', 'sent'])
+        .maybeSingle()
+      if (existingDraft) {
+        console.log(`ℹ️ Suppressed duplicate AI generation for ${contact.email} (step ${stepNumber})`)
+        return res.json({ ...existingDraft, duplicate_suppressed: true })
+      }
+    }
     if (draftError) throw draftError
+
+    // A pending draft is now the source of truth for this step. Remove the due
+    // timestamp so it cannot occupy the front of every future scheduler batch.
+    // Successful auto-send below replaces it with the next step's timestamp.
+    if (followupContact) {
+      const { error: holdError } = await supabase
+        .from('ai_followup_contacts')
+        .update({ next_followup_at: null })
+        .eq('id', followupContact.id)
+      if (holdError) throw holdError
+    }
 
     console.log(`🤖 AI draft generated for ${contact.email} (step ${stepNumber}) - config: ${config.name}`)
 
     // Auto-send: skip the approval queue when the agent is configured for it.
     // If the send fails, the draft stays 'pending' and falls back to the manual queue.
-    if (config.auto_send && !forcePending) {
+    let autoSendEnabled = false
+    if (!forcePending) {
+      const { data: liveConfig, error: liveConfigError } = await supabase
+        .from('ai_followup_config')
+        .select('enabled, auto_send')
+        .eq('id', configId)
+        .single()
+      if (liveConfigError) throw liveConfigError
+      autoSendEnabled = liveConfig.enabled && liveConfig.auto_send
+    }
+
+    if (autoSendEnabled) {
       try {
-        const { messageId } = await sendAiFollowupDraft(draft.id, null)
+        const { messageId } = await sendAiFollowupDraft(draft.id, null, { requireAutoEnabled: true })
         console.log(`🚀 Auto-sent AI draft to ${contact.email} (${config.name} step ${stepNumber})`)
         return res.json({ ...draft, status: 'sent', sendgrid_message_id: messageId, auto_sent: true })
       } catch (sendError) {
@@ -7773,7 +7845,7 @@ app.get('/api/ai-followup/drafts', async (req, res) => {
  * Validation problems throw with .statusCode and .validation = true so
  * callers can tell "bad state, don't mark failed" apart from real send errors.
  */
-async function sendAiFollowupDraft(draftId, reviewedBy = null) {
+async function sendAiFollowupDraft(draftId, reviewedBy = null, { requireAutoEnabled = false } = {}) {
   const fail = (statusCode, message) => {
     const err = new Error(message)
     err.statusCode = statusCode
@@ -7781,21 +7853,47 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null) {
     throw err
   }
 
-  // Fetch the draft with config and contact info
+  // Atomically claim the draft before any network call. This closes the second
+  // duplication window: two approve requests (or two auto-send workers) can no
+  // longer submit the same stored draft to SendGrid.
+  const { data: claimedDraft, error: claimError } = await supabase
+    .from('ai_followup_drafts')
+    .update({ status: 'sending', error_message: null })
+    .eq('id', draftId)
+    .eq('status', 'pending')
+    .select('id')
+    .maybeSingle()
+
+  if (claimError) throw claimError
+  if (!claimedDraft) {
+    const { data: current } = await supabase
+      .from('ai_followup_drafts')
+      .select('status')
+      .eq('id', draftId)
+      .maybeSingle()
+    fail(current ? 409 : 404, current ? `Draft is already ${current.status}` : 'Draft not found')
+  }
+
+  let mailAccepted = false
+  try {
+  // Fetch the claimed draft with config and contact info
   const { data: draft, error: draftError } = await supabase
     .from('ai_followup_drafts')
     .select(`
       *,
       contact:contacts(id, email, first_name, last_name, salesforce_id, unsubscribed),
-      config:ai_followup_config(id, name, from_email, from_name, reply_to, bcc_email, log_to_salesforce, max_followups, followup_delays, client_id)
+      config:ai_followup_config(id, name, enabled, auto_send, from_email, from_name, reply_to, bcc_email, log_to_salesforce, max_followups, followup_delays, client_id)
     `)
     .eq('id', draftId)
     .single()
 
   if (draftError) throw draftError
   if (!draft) fail(404, 'Draft not found')
-  if (draft.status !== 'pending') fail(400, `Draft is already ${draft.status}`)
+  if (draft.status !== 'sending') fail(409, `Draft is already ${draft.status}`)
   if (draft.contact?.unsubscribed) fail(400, 'Contact has unsubscribed')
+  if (requireAutoEnabled && (!draft.config?.enabled || !draft.config?.auto_send)) {
+    fail(409, 'Automatic sending was disabled before this draft could be sent')
+  }
 
   // Fetch client SendGrid API key
   const { data: clientRaw } = await supabase
@@ -7842,11 +7940,12 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null) {
   }
 
   const [sgResponse] = await sgMail.send(msg)
+  mailAccepted = true
   const messageId = sgResponse?.headers?.['x-message-id'] || null
 
   // Update draft status to sent
   const now = new Date().toISOString()
-  await supabase
+  const { error: sentUpdateError } = await supabase
     .from('ai_followup_drafts')
     .update({
       status: 'sent',
@@ -7856,6 +7955,8 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null) {
       sendgrid_message_id: messageId,
     })
     .eq('id', draftId)
+    .eq('status', 'sending')
+  if (sentUpdateError) throw sentUpdateError
 
   // Update followup contact record
   if (draft.followup_contact_id) {
@@ -7880,10 +7981,19 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null) {
       contactUpdate.next_followup_at = nextDate.toISOString()
     }
 
-    await supabase
+    const { error: contactUpdateError } = await supabase
       .from('ai_followup_contacts')
       .update(contactUpdate)
       .eq('id', draft.followup_contact_id)
+    if (contactUpdateError) {
+      // The mail is already accepted and the draft is durably marked sent.
+      // Never retry it merely because advancing the series failed.
+      console.error(`⚠️ AI follow-up sent but pipeline advance failed for ${draft.followup_contact_id}:`, contactUpdateError.message)
+      await supabase
+        .from('ai_followup_drafts')
+        .update({ error_message: `Pipeline advance failed: ${contactUpdateError.message}` })
+        .eq('id', draftId)
+    }
   }
 
   // Salesforce Task write-back (non-blocking)
@@ -7906,6 +8016,20 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null) {
   }
 
   return { draft, messageId }
+  } catch (error) {
+    // Before SendGrid accepts the message it is safe to return the draft to the
+    // review queue. Once accepted, fail closed so an automatic retry cannot
+    // create a duplicate if a later database update was the part that failed.
+    await supabase
+      .from('ai_followup_drafts')
+      .update({
+        status: mailAccepted ? 'failed' : 'pending',
+        error_message: error.message,
+      })
+      .eq('id', draftId)
+      .eq('status', 'sending')
+    throw error
+  }
 }
 
 app.post('/api/ai-followup/drafts/:id/approve', async (req, res) => {
@@ -8560,6 +8684,8 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'))
 })
 
+let schedulerTickRunning = false
+
 app.listen(PORT, () => {
   console.log(`API server running on port ${PORT}`)
 
@@ -8578,6 +8704,11 @@ app.listen(PORT, () => {
 
   // Start cron job to process scheduled campaigns and sequence emails every minute
   cron.schedule('* * * * *', async () => {
+    if (schedulerTickRunning) {
+      console.log('ℹ️ Skipping scheduler tick because the previous tick is still running')
+      return
+    }
+    schedulerTickRunning = true
     try {
       // ============ PART 0: Process scheduled campaigns ============
       const now = new Date().toISOString()
@@ -9141,47 +9272,43 @@ app.listen(PORT, () => {
       } // end claimedIds check
 
       // ============ PART 3: AI Follow-up draft generation ============
-      // Find contacts that are due for their next follow-up and don't have a pending draft
+      // Claim a small batch atomically. The database excludes contacts whose
+      // next step already has a live draft before applying LIMIT, avoiding both
+      // queue starvation and duplicate work across cron ticks/replicas.
       try {
-        const { data: dueContacts } = await supabase
-          .from('ai_followup_contacts')
-          .select(`
-            *,
-            config:ai_followup_config(*)
-          `)
-          .eq('status', 'in_progress')
-          .lte('next_followup_at', now)
-          .limit(10) // Process up to 10 per minute to avoid rate limits
+        const batchSize = aiFollowupBatchSize(process.env.AI_FOLLOWUP_BATCH_SIZE)
+        const { data: dueContacts, error: claimError } = await supabase
+          .rpc('claim_due_ai_followups', {
+            p_limit: batchSize,
+            p_lease_seconds: AI_FOLLOWUP_LEASE_SECONDS,
+          })
+
+        if (claimError) throw claimError
 
         if (dueContacts && dueContacts.length > 0) {
           for (const fc of dueContacts) {
-            // Check if there's already a pending draft for this contact+config
-            const { data: existingDraft } = await supabase
-              .from('ai_followup_drafts')
-              .select('id')
-              .eq('followup_contact_id', fc.id)
-              .eq('status', 'pending')
-              .limit(1)
-
-            if (existingDraft && existingDraft.length > 0) continue
-
-            // Check if config is still enabled
-            if (!fc.config?.enabled) continue
-
             // Generate a draft via internal call
             try {
               const generateUrl = `http://localhost:${PORT}/api/ai-followup/generate`
               const generateRes = await fetch(generateUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contactId: fc.contact_id, configId: fc.config_id }),
+                body: JSON.stringify({ contactId: fc.contact_id, configId: fc.config_id, schedulerRun: true }),
               })
               if (!generateRes.ok) {
                 const err = await generateRes.json()
                 console.error(`⚠️ AI draft generation failed for contact ${fc.contact_id}:`, err.error)
+                await supabase.from('ai_followup_contacts')
+                  .update({ next_followup_at: fc.due_at })
+                  .eq('id', fc.id)
+                  .eq('next_followup_at', fc.lease_until)
               }
             } catch (genError) {
               console.error(`⚠️ AI draft generation error:`, genError.message)
+              await supabase.from('ai_followup_contacts')
+                .update({ next_followup_at: fc.due_at })
+                .eq('id', fc.id)
+                .eq('next_followup_at', fc.lease_until)
             }
           }
         }
@@ -9191,6 +9318,8 @@ app.listen(PORT, () => {
 
     } catch (error) {
       console.error('❌ Cron job error:', error.message)
+    } finally {
+      schedulerTickRunning = false
     }
   })
 

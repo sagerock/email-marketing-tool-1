@@ -41,8 +41,31 @@ function isSchedulerEnabled(env = process.env) {
   return env.RUN_SCHEDULER === 'true'
 }
 
+function aiFollowupBatchSize(value, fallback = 2) {
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed)) return fallback
+  return Math.max(1, Math.min(parsed, 25))
+}
+
+function aiFollowupGenerationKey(followupContactId, stepNumber) {
+  if (!followupContactId || !Number.isInteger(stepNumber) || stepNumber < 1) return null
+  return `${followupContactId}:${stepNumber}`
+}
+
+function aiFollowupSourceSubmission(previousDrafts = [], contactSubmissions = []) {
+  for (const draft of Array.isArray(previousDrafts) ? previousDrafts : []) {
+    const submission = draft?.ai_prompt_context?.form_submission
+    if (submission) return submission
+  }
+  const submissions = Array.isArray(contactSubmissions) ? contactSubmissions : []
+  return submissions.length > 0 ? submissions[submissions.length - 1] : null
+}
+
 module.exports = {
   CampaignClaimConflictError,
+  aiFollowupBatchSize,
+  aiFollowupGenerationKey,
+  aiFollowupSourceSubmission,
   canonicalEmail,
   isCampaignClaimConflictError,
   isSchedulerEnabled,

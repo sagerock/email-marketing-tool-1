@@ -303,7 +303,7 @@ export interface IndustryLink {
 
 // AI Follow-up Agent Types
 export type AIFollowupContactStatus = 'pending' | 'in_progress' | 'completed' | 'opted_out'
-export type AIFollowupDraftStatus = 'pending' | 'approved' | 'rejected' | 'sent' | 'failed'
+export type AIFollowupDraftStatus = 'pending' | 'approved' | 'sending' | 'rejected' | 'sent' | 'failed'
 
 export interface AIFollowupConfig {
   id: string
@@ -356,6 +356,7 @@ export interface AIFollowupDraft {
   plain_text?: string
   ai_model?: string
   ai_prompt_context?: Record<string, any>
+  generation_key?: string
   status: AIFollowupDraftStatus
   reviewed_by?: string
   reviewed_at?: string

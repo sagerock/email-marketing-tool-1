@@ -4,6 +4,9 @@ const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const {
   CampaignClaimConflictError,
+  aiFollowupBatchSize,
+  aiFollowupGenerationKey,
+  aiFollowupSourceSubmission,
   canonicalEmail,
   isCampaignClaimConflictError,
   isSchedulerEnabled,
@@ -53,4 +56,29 @@ test('scheduler only starts when explicitly enabled', () => {
   assert.equal(isSchedulerEnabled({ RUN_SCHEDULER: 'true' }), true)
   assert.equal(isSchedulerEnabled({ RUN_SCHEDULER: 'false' }), false)
   assert.equal(isSchedulerEnabled({}), false)
+})
+
+test('AI follow-up scheduler uses a bounded catch-up rate', () => {
+  assert.equal(aiFollowupBatchSize(undefined), 2)
+  assert.equal(aiFollowupBatchSize('5'), 5)
+  assert.equal(aiFollowupBatchSize('0'), 1)
+  assert.equal(aiFollowupBatchSize('100'), 25)
+  assert.equal(aiFollowupBatchSize('not-a-number'), 2)
+})
+
+test('AI follow-up generation keys are stable per enrollment step', () => {
+  assert.equal(aiFollowupGenerationKey('enrollment-1', 2), 'enrollment-1:2')
+  assert.equal(aiFollowupGenerationKey('enrollment-1', 3), 'enrollment-1:3')
+  assert.equal(aiFollowupGenerationKey(null, 1), null)
+  assert.equal(aiFollowupGenerationKey('enrollment-1', 0), null)
+})
+
+test('AI follow-up steps retain the form submission that started their series', () => {
+  const whitePaper = { form_name: 'White papers', fields: { topic: 'validation' } }
+  const handbook = { form_name: 'Handbook', fields: { topic: 'aqueous cleaning' } }
+  const previousDrafts = [{ ai_prompt_context: { form_submission: whitePaper } }]
+
+  assert.equal(aiFollowupSourceSubmission(previousDrafts, [whitePaper, handbook]), whitePaper)
+  assert.equal(aiFollowupSourceSubmission([], [whitePaper, handbook]), handbook)
+  assert.equal(aiFollowupSourceSubmission([], []), null)
 })
