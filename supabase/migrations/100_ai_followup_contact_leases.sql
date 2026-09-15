@@ -1,6 +1,7 @@
--- A contact may be enrolled in more than one resource-specific agent. Keep
--- those valid series, but never select two AI emails for the same person in one
--- batch or within the normal three-day follow-up cadence.
+-- Extend scheduler leases across every active sequence for a contact. This
+-- closes the short window between claiming one enrollment and recording its
+-- sent draft, when another scheduler process could otherwise claim a second
+-- resource-specific enrollment for the same person.
 BEGIN;
 SET LOCAL lock_timeout = '3s';
 SET LOCAL statement_timeout = '30s';

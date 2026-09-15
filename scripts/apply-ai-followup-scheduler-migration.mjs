@@ -31,15 +31,20 @@ const installed = await query(`
     coalesce(
       position('interval ''72 hours''' in pg_get_functiondef(to_regprocedure('public.claim_due_ai_followups(integer,integer)'))) > 0,
       false
-    ) AS spacing_installed
+    ) AS spacing_installed,
+    coalesce(
+      position('FROM public.ai_followup_contacts AS leased' in pg_get_functiondef(to_regprocedure('public.claim_due_ai_followups(integer,integer)'))) > 0,
+      false
+    ) AS contact_lease_installed
 `)
 
-if (installed[0].claims_installed && installed[0].spacing_installed) {
-  console.log('AI follow-up scheduler migrations 098-099 are already installed.')
+if (installed[0].claims_installed && installed[0].spacing_installed && installed[0].contact_lease_installed) {
+  console.log('AI follow-up scheduler migrations 098-100 are already installed.')
 } else if (!process.argv.includes('--apply')) {
   const pending = []
   if (!installed[0].claims_installed) pending.push('098')
   if (!installed[0].spacing_installed) pending.push('099')
+  if (!installed[0].contact_lease_installed) pending.push('100')
   console.log(`AI follow-up scheduler migration${pending.length === 1 ? '' : 's'} ${pending.join(', ')} pending. Pass --apply to install.`)
 } else {
   const before = await query(`
@@ -67,6 +72,13 @@ if (installed[0].claims_installed && installed[0].spacing_installed) {
     ))
     applied.push('099_ai_followup_contact_spacing')
   }
+  if (!installed[0].contact_lease_installed) {
+    await query(fs.readFileSync(
+      new URL('../supabase/migrations/100_ai_followup_contact_leases.sql', import.meta.url),
+      'utf8',
+    ))
+    applied.push('100_ai_followup_contact_leases')
+  }
 
   const after = await query(`
     SELECT
@@ -77,9 +89,10 @@ if (installed[0].claims_installed && installed[0].spacing_installed) {
       ) AS generation_key_installed,
       to_regclass('public.idx_ai_followup_drafts_generation_key') IS NOT NULL AS unique_index_installed,
       position('interval ''72 hours''' in pg_get_functiondef(to_regprocedure('public.claim_due_ai_followups(integer,integer)'))) > 0 AS spacing_installed,
+      position('FROM public.ai_followup_contacts AS leased' in pg_get_functiondef(to_regprocedure('public.claim_due_ai_followups(integer,integer)'))) > 0 AS contact_lease_installed,
       (SELECT count(*)::int FROM public.ai_followup_drafts) AS drafts
   `)
-  if (!after[0].function_installed || !after[0].generation_key_installed || !after[0].unique_index_installed || !after[0].spacing_installed) {
+  if (!after[0].function_installed || !after[0].generation_key_installed || !after[0].unique_index_installed || !after[0].spacing_installed || !after[0].contact_lease_installed) {
     throw new Error('Migration returned successfully but required scheduler objects are missing')
   }
   if (after[0].drafts !== before[0].drafts) {
