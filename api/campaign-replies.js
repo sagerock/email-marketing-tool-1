@@ -47,6 +47,29 @@ const REPLY_DOMAINS = {
 }
 
 // "Name <a@b>, c@d" → [{ email, name }]
+// One address on a forwarding subdomain can be log-only. Alconox's subdomain forwards
+// every reply to cleaning@, so without this a BCC from staff would be forwarded there as
+// if a customer had written. Sage 2026-09-17: he answers Alconox from Outlook
+// (slewis@alconox.com), which Gmail and the ticket system never see; BCCing this address
+// files the message on the contact AND relays a copy to his Gmail, threaded, so the
+// follow-ups view can tell the thread was answered.
+const REPLY_ADDRESSES = {
+  'hello@email.alconox.com': {
+    clientId: 'ea7f1422-2d20-4299-85a7-c1201e953409',
+    logOnly: true,
+    internalDomains: ['alconox.com', 'email.alconox.com', 'sagerock.com', 'sagelewis.com'],
+    createContacts: false,          // Alconox's list is Salesforce-fed; never invent contacts
+    allowInternalOnly: true,        // staff-to-staff threads still get relayed
+    relayTo: 'sage@sagerock.com',
+    relayFrom: 'cleaning@email.alconox.com',
+  },
+}
+
+function routeFor(toAddr) {
+  const address = String(toAddr || '').toLowerCase()
+  return REPLY_ADDRESSES[address] || REPLY_DOMAINS[address.split('@')[1]] || null
+}
+
 function parseAddressList(raw) {
   if (!raw) return []
   return String(raw).split(',').map(part => {
@@ -132,7 +155,7 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
       if (env?.to?.[0]) toAddr = String(env.to[0]).toLowerCase()
     } catch { /* ignore */ }
     const domain = (toAddr || '').split('@')[1]
-    const route = REPLY_DOMAINS[domain]
+    const route = routeFor(toAddr)
 
     console.log(`📨 campaign-reply from ${senderEmail} to ${toAddr} — "${subject}"`)
 
@@ -258,6 +281,40 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
     console.log(`📤 campaign-reply: forwarded ${senderEmail} → ${forwardTo}`)
   }
 
+  // Copy of a BCC'd message into Sage's Gmail. In-Reply-To/References are carried over so
+  // Gmail threads it with the conversation it answers; the real author is named in the
+  // From display and in X-Original-From, because SendGrid must send from our own domain.
+  async function relay(route, { rawFrom, senderEmail, body, headers, subject }) {
+    try {
+      const { data: clientRow } = await supabase
+        .from('clients')
+        .select('id, name, sendgrid_api_key, ip_pool, default_reply_to_email')
+        .eq('id', route.clientId)
+        .single()
+      if (!clientRow?.sendgrid_api_key) return console.error('❌ campaign-reply(relay): no SendGrid key for client')
+      const client = decryptClient(clientRow)
+      const threading = {}
+      if (headers['in-reply-to']) threading['In-Reply-To'] = headers['in-reply-to']
+      const refs = [headers['references'], headers['in-reply-to']].filter(Boolean).join(' ')
+      if (refs) threading['References'] = refs
+      const sg = new MailService()
+      sg.setApiKey(client.sendgrid_api_key)
+      await sg.send({
+        to: route.relayTo,
+        from: { email: route.relayFrom, name: `${parseAddressList(rawFrom)[0]?.name || senderEmail} (logged copy)` },
+        replyTo: senderEmail,
+        subject: subject || '(no subject)',
+        text: `[logged copy — written by ${senderEmail} to ${body.to || headers['to'] || ''}]\n\n${body.text || ''}`,
+        headers: { ...threading, 'X-Original-From': senderEmail },
+        trackingSettings: { clickTracking: { enable: false }, openTracking: { enable: false } },
+        categories: ['hello-bcc-relay'],
+      })
+      console.log(`📤 campaign-reply(relay): ${senderEmail} → ${route.relayTo}`)
+    } catch (err) {
+      console.error('❌ campaign-reply(relay) failed:', err.message)
+    }
+  }
+
   // Log-only routes (the CfA hello@ address). Never forwards, never replies.
   async function handleLogOnly(route, { rawFrom, senderEmail, body, headers, subject, cleanBody, auto, files, domain }) {
     const internal = new Set(route.internalDomains || [])
@@ -272,8 +329,9 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
     const lead = senderInternal
       ? participants.find(p => !isInternal(p.email))
       : (participants.find(p => p.email === senderEmail) || { email: senderEmail, name: '' })
+    if (route.relayTo) await relay(route, { rawFrom, senderEmail, body, headers, subject })
     if (!lead) {
-      console.warn(`⚠️ campaign-reply(log-only): no external participant on "${subject}" from ${senderEmail}, dropping`)
+      console.warn(`⚠️ campaign-reply(log-only): no external participant on "${subject}" from ${senderEmail}, ${route.allowInternalOnly ? 'relayed only' : 'dropping'}`)
       return
     }
     const direction = senderInternal ? 'outbound' : 'inbound'
@@ -335,3 +393,5 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
     console.log(`📝 campaign-reply(log-only): ${direction} with ${lead.email} logged (${contact ? 'contact ' + contact.id : 'no contact'})`)
   }
 }
+
+module.exports.routeFor = routeFor
