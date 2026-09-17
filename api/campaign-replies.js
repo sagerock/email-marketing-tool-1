@@ -295,7 +295,9 @@ module.exports = function mountCampaignReplies(app, { supabase, decryptClient, w
       const client = decryptClient(clientRow)
       const threading = {}
       if (headers['in-reply-to']) threading['In-Reply-To'] = headers['in-reply-to']
-      const refs = [headers['references'], headers['in-reply-to']].filter(Boolean).join(' ')
+      // The original's own id goes last so Gmail also threads the copy with the original
+      // when that is in the mailbox (mail sent from Gmail aliases, or a later reply to it).
+      const refs = [headers['references'], headers['in-reply-to'], headers['message-id']].filter(Boolean).join(' ')
       if (refs) threading['References'] = refs
       const sg = new MailService()
       sg.setApiKey(client.sendgrid_api_key)
