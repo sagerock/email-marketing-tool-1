@@ -7881,7 +7881,7 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null, { requireAutoEnab
     .from('ai_followup_drafts')
     .select(`
       *,
-      contact:contacts(id, email, first_name, last_name, salesforce_id, unsubscribed),
+      contact:contacts(id, email, first_name, last_name, salesforce_id, unsubscribed, bounce_status),
       config:ai_followup_config(id, name, enabled, auto_send, from_email, from_name, reply_to, bcc_email, log_to_salesforce, max_followups, followup_delays, client_id)
     `)
     .eq('id', draftId)
@@ -7891,6 +7891,7 @@ async function sendAiFollowupDraft(draftId, reviewedBy = null, { requireAutoEnab
   if (!draft) fail(404, 'Draft not found')
   if (draft.status !== 'sending') fail(409, `Draft is already ${draft.status}`)
   if (draft.contact?.unsubscribed) fail(400, 'Contact has unsubscribed')
+  if (draft.contact?.bounce_status === 'hard') fail(400, 'Contact has hard-bounced')
   if (requireAutoEnabled && (!draft.config?.enabled || !draft.config?.auto_send)) {
     fail(409, 'Automatic sending was disabled before this draft could be sent')
   }
