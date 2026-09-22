@@ -229,6 +229,30 @@ node scripts/ai-followup-downloads.mjs enable                    # cutover = now
 node scripts/ai-followup-downloads.mjs disable                   # bridge inert again
 ```
 
+**AI Chat cases feed a review-first agent** (`api/ai-chat-followups.js`, migration 103,
+since 2026-09-22). The website AI chat lands in Salesforce as a Closed Case with
+`Case_Origin_Subtype__c = 'AI Chat'` and the transcript in `Description`. The sync stores
+cases in `salesforce_ai_chat_cases` with the IP line stripped before storage. Each new case
+enrolls the person once (`ai_followup_config.trigger_ai_chat`, gated by
+`chat_trigger_since`; same internal/test exclusions as downloads, plus
+`cloudadoptionsolutions.com`) in the Alconox "AI Chat Follow-up" agent: one very general
+email, no technical content, Ask Alconox CTA, reply-to `cleaning@alconox.com`,
+`auto_send=false`. The model only ever sees what the visitor typed, never the bot's answers.
+Reviewers in `review_notify_emails` get an email per draft (draft, transcript, case number)
+with a personal signed link to `/api/ai-followup/review/:draftId`; that page shows the
+draft and two POST buttons, Approve and send / Skip. GET never sends (mail scanners click
+links). Runs with the download bridge: after each Salesforce sync and hourly at :20.
+
+```bash
+node scripts/apply-ai-chat-migration.mjs --apply     # install migration 103
+node scripts/ai-chat-followups.mjs status            # agent, cutover, cases, recent drafts
+node scripts/ai-chat-followups.mjs sync [--all]      # pull cases from Salesforce
+node scripts/ai-chat-followups.mjs dry-run           # enrollment decisions, no writes
+node scripts/ai-chat-followups.mjs enable|disable    # cutover on/off
+node scripts/ai-chat-followups.mjs reviewers a@x,b@y # who gets review emails
+node scripts/ai-chat-followups.mjs notify [--only=email] [--dry-run]
+```
+
 ### Industry Links
 
 Maps contact industry values to URLs for personalized email content.

@@ -64,3 +64,34 @@ The alconox.com AI chat writes a **Closed Case** in Salesforce:
   send path ready for a hidden block + visible `Ref:` line.
 - Open question to Cheyenne: the 9/16 chat's case appeared 9/22. If cases routinely lag days,
   the follow-up copy should not say "today" or "recently".
+
+## Built (2026-09-22, email-tool session)
+
+- `api/ai-chat-followups.js` + `api/ai-chat-followups.test.js` (10 unit tests). Sync,
+  enrollment, review email, signed review links, review page/actions.
+- Migration `103_ai_chat_case_followups.sql`, installed on production via
+  `scripts/apply-ai-chat-migration.mjs --apply`: table `salesforce_ai_chat_cases` (IP
+  stripped before storage, never a column), `ai_followup_config.trigger_ai_chat` /
+  `chat_trigger_since` / `review_notify_emails`, `ai_followup_contacts.source_case_id`
+  (unique), `ai_followup_drafts.reviewed_by_email` / `review_notified_at`, and the Alconox
+  agent row "AI Chat Follow-up" (enabled, `auto_send=false`, one email, prompt in the
+  migration). Its `trigger_tag` is a value no source code contains, so the Salesforce
+  source-code enrollment hook never matches it.
+- `api/server.js`: cases sync + enroll + reviewer notification after the manual and daily
+  Salesforce syncs and on the hourly :20 job; review routes mounted; the auth middleware
+  exempts `/api/ai-followup/review/*` (signed, reviewer-bound tokens are the auth).
+- **One-click deviation, on purpose:** the emailed link opens a review page; approving or
+  skipping is a second click that POSTs. A GET that sent mail would let Barracuda/Proofpoint
+  style link scanners "approve" drafts. Links are HMAC-signed per reviewer, expire in 7 days,
+  and become inert once the draft is sent or skipped (single use).
+- Only the visitor's own messages reach the model (`Topic`), never the bot's answers, so the
+  follow-up cannot restate technical guidance. Prompt also bans "today/recently".
+- Dry run against case `00001054`: synced, routed to the agent, and initially skipped as
+  `hard_bounced`. That flag came from the 2026-01-22 cold-IP blast (SendGrid recorded
+  "550 No Such User Here" that day) but the person typed this address into the chat on
+  2026-09-16, so the SendGrid bounce entry and the DB flag were cleared for this one address.
+- First live sample: reviewers temporarily set to `sage@sagerock.com` only; cutover set to
+  2026-09-15 so case 00001054 qualifies. The production server's next hourly run enrolls,
+  drafts, and emails Sage the review. **Next:** once Sage OKs the format,
+  `node scripts/ai-chat-followups.mjs reviewers ssilverstein@alconox.com,mmodica@alconox.com,sage@sagerock.com`.
+- Not done: campaign/person IDs in the email (waiting on Cheyenne).

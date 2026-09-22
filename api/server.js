@@ -28,6 +28,7 @@ const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('.
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { enrollDownloadFollowups } = require('./ai-followup-downloads')
+const aiChat = require('./ai-chat-followups')
 const { mountEngagementReporting } = require('./engagement-reporting')
 const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
@@ -292,6 +293,8 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/public/signup') return next()
   // Skip auth for AWSNA 2026 booth resource signup (rate-limited, no sensitive data)
   if (req.path === '/public/awsna-signup') return next()
+  // Chat follow-up review pages/actions are authorized by signed, reviewer-bound tokens
+  if (req.path.startsWith('/ai-followup/review/')) return next()
   // Skip auth for ip-pools (public)
   if (req.path.startsWith('/ip-pools')) return next()
   // Skip auth for accept-invite (user doesn't have an account yet)
@@ -2961,6 +2964,79 @@ async function syncRecentDownloadsAndEnroll(clientId) {
   return runDownloadFollowupEnrollment(clientId)
 }
 
+// ============ AI CHAT CASE FOLLOW-UPS ============
+// Salesforce AI Chat cases -> review-first chat agent (api/ai-chat-followups.js).
+async function sendClientMail(clientId, msg) {
+  const { data: clientRaw, error } = await supabase.from('clients').select('sendgrid_api_key').eq('id', clientId).single()
+  if (error) throw error
+  const client = decryptClient(clientRaw)
+  if (!client?.sendgrid_api_key) throw new Error('Client has no SendGrid API key')
+  sgMail.setApiKey(client.sendgrid_api_key)
+  await sgMail.send(msg)
+}
+
+async function chatFollowupClientIds() {
+  const { data, error } = await supabase
+    .from('ai_followup_config')
+    .select('client_id')
+    .eq('enabled', true)
+    .eq('trigger_ai_chat', true)
+    .not('chat_trigger_since', 'is', null)
+  if (error) throw error
+  return [...new Set((data || []).map(r => r.client_id))]
+}
+
+// Sync cases modified since `since` (null = all), enroll new ones, email reviewers.
+async function runAiChatCaseSync(clientId, since) {
+  try {
+    await aiChat.syncAiChatCases({ supabase, getSalesforceConnection }, clientId, since)
+  } catch (error) {
+    console.error(`⚠️ AI chat case sync failed for client ${clientId}:`, error.message)
+  }
+  try {
+    await aiChat.enrollChatFollowups({
+      supabase,
+      leaseSeconds: AI_FOLLOWUP_LEASE_SECONDS,
+      generateDraft: async (contactId, configId) => {
+        const generateRes = await fetch(`http://localhost:${PORT}/api/ai-followup/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contactId, configId }),
+        })
+        if (!generateRes.ok) {
+          const err = await generateRes.json().catch(() => ({}))
+          throw new Error(err.error || `generate returned ${generateRes.status}`)
+        }
+      },
+    }, clientId)
+  } catch (error) {
+    console.error(`⚠️ AI chat follow-up enrollment failed for client ${clientId}:`, error.message)
+  }
+  try {
+    await aiChat.notifyPendingChatReviews({
+      supabase,
+      sendMail: sendClientMail,
+      baseUrl: process.env.BASE_URL || 'https://mail.sagerock.com',
+    }, clientId)
+  } catch (error) {
+    console.error(`⚠️ AI chat review notification failed for client ${clientId}:`, error.message)
+  }
+}
+
+async function syncRecentChatCasesAndEnroll(clientId) {
+  const { data: newest } = await supabase
+    .from('salesforce_ai_chat_cases')
+    .select('sf_last_modified')
+    .eq('client_id', clientId)
+    .order('sf_last_modified', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const since = newest?.sf_last_modified
+    ? new Date(new Date(newest.sf_last_modified).getTime() - 10 * 60 * 1000).toISOString()
+    : new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+  return runAiChatCaseSync(clientId, since)
+}
+
 // Legacy Gravity Forms webhook (Alconox-specific, kept for backward compatibility)
 app.post('/api/webhook/gravity-forms', webhookLimiter, async (req, res) => {
   try {
@@ -5380,6 +5456,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
       console.error('Error syncing prospect activities:', paError.message)
     }
     await runDownloadFollowupEnrollment(clientId)
+    await runAiChatCaseSync(clientId, syncSince)
 
     // Update sync status
     await supabase
@@ -8733,6 +8810,8 @@ app.use(express.static(path.join(__dirname, '../dist')))
 
 // Campaign reply receiver (client-branded reply subdomains, e.g. email.alconox.com)
 require('./campaign-replies')(app, { supabase, decryptClient, webhookLimiter })
+// Chat follow-up review pages (signed links in reviewer emails)
+aiChat.mountReviewRoutes(app, { supabase, sendAiFollowupDraft, express })
 
 const engagementReporting = mountEngagementReporting(app, {
   supabase,
@@ -9582,6 +9661,7 @@ app.listen(PORT, () => {
             console.error(`  ⚠️ Prospect activity sync failed for ${client.name}:`, paError.message)
           }
           await runDownloadFollowupEnrollment(client.id)
+          await runAiChatCaseSync(client.id, lastSync ? `${lastSync}` : null)
 
           // Update sync status
           await supabase
@@ -9889,12 +9969,20 @@ app.listen(PORT, () => {
   // hourly keeps step 1 close to the download instead of up to a day behind.
   cron.schedule('20 * * * *', async () => {
     try {
-      const clientIds = await downloadFollowupClientIds()
-      for (const clientId of clientIds) {
+      const downloadClients = await downloadFollowupClientIds()
+      for (const clientId of downloadClients) {
         try {
           await syncRecentDownloadsAndEnroll(clientId)
         } catch (clientErr) {
           console.error(`  ❌ Hourly download follow-up check failed for ${clientId}:`, clientErr.message)
+        }
+      }
+      const chatClients = await chatFollowupClientIds()
+      for (const clientId of chatClients) {
+        try {
+          await syncRecentChatCasesAndEnroll(clientId)
+        } catch (clientErr) {
+          console.error(`  ❌ Hourly AI chat follow-up check failed for ${clientId}:`, clientErr.message)
         }
       }
     } catch (error) {
