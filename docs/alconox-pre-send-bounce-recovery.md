@@ -27,7 +27,7 @@ on 2026-09-22 (`api/reconcile-bounces.js`, same method as the January cleanup):
 
 1. **IP warmup.** Check `GET /v3/ips` with the Alconox key; `warmup` must be `true` for
    134.128.77.155. As of 2026-09-22 it was `false` and `/v3/ips/warmup` was empty.
-   Enable with `POST /v3/ips/warmup {"ip":"134.128.77.155"}`. Note SendGrid then
+   Enabled 2026-09-22 (`POST /v3/ips/warmup {"ip":"134.128.77.155"}`). SendGrid
    throttles that IP on its warmup schedule, so enable it weeks ahead, not the day of.
 2. **Dry run again** (numbers drift as people engage or bounce):
    `node api/reconcile-bounces.js ea7f1422-2d20-4299-85a7-c1201e953409`
