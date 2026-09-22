@@ -197,6 +197,16 @@ Syncs Salesforce Campaigns and Campaign Members to enable tradeshow follow-up au
 
 **Manual Sync:** Settings page → "Sync Campaigns" button
 
+### Salesforce Prospect Activities (Alconox website touches)
+
+Alconox's site writes one `Prospect_Activity__c` per touch (member resource downloads,
+AI chat, web forms, sample requests) linked to the Lead/Contact. Since 2026-09-22,
+`api/salesforce-prospect-activities.js` syncs them into `salesforce_prospect_activities`
+(migration 101) during the manual and daily sync, after Leads/Contacts. Resource
+downloads tag the contact `Resource Download` plus `Downloaded: <resource>`. Each run
+also compares the download campaign's members ("Resource Download 2026") with the
+activity rows and logs anyone missing. Orgs without the object are skipped.
+
 ### Industry Links
 
 Maps contact industry values to URLs for personalized email content.

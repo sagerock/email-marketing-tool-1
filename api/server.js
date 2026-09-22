@@ -26,6 +26,7 @@ require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
+const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { mountEngagementReporting } = require('./engagement-reporting')
 const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
@@ -5315,6 +5316,13 @@ app.post('/api/salesforce/sync', async (req, res) => {
       console.error('Error syncing opportunities:', oppError.message)
     }
 
+    // Prospect activities (website downloads, AI chat, forms) — non-blocking
+    try {
+      await syncSalesforceProspectActivities({ supabase, getSalesforceConnection }, clientId, syncSince)
+    } catch (paError) {
+      console.error('Error syncing prospect activities:', paError.message)
+    }
+
     // Update sync status
     await supabase
       .from('clients')
@@ -9504,6 +9512,13 @@ app.listen(PORT, () => {
             await syncSalesforceOpportunities({ supabase, getSalesforceConnection }, client.id, lastSync ? `${lastSync}` : null)
           } catch (oppError) {
             console.error(`  ⚠️ Opportunity sync failed for ${client.name}:`, oppError.message)
+          }
+
+          // Prospect activities (website downloads, AI chat, forms) — non-blocking
+          try {
+            await syncSalesforceProspectActivities({ supabase, getSalesforceConnection }, client.id, lastSync ? `${lastSync}` : null)
+          } catch (paError) {
+            console.error(`  ⚠️ Prospect activity sync failed for ${client.name}:`, paError.message)
           }
 
           // Update sync status
