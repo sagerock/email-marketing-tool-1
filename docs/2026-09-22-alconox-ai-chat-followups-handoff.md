@@ -95,3 +95,10 @@ The alconox.com AI chat writes a **Closed Case** in Salesforce:
   drafts, and emails Sage the review. **Next:** once Sage OKs the format,
   `node scripts/ai-chat-followups.mjs reviewers ssilverstein@alconox.com,mmodica@alconox.com,sage@sagerock.com`.
 - Not done: campaign/person IDs in the email (waiting on Cheyenne).
+
+**Update 2026-09-22, later:** Sage reviewed the sample review email (received at both
+sage@sagerock.com and slewis@alconox.com) and approved the format. Reviewers are now all
+four: ssilverstein@alconox.com, mmodica@alconox.com, sage@sagerock.com, slewis@alconox.com
+(the Alconox two were added by the alconox-hub session; slewis@ by this one). Alessandra's
+draft (case 00001054) is still pending a human approve/skip. Four more chats from 9/16–9/22
+enroll after the next 06:00 UTC lead sync and will go to all four reviewers.
