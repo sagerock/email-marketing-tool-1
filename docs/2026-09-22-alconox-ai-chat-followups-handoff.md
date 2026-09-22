@@ -43,8 +43,18 @@ The alconox.com AI chat writes a **Closed Case** in Salesforce:
    links (signed, single-use, expiring). Nothing sends until someone approves. The Thinkific
    lead notice (`server.js` ~3259) is the existing notification pattern.
    - Reviewers: ssilverstein@alconox.com, mmodica@alconox.com, sage@sagerock.com.
-   - If one-click links are too much for a first pass, say so and propose the simplest safe
-     alternative. Do **not** switch to auto-send.
+   - **Reply-to-approve (Sage, 2026-09-22), like the Ask agents.** The review email comes from
+     an address on `email.alconox.com` (inbound already routes through SendGrid Inbound Parse to
+     this tool; use a per-draft address or token, e.g. `review+<token>@email.alconox.com`).
+     Reviewers can just reply:
+     - "send it" / "approve" → sends the draft as-is
+     - "skip" → cancels it
+     - anything else → treated as a revision note: regenerate with the note applied and send a
+       fresh review email. Never send on an ambiguous reply.
+   - Guardrails: act only on replies from the three reviewer addresses **with passing SPF/DKIM**
+     in the Parse payload, matching an open draft token; first decision wins and the other
+     reviewers get a short "already sent by X" note. Keep the one-click links as a fallback.
+   - Do **not** switch to auto-send.
 5. Tests, a dry run against case `00001054`, then send Sage one real review email built from it
    (to Sage only) so he can see what Stacy and Michelle will get.
 
