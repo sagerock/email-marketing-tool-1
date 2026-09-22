@@ -27,6 +27,7 @@ const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
+const { enrollDownloadFollowups } = require('./ai-followup-downloads')
 const { mountEngagementReporting } = require('./engagement-reporting')
 const { ListObjectsV2Command, PutObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3')
 const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
@@ -2904,6 +2905,62 @@ app.post('/api/webhook/gravity-forms/:webhookKey', webhookLimiter, async (req, r
   }
 })
 
+// ============ AI FOLLOW-UPS FROM MEMBER DOWNLOADS ============
+// After Prospect Activities are synced, turn new Resource Download rows into
+// enrollments in the download-triggered agents (api/ai-followup-downloads.js).
+// Generation goes through the same internal endpoint the Gravity webhook uses.
+async function runDownloadFollowupEnrollment(clientId) {
+  try {
+    return await enrollDownloadFollowups({
+      supabase,
+      leaseSeconds: AI_FOLLOWUP_LEASE_SECONDS,
+      generateDraft: async (contactId, configId) => {
+        const generateRes = await fetch(`http://localhost:${PORT}/api/ai-followup/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contactId, configId }),
+        })
+        if (!generateRes.ok) {
+          const err = await generateRes.json().catch(() => ({}))
+          throw new Error(err.error || `generate returned ${generateRes.status}`)
+        }
+      },
+    }, clientId)
+  } catch (error) {
+    console.error(`⚠️ Download follow-up enrollment failed for client ${clientId}:`, error.message)
+    return null
+  }
+}
+
+// Clients whose agents are fed by member downloads. Used by the hourly check.
+async function downloadFollowupClientIds() {
+  const { data, error } = await supabase
+    .from('ai_followup_config')
+    .select('client_id')
+    .eq('enabled', true)
+    .not('trigger_download_resource', 'is', null)
+    .not('download_trigger_since', 'is', null)
+  if (error) throw error
+  return [...new Set((data || []).map(r => r.client_id))]
+}
+
+// Prospect Activities are cheap and incremental, so refresh just that object
+// from a little before the newest row we already hold (upsert makes overlap safe).
+async function syncRecentDownloadsAndEnroll(clientId) {
+  const { data: newest } = await supabase
+    .from('salesforce_prospect_activities')
+    .select('sf_last_modified')
+    .eq('client_id', clientId)
+    .order('sf_last_modified', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const since = newest?.sf_last_modified
+    ? new Date(new Date(newest.sf_last_modified).getTime() - 10 * 60 * 1000).toISOString()
+    : new Date(Date.now() - 24 * 3600 * 1000).toISOString()
+  await syncSalesforceProspectActivities({ supabase, getSalesforceConnection }, clientId, since)
+  return runDownloadFollowupEnrollment(clientId)
+}
+
 // Legacy Gravity Forms webhook (Alconox-specific, kept for backward compatibility)
 app.post('/api/webhook/gravity-forms', webhookLimiter, async (req, res) => {
   try {
@@ -5322,6 +5379,7 @@ app.post('/api/salesforce/sync', async (req, res) => {
     } catch (paError) {
       console.error('Error syncing prospect activities:', paError.message)
     }
+    await runDownloadFollowupEnrollment(clientId)
 
     // Update sync status
     await supabase
@@ -7659,7 +7717,10 @@ app.post('/api/ai-followup/generate', async (req, res) => {
         || sourceSubmission?.fields?.industry
         || null
       let approvedResourceUrl = 'https://alconox.com/industries/'
-      if (industryName) {
+      if (followupContact?.resource_url) {
+        // Enrolled from a member download: point back at the page they downloaded from.
+        approvedResourceUrl = followupContact.resource_url
+      } else if (industryName) {
         const { data: il } = await supabase
           .from('industry_links')
           .select('link_url')
@@ -9520,6 +9581,7 @@ app.listen(PORT, () => {
           } catch (paError) {
             console.error(`  ⚠️ Prospect activity sync failed for ${client.name}:`, paError.message)
           }
+          await runDownloadFollowupEnrollment(client.id)
 
           // Update sync status
           await supabase
@@ -9822,6 +9884,23 @@ app.listen(PORT, () => {
   })
 
   console.log('✅ Daily Google Search Console sync cron job started (runs at 7:15 AM UTC)')
+
+  // Member downloads → AI follow-ups. The daily 06:00 sync already does this;
+  // hourly keeps step 1 close to the download instead of up to a day behind.
+  cron.schedule('20 * * * *', async () => {
+    try {
+      const clientIds = await downloadFollowupClientIds()
+      for (const clientId of clientIds) {
+        try {
+          await syncRecentDownloadsAndEnroll(clientId)
+        } catch (clientErr) {
+          console.error(`  ❌ Hourly download follow-up check failed for ${clientId}:`, clientErr.message)
+        }
+      }
+    } catch (error) {
+      console.error('❌ Hourly download follow-up check error:', error.message)
+    }
+  })
 
   // RSS "new post" auto-notifications — hourly is plenty for low-frequency
   // blog feeds (unlike the every-minute campaign/sequence job above).

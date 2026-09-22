@@ -54,3 +54,22 @@ Content stays exactly as today. Only the trigger source changes.
   shows no gap between the "Resource Download 2026" campaign and the activity rows.
 - The 9/15 and 9/18 step 2/3 backlog burst (median 31 days late) may produce a few confused
   replies at cleaning@alconox.com.
+
+## Built (2026-09-22, email-tool session)
+
+- `api/ai-followup-downloads.js` + `api/ai-followup-downloads.test.js` (11 unit tests).
+- Migration `102_ai_followup_download_triggers.sql`, installed on production via
+  `scripts/apply-ai-followup-download-migration.mjs --apply`. Adds
+  `ai_followup_config.trigger_download_resource` / `download_trigger_since`,
+  `ai_followup_contacts.source_activity_id` (unique) / `resource_url`, and
+  `salesforce_prospect_activities.followup_processed_at` / `_skip_reason` / `_enrollment_id`.
+  Routing rows set: Handbook agent = `Aqueous Cleaning Handbook`, White Paper agent = `*`.
+- `api/server.js`: bridge runs after the manual and daily Salesforce syncs, plus an hourly
+  download-only refresh at :20 (Prospect Activities since 10 min before the newest synced
+  row, then enroll). Generation reuses `POST /api/ai-followup/generate`; the generate step
+  prefers the enrollment's `resource_url` (the member page) as the approved link.
+- Same-agent duplicates are impossible (UNIQUE config+contact); cross-agent same-person
+  downloads defer to the scheduler's 72-hour spacing instead of generating immediately.
+- Cutover is **not enabled**: `download_trigger_since` is NULL, so the bridge holds every
+  row. Enable with `node scripts/ai-followup-downloads.mjs enable` (sets cutover = now).
+- Not done here: campaign/person IDs in the email (waiting on Cheyenne); AI Chat follow-ups.

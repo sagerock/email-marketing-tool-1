@@ -207,6 +207,28 @@ downloads tag the contact `Resource Download` plus `Downloaded: <resource>`. Eac
 also compares the download campaign's members ("Resource Download 2026") with the
 activity rows and logs anyone missing. Orgs without the object are skipped.
 
+**Downloads feed the AI follow-up agents** (`api/ai-followup-downloads.js`, migration
+102, since 2026-09-22). alconox.com replaced its Gravity download forms with
+member-download pages on 2026-09-19, so the White Paper and Aqueous Cleaning Handbook
+agents stopped enrolling. Now each new `Resource Download` activity enrolls the contact
+through the same enroll + generate path the Gravity webhook uses: `Source_Detail__c`
+`Aqueous Cleaning Handbook` goes to the Handbook agent, anything else to the White Paper
+agent (`ai_followup_config.trigger_download_resource`, `'*'` = catch-all). The
+activity's `Web_Page__c` becomes the enrollment's `resource_url`, which the generate
+endpoint uses as the approved link. Each activity row is processed once
+(`followup_processed_at` + enrollment id or skip reason); only touchpoints after the
+agent's `download_trigger_since` cutover enroll, and `@alconox.com` addresses, contacts
+tagged `Alconox Internal`, unsubscribed, and hard-bounced contacts are skipped. Runs
+after every Salesforce sync plus an hourly download-only refresh at :20.
+
+```bash
+node scripts/apply-ai-followup-download-migration.mjs --apply   # install migration 102
+node scripts/ai-followup-downloads.mjs status                    # agents, cutover, pending rows
+node scripts/ai-followup-downloads.mjs dry-run                   # decisions, no writes
+node scripts/ai-followup-downloads.mjs enable                    # cutover = now (go live)
+node scripts/ai-followup-downloads.mjs disable                   # bridge inert again
+```
+
 ### Industry Links
 
 Maps contact industry values to URLs for personalized email content.
