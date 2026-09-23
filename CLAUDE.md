@@ -237,8 +237,10 @@ enrolls the person once (`ai_followup_config.trigger_ai_chat`, gated by
 `chat_trigger_since`; same internal/test exclusions as downloads, plus
 `cloudadoptionsolutions.com`) in the Alconox "AI Chat Follow-up" agent: one very general
 email, no technical content, Ask Alconox CTA, reply-to `cleaning@alconox.com`,
-`auto_send=false`. The model only ever sees what the visitor typed, never the bot's answers.
-Reviewers in `review_notify_emails` get an email per draft (draft, transcript, case number)
+`auto_send=true` since 2026-09-23 (Michelle Modica: "No approvals needed going forward";
+Sage agreed). The model only ever sees what the visitor typed, never the bot's answers.
+Drafts now send on generation; a draft only stays pending if the auto-send fails, and then
+reviewers in `review_notify_emails` get an email per draft (draft, transcript, case number)
 with a personal signed link to `/api/ai-followup/review/:draftId`; that page shows the
 draft and two POST buttons, Approve and send / Skip. GET never sends (mail scanners click
 links). Runs with the download bridge: after each Salesforce sync and hourly at :20.
