@@ -5,6 +5,7 @@ const MAX_BRIEF_CHARS = 12000
 const MAX_NAME_CHARS = 160
 const MAX_HTML_CHARS = 500000
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+const SAGEROCK_LOGO_URL = 'https://sagerock.com/images/sagerock-logo.png'
 
 class AskEmailDesignError extends Error {
   constructor(message, status = 500) {
@@ -60,11 +61,23 @@ function validateDraftRequest(body, idempotencyKey) {
   return { brief, name, referenceTemplateIds, sourceTemplateId, attachedHtml, attachmentImages, requestKey }
 }
 
+function rewriteLegacySageRockLogoUrls(html) {
+  return String(html || '').replace(
+    /https:\/\/(?:www\.)?sagerock\.com\/wp-content\/uploads\/[^"'()\s<>]+/gi,
+    url => {
+      const filename = url.split('/').pop().toLowerCase()
+      return filename.includes('sagerock') && filename.includes('logo')
+        ? SAGEROCK_LOGO_URL
+        : url
+    }
+  )
+}
+
 function normalizeGeneratedDesign(input) {
   const name = String(input?.name || '').trim()
   const subject = String(input?.subject || '').trim()
   const previewText = String(input?.preview_text || '').trim()
-  const html = String(input?.html_content || '').trim()
+  const html = rewriteLegacySageRockLogoUrls(input?.html_content).trim()
 
   if (!name || !subject || !html) {
     throw new AskEmailDesignError('the email builder returned an incomplete design', 502)
@@ -106,6 +119,8 @@ EMAIL HTML RULES:
 - Include Outlook/MSO conditional handling and responsive mobile overrides.
 - Every image needs an absolute HTTPS URL, alt text, explicit width, and display:block.
 - Do not invent image URLs. Reuse a supplied/reference image or omit the image gracefully.
+- The canonical SageRock logo is ${SAGEROCK_LOGO_URL}. Always use this URL for the
+  SageRock logo, even when a reference email contains an older WordPress media URL.
 - Include a hidden preheader, readable image-blocked fallback, and high-contrast 44px CTA.
 - Never use scripts, forms, iframes, embeds, event handlers, or javascript: URLs.
 - Preserve these merge tags literally when appropriate: {{first_name}}, {{last_name}},
@@ -342,6 +357,7 @@ module.exports = {
   AskEmailDesignError,
   authorizedBearer,
   validateDraftRequest,
+  rewriteLegacySageRockLogoUrls,
   normalizeGeneratedDesign,
   createEmailDesignDraft,
   createAskEmailDesignHandler,
