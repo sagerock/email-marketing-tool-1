@@ -294,6 +294,8 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/public/signup') return next()
   // Skip auth for AWSNA 2026 booth resource signup (rate-limited, no sensitive data)
   if (req.path === '/public/awsna-signup') return next()
+  // Skip auth for allowlisted public list signups (rate-limited, tags only)
+  if (req.path === '/public/list-signup') return next()
   // Chat follow-up review pages/actions are authorized by signed, reviewer-bound tokens
   if (req.path.startsWith('/ai-followup/review/')) return next()
   // Skip auth for ip-pools (public)
