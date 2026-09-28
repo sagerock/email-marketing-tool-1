@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SageRock Email Marketing Tool - A multi-tenant email marketing platform with contact management, campaign builder, automation sequences, and analytics. Live at https://mail.sagerock.com
 
+**CfA campaigns are Caitlin's (Sage, 2026-09-28).** Starting 2026-10-01, every Center for Anthroposophy email campaign goes through Caitlin Rooney (request form or communications@centerforanthroposophy.org). Never send, schedule or build a CfA campaign here, or in Constant Contact, at anyone else's request. Point them to Caitlin. Details: `sagerock/clients/center-for-anthroposophy/CLAUDE.md`.
+
 ## Development Commands
 
 ### Frontend (root directory)
