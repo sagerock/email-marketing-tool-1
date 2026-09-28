@@ -92,6 +92,16 @@ accessible client, and shows an explicit loading/error state instead of silently
 leaving the preview empty. `scripts/test-newsletter-review.cjs` exercises this
 flow in Chromium with mocked authentication and data (see its build command).
 
+### Public List Signups
+
+`POST /api/public/list-signup` (body: `email`, optional `first_name`, `list`) lets a
+public page add someone to a named list on the `PUBLIC_SIGNUP_CLIENT_ID` client
+(SageRock). Lists are allowlisted in `api/public-list-signup.js`; each maps to contact
+tags. The endpoint only tags the contact. Welcome mail comes from an `email_sequences`
+row with `trigger_type = 'tag_added'` on the list's first tag, created in the UI. Existing
+contacts keep their name and unsubscribe status. Current list: `law-firm-workspace`
+(sagerock.com/law-firm-workspace). To add one, add an entry to `PUBLIC_LISTS`.
+
 ### Salesforce Integration
 Uses **OAuth 2.0 Client Credentials Flow** - no user interaction or callback URLs needed.
 

@@ -25,6 +25,7 @@ const puppeteer = require('puppeteer')
 require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
+const { listSignupLimiter, validateListSignup, upsertListContact } = require('./public-list-signup')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { enrollDownloadFollowups } = require('./ai-followup-downloads')
@@ -7157,6 +7158,31 @@ app.post('/api/public/signup', async (req, res) => {
   } catch (error) {
     console.error('❌ Public signup error:', error)
     res.status(500).json({ error: 'Signup failed. Please try again.' })
+  }
+})
+
+// ==========================================
+// Public list signup (e.g. sagerock.com/law-firm-workspace)
+// Public, rate-limited. Tags the contact on the public-signup client with an
+// allowlisted list's tags; a tag_added sequence sends any welcome mail.
+// ==========================================
+app.post('/api/public/list-signup', listSignupLimiter, async (req, res) => {
+  try {
+    const { error, value } = validateListSignup(req.body)
+    if (error) return res.status(400).json({ error })
+
+    const publicClientId = process.env.PUBLIC_SIGNUP_CLIENT_ID
+    if (!publicClientId) {
+      console.error('❌ PUBLIC_SIGNUP_CLIENT_ID not configured')
+      return res.status(500).json({ error: 'Signup is not configured' })
+    }
+
+    const action = await upsertListContact(supabase, publicClientId, value)
+    console.log(`✅ List signup (${value.list}): ${action} contact`)
+    res.json({ success: true })
+  } catch (err) {
+    console.error('❌ List signup error:', err)
+    res.status(500).json({ error: 'Something went wrong. Please try again.' })
   }
 })
 
