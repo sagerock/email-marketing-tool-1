@@ -8853,7 +8853,9 @@ const engagementReporting = mountEngagementReporting(app, {
 // Engagement page API (client-scoped by the global /api middleware)
 require('./engagement')(app, { supabase, reporting: engagementReporting })
 // Monday engagement digest (form leads + stalled opps + replies), per-client config
-require('./engagement-digest')(app, { supabase, decryptClient, cron, reporting: engagementReporting })
+require('./engagement-digest')(app, {
+  supabase, decryptClient, cron, reporting: engagementReporting, schedulerEnabled: isSchedulerEnabled(),
+})
 
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing

@@ -119,7 +119,7 @@ function buildDigest(o, client, cfg) {
   return { html, text, subject, attention: attentionTotal }
 }
 
-module.exports = function mountEngagementDigest(app, { supabase, decryptClient, cron, reporting }) {
+module.exports = function mountEngagementDigest(app, { supabase, decryptClient, cron, reporting, schedulerEnabled = true }) {
   async function sendDigest(clientId, { to, dryRun } = {}) {
     const [{ data: cfg }, { data: clientRow }, { data: lastCampaign }] = await Promise.all([
       supabase.from('engagement_digest_config').select('*').eq('client_id', clientId).maybeSingle(),
@@ -188,7 +188,10 @@ module.exports = function mountEngagementDigest(app, { supabase, decryptClient, 
   })
 
   // Mondays 12:00 UTC (8am Eastern in summer, 7am in winter)
-  if (cron) {
+  // Only the RUN_SCHEDULER service may send it. A second service without
+  // ENGAGEMENT_REPORTING_ENABLED skipped verification and sent an unverified
+  // digest on 2026-09-28 while the scheduler's copy was correctly withheld.
+  if (cron && schedulerEnabled) {
     cron.schedule('0 12 * * 1', async () => {
       const { data: cfgs } = await supabase.from('engagement_digest_config').select('client_id, recipients').eq('enabled', true)
       for (const c of cfgs || []) {

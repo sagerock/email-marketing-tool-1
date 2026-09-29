@@ -82,3 +82,13 @@ test('digest send path fails closed before rendering when Salesforce coverage is
     else process.env.ENGAGEMENT_REPORTING_ENABLED = previous
   }
 })
+
+test('only the scheduler service registers the Monday digest cron', () => {
+  const app = { post() {} }
+  const scheduled = []
+  const cron = { schedule: (expr) => scheduled.push(expr) }
+  mountDigest(app, { supabase: {}, decryptClient: x => x, cron, schedulerEnabled: false })
+  assert.deepEqual(scheduled, [])
+  mountDigest(app, { supabase: {}, decryptClient: x => x, cron, schedulerEnabled: true })
+  assert.deepEqual(scheduled, ['0 12 * * 1'])
+})

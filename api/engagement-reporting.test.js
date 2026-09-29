@@ -135,7 +135,7 @@ test('known-person refresh queries exact IDs, clears returned null, and records 
     { name: 'apply_engagement_snapshot', params: { p_run_id: 'run-1' } },
     {
       name: 'freeze_engagement_snapshot_evidence',
-      params: { p_run_id: 'run-1', p_opportunity_verified: false },
+      params: { p_run_id: 'run-1', p_opportunity_verified: false, p_salesforce_ids: [LEAD, CONTACT] },
     },
   ])
   assert.equal(conn.calls.some(soql => /LastModifiedDate/.test(soql)), false)

@@ -8,6 +8,7 @@ const crypto = require('crypto')
 
 const DEFAULT_MAX_RECORDS = 5000
 const PAGE_SIZE = 1000
+const FREEZE_BATCH_SIZE = 250
 const SF_ID = /^[a-zA-Z0-9]{15,18}$/
 const REPORT_TIMEZONE = 'America/New_York'
 
@@ -384,7 +385,8 @@ function createEngagementReporting({
           verified_at: verifiedAt,
           identity_detail: { reason: 'Salesforce did not return the requested ID; it may be converted, merged, deleted, or inaccessible.' },
         }))
-        await saveRecords([...resolved, ...unresolved])
+        const runRecords = [...resolved, ...unresolved]
+        await saveRecords(runRecords)
 
         const { error: applyError } = await supabase.rpc('apply_engagement_snapshot', { p_run_id: runId })
         if (applyError) throw applyError
@@ -402,11 +404,16 @@ function createEngagementReporting({
             queryLimitations.push(`Opportunity coverage was unavailable: ${String(error?.message || error)}`)
           }
         }
-        const { error: freezeError } = await supabase.rpc('freeze_engagement_snapshot_evidence', {
-          p_run_id: runId,
-          p_opportunity_verified: opportunityComplete === true,
-        })
-        if (freezeError) throw freezeError
+        // Batched so each call stays under the API role's 8s statement timeout
+        // on a cold cache (the one-shot freeze timed out on 2026-09-21 and -28).
+        for (const part of chunks([...new Set(runRecords.map(row => row.salesforce_id))], FREEZE_BATCH_SIZE)) {
+          const { error: freezeError } = await supabase.rpc('freeze_engagement_snapshot_evidence', {
+            p_run_id: runId,
+            p_opportunity_verified: opportunityComplete === true,
+            p_salesforce_ids: part,
+          })
+          if (freezeError) throw freezeError
+        }
 
         const completedAt = iso(now())
         const status = discoveryComplete && unresolved.length === 0 && opportunityComplete !== false
