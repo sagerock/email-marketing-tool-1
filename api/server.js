@@ -8857,6 +8857,8 @@ require('./engagement')(app, { supabase, reporting: engagementReporting })
 require('./engagement-digest')(app, {
   supabase, decryptClient, cron, reporting: engagementReporting, schedulerEnabled: isSchedulerEnabled(),
 })
+// Monday bounce report (new hard bounces with suggested typo fixes), per-client config
+require('./bounce-report')(app, { supabase, decryptClient, cron, schedulerEnabled: isSchedulerEnabled() })
 
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing
