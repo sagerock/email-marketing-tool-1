@@ -119,6 +119,23 @@ function buildDigest(o, client, cfg) {
   return { html, text, subject, attention: attentionTotal }
 }
 
+// Sage 2026-09-29: a finished check with a few unresolved people (converted,
+// merged, or deleted in Salesforce) still sends; those people show as "unable
+// to verify". Withhold when the check failed, coverage was cut short, or the
+// unresolved share is large enough to suggest an access problem.
+const MAX_UNRESOLVED_FLOOR = 25
+const MAX_UNRESOLVED_SHARE = 0.02
+function digestVerificationProblem(f) {
+  if (!f || f.status === 'failed' || f.failed_count) return 'Salesforce verification failed'
+  if (f.status === 'complete') return null
+  if (f.status !== 'partial') return 'Salesforce verification incomplete'
+  if (f.cohort_discovery_complete !== true) return 'the digest cohort was not fully enumerated'
+  if (f.opportunity_discovery_complete !== true) return 'opportunity coverage was incomplete'
+  const limit = Math.max(MAX_UNRESOLVED_FLOOR, Math.ceil((f.expected_count || 0) * MAX_UNRESOLVED_SHARE))
+  if ((f.unresolved_count || 0) > limit) return `too many unresolved Salesforce records (limit ${limit})`
+  return null
+}
+
 module.exports = function mountEngagementDigest(app, { supabase, decryptClient, cron, reporting, schedulerEnabled = true }) {
   async function sendDigest(clientId, { to, dryRun } = {}) {
     const [{ data: cfg }, { data: clientRow }, { data: lastCampaign }] = await Promise.all([
@@ -139,9 +156,10 @@ module.exports = function mountEngagementDigest(app, { supabase, decryptClient, 
       const freshness = await reporting.refreshSnapshot(clientId, {
         scope: 'known_people', days: conf.days,
       })
-      if (freshness.status !== 'complete' || freshness.unresolved_count || freshness.failed_count) {
+      const problem = digestVerificationProblem(freshness)
+      if (problem) {
         throw new Error(
-          `Engagement digest withheld: Salesforce verification incomplete ` +
+          `Engagement digest withheld: ${problem} ` +
           `(status=${freshness.status}, unresolved=${freshness.unresolved_count}, failed=${freshness.failed_count})`
         )
       }
@@ -203,3 +221,4 @@ module.exports = function mountEngagementDigest(app, { supabase, decryptClient, 
 
   return { sendDigest, buildDigest }
 }
+module.exports.digestVerificationProblem = digestVerificationProblem

@@ -19,8 +19,11 @@ records that disappear become unresolved rather than silently closed; unavailabl
 Opportunity access or linkage makes coverage partial instead of producing zero.
 
 The Engagement page returns partial refresh manifests so unresolved people remain
-visible as `unable to verify`. The scheduled digest remains fail-closed and is
-withheld unless the entire bounded dashboard cohort resolves. Interactive and
+visible as `unable to verify`. The scheduled digest is withheld when verification
+fails, the cohort or opportunity coverage is incomplete, or more than
+max(25, 2%) of people are unresolved. A finished check with a few unresolved
+people (converted, merged, or deleted records) still sends, and those people
+appear as `unable to verify` (Sage, 2026-09-29). Interactive and
 Athena reads may reuse a recent partial snapshot for 15 minutes, preserving its
 coverage warning without repeating the same expensive Salesforce verification.
 

@@ -72,11 +72,11 @@ test('digest send path fails closed before rendering when Salesforce coverage is
     },
   }
   const reporting = {
-    refreshSnapshot: async () => ({ status: 'partial', unresolved_count: 1, failed_count: 0 }),
+    refreshSnapshot: async () => ({ status: 'failed', unresolved_count: 0, failed_count: 1 }),
   }
   const { sendDigest } = mountDigest(app, { supabase, decryptClient: x => x, cron: null, reporting })
   try {
-    await assert.rejects(sendDigest('client-1'), /digest withheld.*unresolved=1/)
+    await assert.rejects(sendDigest('client-1'), /digest withheld: Salesforce verification failed.*failed=1/)
   } finally {
     if (previous === undefined) delete process.env.ENGAGEMENT_REPORTING_ENABLED
     else process.env.ENGAGEMENT_REPORTING_ENABLED = previous
@@ -91,4 +91,17 @@ test('only the scheduler service registers the Monday digest cron', () => {
   assert.deepEqual(scheduled, [])
   mountDigest(app, { supabase: {}, decryptClient: x => x, cron, schedulerEnabled: true })
   assert.deepEqual(scheduled, ['0 12 * * 1'])
+})
+
+test('a finished check with a few unresolved people still sends; real gaps withhold', () => {
+  const { digestVerificationProblem: gate } = mountDigest
+  const ok = { status: 'partial', failed_count: 0, unresolved_count: 11, expected_count: 3828,
+    cohort_discovery_complete: true, opportunity_discovery_complete: true }
+  assert.equal(gate({ ...ok, status: 'complete', unresolved_count: 0 }), null)
+  assert.equal(gate(ok), null)
+  assert.match(gate({ ...ok, unresolved_count: 200 }), /too many unresolved.*limit 77/)
+  assert.match(gate({ ...ok, cohort_discovery_complete: false }), /not fully enumerated/)
+  assert.match(gate({ ...ok, opportunity_discovery_complete: false }), /opportunity coverage/)
+  assert.match(gate({ ...ok, status: 'failed', failed_count: 1 }), /failed/)
+  assert.match(gate(null), /failed/)
 })
