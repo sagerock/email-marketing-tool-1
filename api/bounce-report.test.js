@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const mount = require('./bounce-report')
-const { suggestDomain, domainExists, buildBounceReport } = mount
+const { suggestDomain, domainExists, buildBounceReport, toXlsx } = mount
 
 test('suggestDomain fixes obvious top-level typos first', () => {
   assert.equal(suggestDomain('usdoj.gob'), 'usdoj.gov')
@@ -47,6 +47,25 @@ test('the report groups typos, missing domains, gone mailboxes, and false bounce
   assert.match(out.text, /Possible false bounces, don't delete \(1\)/)
   assert.match(out.text, /Jax, Sage’s assistant\n$/)
   assert.equal(out.csv.trim().split('\n').length, 5)
+})
+
+test('the Excel attachment has an All tab and one tab per non-empty group', async () => {
+  const ExcelJS = require('exceljs')
+  const r = {
+    typos: [{ email: 'rob@styker.com', suggested: 'rob@stryker.com', twin: true, salesforce_id: '003A' }],
+    moved: [], noDomain: [],
+    gone: [{ email: 'left@realco.com', salesforce_id: '00QB', record_type: 'lead', bounced_at: '2026-09-28T00:00:00Z' },
+      { email: 'gone@realco.com', salesforce_id: '00QC' }],
+    maybeFalse: [],
+  }
+  const wb = new ExcelJS.Workbook()
+  await wb.xlsx.load(await toXlsx(r))
+  assert.deepEqual(wb.worksheets.map(w => w.name), ['All', 'Likely typos (1)', 'Mailbox no longer works (2)'])
+  const gone = wb.getWorksheet('Mailbox no longer works (2)')
+  assert.equal(gone.getRow(1).getCell(8).value, 'salesforce_id')
+  assert.equal(gone.getRow(2).getCell(8).value, '00QB')
+  assert.equal(gone.getRow(2).getCell(9).value, '2026-09-28')
+  assert.equal(wb.getWorksheet('All').rowCount, 4)
 })
 
 test('the cron registers only on the scheduler service', () => {

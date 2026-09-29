@@ -142,12 +142,44 @@ function person(c) {
   return c.link ? `<a href="${esc(c.link)}" style="color:#1a4f9c">${esc(who || 'Open in Salesforce')}</a>` : esc(who)
 }
 
+const COLUMNS = ['group', 'email', 'suggested_fix', 'correct_twin_exists', 'name', 'company', 'record_type', 'salesforce_id', 'bounced_on', 'salesforce_link']
+const GROUPS = [['typos', 'likely typo', 'Likely typos'], ['moved', 'another address on file', 'Another address on file'],
+  ['noDomain', 'domain does not exist', "Domain doesn't exist"], ['gone', 'mailbox gone', 'Mailbox no longer works'],
+  ['maybeFalse', 'possible false bounce', 'Possible false bounces']]
+
+function exportRows(r) {
+  return GROUPS.map(([key, group, sheet]) => ({
+    sheet,
+    rows: (r[key] || []).map(c => {
+      const suggested = key === 'moved' ? c.otherAddress : c.suggested
+      return [group, c.email, suggested || '', suggested ? (c.twin ? 'yes' : 'no') : '', name(c), c.company, c.record_type, c.salesforce_id, (c.bounced_at || '').slice(0, 10), c.link || '']
+    }),
+  }))
+}
+
 function toCsv(r) {
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`
-  const lines = [['group', 'email', 'suggested_fix', 'correct_twin_exists', 'name', 'company', 'record_type', 'salesforce_id', 'bounced_on', 'salesforce_link'].join(',')]
-  const add = (group, c) => lines.push([group, c.email, c.suggested || '', c.suggested ? (c.twin ? 'yes' : 'no') : '', name(c), c.company, c.record_type, c.salesforce_id, (c.bounced_at || '').slice(0, 10), c.link || ''].map(q).join(','))
-  r.typos.forEach(c => add('likely typo', c)); (r.moved || []).forEach(c => add('another address on file', { ...c, suggested: c.otherAddress })); r.noDomain.forEach(c => add('domain does not exist', c)); r.gone.forEach(c => add('mailbox gone', c)); r.maybeFalse.forEach(c => add('possible false bounce', c))
+  const lines = [COLUMNS.join(',')]
+  for (const g of exportRows(r)) for (const row of g.rows) lines.push(row.map(q).join(','))
   return lines.join('\n') + '\n'
+}
+
+// The weekly attachment is Excel, not CSV (Michelle, Alconox, 2026-09-29): an "All" tab plus one tab per group,
+// same columns, bold frozen header, filters on.
+async function toXlsx(r) {
+  const ExcelJS = require('exceljs')
+  const wb = new ExcelJS.Workbook()
+  const groups = exportRows(r)
+  const addSheet = (title, rows) => {
+    const ws = wb.addWorksheet(title, { views: [{ state: 'frozen', ySplit: 1 }] })
+    ws.addRow(COLUMNS).font = { bold: true }
+    rows.forEach(row => ws.addRow(row.map(v => v ?? '')))
+    ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: COLUMNS.length } }
+    ws.columns.forEach((col, i) => { col.width = Math.min(60, Math.max(COLUMNS[i].length, ...rows.map(x => String(x[i] ?? '').length)) + 2) })
+  }
+  addSheet('All', groups.flatMap(g => g.rows))
+  for (const g of groups) if (g.rows.length) addSheet(`${g.sheet} (${g.rows.length})`, g.rows)
+  return Buffer.from(await wb.xlsx.writeBuffer())
 }
 
 function buildBounceReport(r, conf = {}) {
@@ -171,11 +203,11 @@ function buildBounceReport(r, conf = {}) {
     <td style="${T.td}">${esc(c.email)}</td><td style="${T.td}">${person(c)}</td><td style="${T.td}">${esc(fmtDate(c.bounced_at))}</td></tr>`)
   const falseRows = r.maybeFalse.slice(0, LIST_CAP).map(c => `<tr>
     <td style="${T.td}">${esc(c.email)}</td><td style="${T.td}">${person(c)}</td><td style="${T.td}">engaged ${esc(fmtDate(c.last_engaged_at))}</td></tr>`)
-  const more = (arr) => arr.length > LIST_CAP ? `<p style="${T.sub}">Plus ${arr.length - LIST_CAP} more in the attached CSV.</p>` : ''
+  const more = (arr) => arr.length > LIST_CAP ? `<p style="${T.sub}">Plus ${arr.length - LIST_CAP} more in the attached Excel file.</p>` : ''
 
   const html = `<div style="max-width:720px">
     <p style="${T.p}">Hi,</p>
-    <p style="${T.p}">${esc(intro)} Names link to the Salesforce record. The full list is attached as a CSV.</p>
+    <p style="${T.p}">${esc(intro)} Names link to the Salesforce record. The full list is attached as an Excel file, one tab per group.</p>
     ${r.typos.length ? `<h2 style="${T.h2}">Likely typos (${r.typos.length})</h2>
       <p style="${T.sub}">Fix the email in Salesforce. If the correct address is already on file, the typo record is a duplicate.</p>
       ${table(['Bounced', 'Probably meant', 'Person'], typoRows)}${more(r.typos)}` : ''}
@@ -196,7 +228,7 @@ function buildBounceReport(r, conf = {}) {
     <p style="${T.p}">Jax, Sage’s assistant</p></div>`
 
   const line = c => `- ${c.email}${c.suggested ? ` -> ${c.suggested}${c.twin ? ' (already on file)' : ''}` : ''}${name(c) || c.company ? ` (${[name(c), c.company].filter(Boolean).join(', ')})` : ''}`
-  const text = `Hi,\n\n${intro} The full list is attached as a CSV.\n`
+  const text = `Hi,\n\n${intro} The full list is attached as an Excel file, one tab per group.\n`
     + (r.typos.length ? `\nLikely typos (${r.typos.length}):\n${r.typos.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
     + (moved.length ? `\nSame person, another address on file (${moved.length}):\n${moved.slice(0, LIST_CAP).map(c => `- ${c.email} -> also ${c.otherAddress}${name(c) || c.company ? ` (${[name(c), c.company].filter(Boolean).join(', ')})` : ''}`).join('\n')}\n` : '')
     + (r.noDomain.length ? `\nDomain doesn't exist (${r.noDomain.length}):\n${r.noDomain.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
@@ -230,7 +262,7 @@ module.exports = function mountBounceReport(app, { supabase, decryptClient, cron
       from: { email: fromEmail, name: `${client.name} Data Cleanup` },
       replyTo: { email: 'jax@sagerock.com', name: 'Jax, Sage’s assistant' },
       subject: report.subject, text: report.text, html: report.html,
-      attachments: [{ content: Buffer.from(report.csv).toString('base64'), filename: `bounces-${new Date().toISOString().slice(0, 10)}.csv`, type: 'text/csv', disposition: 'attachment' }],
+      attachments: [{ content: (await toXlsx(r)).toString('base64'), filename: `bounces-${new Date().toISOString().slice(0, 10)}.xlsx`, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', disposition: 'attachment' }],
       trackingSettings: { clickTracking: { enable: false }, openTracking: { enable: false } },
       categories: ['bounce-report'],
     }
@@ -257,3 +289,4 @@ module.exports.suggestDomain = suggestDomain
 module.exports.domainExists = domainExists
 module.exports.buildBounceReport = buildBounceReport
 module.exports.loadReport = loadReport
+module.exports.toXlsx = toXlsx
