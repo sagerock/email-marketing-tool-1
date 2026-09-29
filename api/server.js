@@ -46,6 +46,7 @@ const {
   canonicalEmail,
   isCampaignClaimConflictError,
   isSchedulerEnabled,
+  sendgridEventArg,
   keysetPages,
 } = require('./send-utils')
 
@@ -1630,7 +1631,7 @@ app.post('/api/webhook/sendgrid', webhookLimiter, async (req, res) => {
 
     for (const event of events) {
       // ---- AI Follow-up email events ----
-      const aiDraftId = event.custom_args?.ai_followup_draft_id
+      const aiDraftId = sendgridEventArg(event, 'ai_followup_draft_id')
       if (aiDraftId) {
         const eventType = eventTypeMap[event.event]
         if (!eventType) { skipped++; continue }

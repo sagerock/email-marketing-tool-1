@@ -11,6 +11,7 @@ const {
   isCampaignClaimConflictError,
   isSchedulerEnabled,
   keysetPages,
+  sendgridEventArg,
 } = require('./send-utils')
 
 test('canonicalEmail trims and lowercases without rewriting aliases', () => {
@@ -81,4 +82,11 @@ test('AI follow-up steps retain the form submission that started their series', 
   assert.equal(aiFollowupSourceSubmission(previousDrafts, [whitePaper, handbook]), whitePaper)
   assert.equal(aiFollowupSourceSubmission([], [whitePaper, handbook]), handbook)
   assert.equal(aiFollowupSourceSubmission([], []), null)
+})
+
+test('sendgridEventArg reads top-level custom args and the older nested form', () => {
+  assert.equal(sendgridEventArg({ ai_followup_draft_id: 'd1', event: 'open' }, 'ai_followup_draft_id'), 'd1')
+  assert.equal(sendgridEventArg({ custom_args: { ai_followup_draft_id: 'd2' } }, 'ai_followup_draft_id'), 'd2')
+  assert.equal(sendgridEventArg({ campaign_id: 'c1' }, 'ai_followup_draft_id'), null)
+  assert.equal(sendgridEventArg(null, 'ai_followup_draft_id'), null)
 })

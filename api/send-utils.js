@@ -41,6 +41,12 @@ function isSchedulerEnabled(env = process.env) {
   return env.RUN_SCHEDULER === 'true'
 }
 
+// SendGrid's Event Webhook puts customArgs at the top level of each event;
+// older payloads nested them under custom_args. Read both.
+function sendgridEventArg(event, key) {
+  return event?.[key] || event?.custom_args?.[key] || null
+}
+
 function aiFollowupBatchSize(value, fallback = 2) {
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed)) return fallback
@@ -70,4 +76,5 @@ module.exports = {
   isCampaignClaimConflictError,
   isSchedulerEnabled,
   keysetPages,
+  sendgridEventArg,
 }
