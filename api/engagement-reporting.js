@@ -228,6 +228,7 @@ function createEngagementReporting({
   loadKnownCandidates = defaultLoadKnownCandidates,
   loadCandidatesBySalesforceIds = defaultLoadCandidatesBySalesforceIds,
   syncOpportunities = null,
+  syncAskQuestions = null,
 }) {
   const flights = new Map()
 
@@ -402,6 +403,19 @@ function createEngagementReporting({
           } catch (error) {
             opportunityComplete = false
             queryLimitations.push(`Opportunity coverage was unavailable: ${String(error?.message || error)}`)
+          }
+        }
+        // Ask Alconox answers are extra follow-up evidence, read by
+        // engagement_overview. A miss leaves the last mirror in place (answers
+        // never revert), so it is noted but doesn't make the run partial.
+        if (syncAskQuestions) {
+          try {
+            const askResult = await syncAskQuestions(clientId)
+            if (askResult?.supported && askResult.complete === false) {
+              queryLimitations.push('Ask Alconox questions exceeded the read budget; older answers may be missing.')
+            }
+          } catch (error) {
+            queryLimitations.push(`Ask Alconox questions were unavailable: ${String(error?.message || error)}`)
           }
         }
         // Batched so each call stays under the API role's 8s statement timeout

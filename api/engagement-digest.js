@@ -43,7 +43,7 @@ function table(head, rows) {
 function buildDigest(o, client, cfg) {
   const t = o.totals
   const days = o.days
-  const completed = new Set(['verified human follow-up', 'Salesforce activity recorded'])
+  const completed = new Set(['verified human follow-up', 'Salesforce activity recorded', 'Ask Alconox answered'])
   const attention = o.form_leads.filter(l => !completed.has(l.status))
   const completedRows = o.form_leads.filter(l => completed.has(l.status))
   const attentionTotal = t.form_leads_no_follow_up + t.form_leads_automation +
@@ -57,7 +57,7 @@ function buildDigest(o, client, cfg) {
     <td style="${T.td}"><a href="${SITE}/contacts/${l.id}" style="color:#1d4ed8;text-decoration:none">${esc(name(l))}</a>${l.company ? `<br><span style="${T.muted}">${esc(l.company)}</span>` : ''}</td>
     <td style="${T.td}">${esc(l.last_form)}${l.forms_in_window > 1 ? `<br><span style="${T.muted}">${l.forms_in_window} submissions</span>` : ''}</td>
     <td style="${T.td}">${fmtDate(l.last_form_on)}<br><span style="${T.muted}">${daysAgo(l.last_form_on)}</span></td>
-    <td style="${T.td}">${statusPill(l.status)}</td>
+    <td style="${T.td}">${statusPill(l.status)}${l.ask_status ? `<br><span style="${T.muted}">Ask Alconox: ${esc(l.ask_status)}</span>` : ''}</td>
     <td style="${T.td}">${l.opens_since_form} opens · ${l.clicks_since_form} clicks${l.genuine_reply_at ? ' · genuine reply' : ''}</td>
     <td style="${T.td}">${l.salesforce_last_activity_date ? fmtDate(l.salesforce_last_activity_date) : '<span style="color:#b45309">No activity date recorded</span>'}</td>
   </tr>`)
@@ -78,7 +78,7 @@ function buildDigest(o, client, cfg) {
   </tr>`)
 
   const summary = `${t.form_submissions} form submission${t.form_submissions === 1 ? '' : 's'} from ${t.form_leads} people in the last ${days} days. `
-    + `${t.form_leads_no_follow_up} have no follow-up recorded, ${t.form_leads_automation} have automation only, ${t.form_leads_within_grace} are within the follow-up window, ${t.form_leads_reply_waiting} have a reply awaiting a verified response, ${t.form_leads_human_follow_up} have verified human follow-up, and ${t.form_leads_salesforce_activity} have later Salesforce activity recorded. `
+    + `${t.form_leads_no_follow_up} have no follow-up recorded, ${t.form_leads_automation} have automation only, ${t.form_leads_within_grace} are within the follow-up window, ${t.form_leads_reply_waiting} have a reply awaiting a verified response, ${t.form_leads_human_follow_up} have verified human follow-up, ${t.form_leads_ask_answered || 0} had their Ask Alconox question answered, and ${t.form_leads_salesforce_activity} have later Salesforce activity recorded. `
     + `${t.form_leads_ambiguous} have ambiguous evidence and ${t.form_leads_unable_to_verify} could not be verified. `
     + `${t.open_opps} open opportunities, ${t.stalled} with no activity in 14+ days. `
     + `${t.replies} email repl${t.replies === 1 ? 'y' : 'ies'} in the window.`
@@ -88,10 +88,10 @@ function buildDigest(o, client, cfg) {
     <p style="${T.sub}">${esc(summary)} <a href="${pageUrl}" style="color:#1d4ed8">Open the full page</a>.</p>
 
     <h2 style="${T.h2}">Form leads needing follow-up or review (${attentionTotal})</h2>
-    <p style="${T.sub}">Evidence is separated into verified human follow-up, Salesforce's date-only activity rollup, automation, genuine replies, and unresolved or ambiguous coverage.</p>
+    <p style="${T.sub}">Evidence is separated into verified human follow-up, answered Ask Alconox questions, Salesforce's date-only activity rollup, automation, genuine replies, and unresolved or ambiguous coverage.</p>
     ${attention.length ? table(['Person', 'Form', 'Filled out', 'Status', 'Since the form', 'Salesforce activity date'], leadRows) : `<p style="${T.sub}">No leads need follow-up or evidence review in this verified cohort.</p>`}
     ${attention.length < attentionTotal ? `<p style="${T.sub};margin-top:8px">${attention.length} of ${attentionTotal} matching leads shown. Open the full page for the rest.</p>` : ''}
-    ${completedRows.length ? `<p style="${T.sub};margin-top:8px">${t.form_leads_human_follow_up} have verified human follow-up; ${t.form_leads_salesforce_activity} have later Salesforce activity recorded.</p>` : ''}
+    ${completedRows.length ? `<p style="${T.sub};margin-top:8px">${t.form_leads_human_follow_up} have verified human follow-up; ${t.form_leads_ask_answered || 0} had their Ask Alconox question answered; ${t.form_leads_salesforce_activity} have later Salesforce activity recorded.</p>` : ''}
 
     <h2 style="${T.h2}">Stalled opportunities (${t.stalled}${stalled.length < t.stalled ? `, newest ${stalled.length} shown` : ''})</h2>
     <p style="${T.sub}">Open in Salesforce with no activity or stage change in 14+ days. Newest first.</p>

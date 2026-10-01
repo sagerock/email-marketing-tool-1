@@ -28,6 +28,7 @@ const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('.
 const { listSignupLimiter, validateListSignup, upsertListContact } = require('./public-list-signup')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
+const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
 const { enrollDownloadFollowups } = require('./ai-followup-downloads')
 const aiChat = require('./ai-chat-followups')
 const { mountEngagementReporting } = require('./engagement-reporting')
@@ -8850,6 +8851,7 @@ const engagementReporting = mountEngagementReporting(app, {
     { supabase, getSalesforceConnection }, clientId, null,
     { authoritative: true, returnManifest: true }
   ),
+  syncAskQuestions: clientId => syncSalesforceAskQuestions({ supabase, getSalesforceConnection }, clientId),
 })
 // Engagement page API (client-scoped by the global /api middleware)
 require('./engagement')(app, { supabase, reporting: engagementReporting })

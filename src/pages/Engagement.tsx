@@ -19,14 +19,16 @@ type Totals = {
   form_leads_no_follow_up: number; form_leads_reply_waiting: number; form_leads_human_follow_up: number
   form_leads_salesforce_activity: number; form_leads_automation: number; form_leads_within_grace: number
   form_leads_ambiguous: number; form_leads_unable_to_verify: number
+  form_leads_ask_answered?: number; ask_synced_at?: string | null
   open_opps: number; stalled: number; opps_synced_at: string | null; contacts_synced_at: string | null
 }
 type FormLead = Person & {
   last_form: string; forms: string; last_form_on: string; first_form_on: string; forms_in_window: number
   opens_since_form: number; clicks_since_form: number; our_reply_at: string | null; sf_touched: boolean; open_opps: number
   auto_followups: number; last_auto_followup_at: string | null; genuine_reply_at: string | null
+  ask_name?: string | null; ask_status?: string | null; ask_answered_at?: string | null
   status: 'reply awaiting verified response' | 'no follow-up recorded' | 'automation only'
-    | 'new — within follow-up window' | 'verified human follow-up' | 'Salesforce activity recorded'
+    | 'new — within follow-up window' | 'verified human follow-up' | 'Salesforce activity recorded' | 'Ask Alconox answered'
     | 'same-day activity — sequence unknown' | 'future activity date — ambiguous'
     | 'outbound provenance unknown' | 'unable to verify'
 }
@@ -177,6 +179,7 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
     { key: 'reply awaiting verified response', label: 'Reply awaiting response', n: totals.form_leads_reply_waiting },
     { key: 'new — within follow-up window', label: 'Within follow-up window', n: totals.form_leads_within_grace },
     { key: 'verified human follow-up', label: 'Verified human follow-up', n: totals.form_leads_human_follow_up },
+    ...(totals.ask_synced_at ? [{ key: 'Ask Alconox answered' as LeadFilter, label: 'Ask Alconox answered', n: totals.form_leads_ask_answered ?? 0 }] : []),
     { key: 'Salesforce activity recorded', label: 'Salesforce activity recorded', n: totals.form_leads_salesforce_activity },
     { key: 'ambiguous', label: 'Ambiguous', n: totals.form_leads_ambiguous },
     { key: 'unable to verify', label: 'Unable to verify', n: totals.form_leads_unable_to_verify },
@@ -237,6 +240,7 @@ function FormLeadsTab({ rows, forms, totals }: { rows: FormLead[]; forms: { form
               <td className="py-2.5 px-4 text-sm text-gray-600 whitespace-nowrap">
                 {r.salesforce_last_activity_date ? fmtDate(r.salesforce_last_activity_date) : 'No activity date recorded'}
                 {r.our_reply_at && <div className="text-xs text-gray-400">verified human reply {relTime(r.our_reply_at)}</div>}
+                {r.ask_status && <div className="text-xs text-gray-400">Ask Alconox {r.ask_name}: {r.ask_status}</div>}
               </td>
               <td className="py-2.5 px-4 text-sm text-gray-600">{r.open_opps || '–'}</td>
             </tr>

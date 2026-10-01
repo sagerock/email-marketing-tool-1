@@ -27,6 +27,18 @@ appear as `unable to verify` (Sage, 2026-09-29). Interactive and
 Athena reads may reuse a recent partial snapshot for 15 minutes, preserving its
 coverage warning without repeating the same expensive Salesforce verification.
 
+Ask Alconox answers (migration 106, 2026-10-01). Each refresh also mirrors the
+last 120 days of `Ask_Alconox__c` questions into `salesforce_ask_questions`
+(`api/salesforce-ask-questions.js`). `engagement_overview` matches a form lead's
+question by Associated Lead/Contact ID or email, created on or after the form
+date. Status "Response Emailed" makes the lead `Ask Alconox answered`, which
+counts as follow-up and outranks date-only activity, automation, and unresolved
+lookups. A newer reply still waits. Salesforce keeps no date for the status
+change, so the record's LastModifiedDate stands in. If the sync misses, the
+previous mirror stays in use and the run records a limitation. It does not turn
+the run partial. Install with `node scripts/apply-ask-alconox-migration.mjs --apply`
+before deploying.
+
 Athena calls `POST /api/internal/engagement/report`. The request cannot select a
 tenant: the server binds it to `ASK_ENGAGEMENT_CLIENT_ID` and authenticates with
 `ASK_ENGAGEMENT_API_KEY`. The endpoint is unavailable unless

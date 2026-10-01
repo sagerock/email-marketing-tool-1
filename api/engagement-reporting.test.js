@@ -142,6 +142,25 @@ test('known-person refresh queries exact IDs, clears returned null, and records 
   assert.equal(conn.calls.every(soql => /Id IN/.test(soql)), true)
 })
 
+test('Ask Alconox sync runs before the evidence freeze and a failure is a noted limitation', async () => {
+  const supabase = fakeSupabase()
+  const conn = sfConnection({ Lead: [{ Id: LEAD, Email: 'p@example.com', CreatedDate: '2026-08-01T12:00:00Z' }] })
+  const order = []
+  const origRpc = supabase.rpc
+  supabase.rpc = async (name, params) => { order.push(name); return origRpc(name, params) }
+  const service = createEngagementReporting({
+    supabase,
+    getSalesforceConnection: async () => conn,
+    now: () => new Date('2026-10-01T16:00:00Z'),
+    loadKnownCandidates: async () => [{ id: 'local-1', salesforce_id: LEAD, record_type: 'lead', email: 'p@example.com' }],
+    syncAskQuestions: async () => { order.push('ask'); throw new Error('ask down') },
+  })
+  const run = await service.refreshSnapshot(CLIENT, { scope: 'known_people' })
+  assert.deepEqual(order, ['apply_engagement_snapshot', 'ask', 'freeze_engagement_snapshot_evidence'])
+  assert.equal(run.status, 'complete')
+  assert.ok(run.source_limitations.some(l => /Ask Alconox questions were unavailable: ask down/.test(l)))
+})
+
 test('a capped dashboard cohort is partial instead of silently complete', async () => {
   const supabase = fakeSupabase()
   const service = createEngagementReporting({

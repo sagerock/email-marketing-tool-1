@@ -83,6 +83,19 @@ test('digest send path fails closed before rendering when Salesforce coverage is
   }
 })
 
+test('an answered Ask Alconox question counts as follow-up, an open one stays flagged', () => {
+  const app = { post() {} }
+  const { buildDigest } = mountDigest(app, { supabase: {}, decryptClient: x => x, cron: null })
+  const o = overview()
+  o.totals.form_leads_ask_answered = 3
+  o.form_leads[0].ask_status = 'Reviewed'
+  o.form_leads.push({ ...o.form_leads[0], id: 'person-2', status: 'Ask Alconox answered', ask_status: 'Response Emailed' })
+  const rendered = buildDigest(o, { name: 'Alconox' }, {})
+  assert.doesNotMatch(rendered.html, /person-2/)
+  assert.match(rendered.html, /Ask Alconox: Reviewed/)
+  assert.match(rendered.html, /3 had their Ask Alconox question answered/)
+})
+
 test('only the scheduler service registers the Monday digest cron', () => {
   const app = { post() {} }
   const scheduled = []
