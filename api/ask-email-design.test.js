@@ -4,6 +4,7 @@ const assert = require('node:assert/strict')
 const {
   authorizedBearer,
   validateDraftRequest,
+  rewriteLegacySageRockLogoUrls,
   normalizeGeneratedDesign,
   createAskEmailDesignHandler,
   createEmailDesignDraft,
@@ -165,6 +166,17 @@ test('generated design requires compliance tags and rejects active content', () 
     }),
     /unsafe HTML/
   )
+})
+
+
+test('legacy SageRock WordPress logos are rewritten to the canonical site asset', () => {
+  const oldLogo = 'https://sagerock.com/wp-content/uploads/2024/05/sagerocklogo2024-300x70.png'
+  const oldPhoto = 'https://sagerock.com/wp-content/uploads/2024/05/team-photo.png'
+  const rewritten = rewriteLegacySageRockLogoUrls(`<img src="${oldLogo}"><img src="${oldPhoto}">`)
+
+  assert.match(rewritten, /https:\/\/sagerock\.com\/images\/sagerock-logo\.png/)
+  assert.match(rewritten, /https:\/\/sagerock\.com\/wp-content\/uploads\/2024\/05\/team-photo\.png/)
+  assert.doesNotMatch(rewritten, /sagerocklogo2024/)
 })
 
 
