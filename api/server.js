@@ -29,6 +29,7 @@ const { listSignupLimiter, validateListSignup, upsertListContact } = require('./
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
+const { syncAskThreads, SCHEDULED_DAYS: ASK_THREADS_DAYS } = require('./salesforce-ask-threads')
 const { enrollDownloadFollowups } = require('./ai-followup-downloads')
 const aiChat = require('./ai-chat-followups')
 const { mountEngagementReporting } = require('./engagement-reporting')
@@ -9999,6 +10000,28 @@ app.listen(PORT, () => {
   })
 
   console.log('✅ Daily Google Search Console sync cron job started (runs at 7:15 AM UTC)')
+
+  // Ask Alconox question text + matched answer emails (migration 107). Re-reads the last
+  // 180 days so long back-and-forths keep filling in. Orgs without the object are skipped.
+  cron.schedule('45 7 * * *', async () => {
+    try {
+      const { data: clients, error } = await supabase
+        .from('clients').select('id, name').not('salesforce_client_id', 'is', null)
+      if (error) throw error
+      for (const client of clients || []) {
+        try {
+          const stats = await syncAskThreads({ supabase, getSalesforceConnection }, client.id, { days: ASK_THREADS_DAYS })
+          if (stats.supported) console.log(`  ✅ Ask threads ${client.name}: ${stats.questions} question(s), ${stats.messages} message(s), answer found for ${stats.answeredFound}/${stats.answered}`)
+        } catch (clientErr) {
+          console.error(`  ❌ Ask threads sync failed for ${client.name}:`, clientErr.message)
+        }
+      }
+    } catch (error) {
+      console.error('❌ Daily Ask threads sync error:', error.message)
+    }
+  })
+
+  console.log('✅ Daily Ask Alconox threads sync cron job started (runs at 7:45 AM UTC)')
 
   // Member downloads → AI follow-ups. The daily 06:00 sync already does this;
   // hourly keeps step 1 close to the download instead of up to a day behind.
