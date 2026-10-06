@@ -12,7 +12,7 @@ function question(overrides) {
     Source_Form__c: 'Ask Alconox Form', Source_Code__c: 'Ask Alconox',
     Email_Address__c: ' Maria@Example.com', Associated_Lead__c: '00Q000000000001AAA',
     Associated_Contact__c: null, CreatedDate: '2026-09-18T12:40:13.000+0000',
-    LastModifiedDate: '2026-09-29T14:32:30.000+0000', LastModifiedBy: { Name: 'Michelle Modica' },
+    LastModifiedDate: '2026-09-29T14:32:30.000+0000', LastModifiedBy: { Name: 'Michelle Modica' }, OwnerId: '005000000000001AAA', Owner: { Name: 'Nick Di Grandi' },
     ...overrides,
   }
 }
@@ -69,6 +69,8 @@ test('maps a question with a normalized email and both Salesforce links', () => 
   assert.equal(row.status, 'Response Emailed')
   assert.equal(row.sf_lead_id, '00Q000000000001AAA')
   assert.equal(row.last_modified_by, 'Michelle Modica')
+  assert.equal(row.owner_name, 'Nick Di Grandi')
+  assert.equal(row.owner_id, '005000000000001AAA')
   assert.equal(row.visible_in_last_snapshot, true)
 })
 

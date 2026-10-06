@@ -15,6 +15,7 @@ const OBJECT = 'Ask_Alconox__c'
 const FIELDS = [
   'Id', 'Name', 'Status__c', 'Source_Form__c', 'Source_Code__c', 'Email_Address__c',
   'Associated_Lead__c', 'Associated_Contact__c', 'CreatedDate', 'LastModifiedDate', 'LastModifiedBy.Name',
+  'OwnerId', 'Owner.Name',
 ]
 const DEFAULT_DAYS = 120
 const MAX_RECORDS = 5000
@@ -37,6 +38,8 @@ function mapQuestion(q, clientId, verifiedAt) {
     sf_created_at: q.CreatedDate || null,
     sf_last_modified_at: q.LastModifiedDate || null,
     last_modified_by: q.LastModifiedBy?.Name || null,
+    owner_id: q.OwnerId || null,
+    owner_name: q.Owner?.Name || null,
     visible_in_last_snapshot: true,
     last_verified_at: verifiedAt,
   }

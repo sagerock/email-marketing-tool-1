@@ -49,7 +49,7 @@ async function syncAskThreads({ supabase, getSalesforceConnection, log = () => {
   try {
     questions = await all(conn, `SELECT Id, Name, Status__c, Source_Form__c, Source_Code__c, Email_Address__c,
     Associated_Lead__c, Associated_Contact__c, CreatedDate, LastModifiedDate, LastModifiedBy.Name,
-    Comments__c, Describe_the_current_cleaning_problem__c FROM Ask_Alconox__c ${where} ORDER BY CreatedDate`)
+    OwnerId, Owner.Name, Comments__c, Describe_the_current_cleaning_problem__c FROM Ask_Alconox__c ${where} ORDER BY CreatedDate`)
   } catch (error) {
     if (/Ask_Alconox__c' is not supported|INVALID_TYPE/i.test(String(error?.message || error))) return { supported: false }
     throw error
@@ -129,6 +129,7 @@ async function syncAskThreads({ supabase, getSalesforceConnection, log = () => {
       email: q.Email_Address__c ? String(q.Email_Address__c).toLowerCase().trim() : null,
       sf_lead_id: q.Associated_Lead__c || null, sf_contact_id: q.Associated_Contact__c || null,
       sf_created_at: q.CreatedDate, sf_last_modified_at: q.LastModifiedDate, last_modified_by: q.LastModifiedBy?.Name || null,
+      owner_id: q.OwnerId || null, owner_name: q.Owner?.Name || null,
       visible_in_last_snapshot: true, last_verified_at: now,
       question_text: [q.Comments__c, q.Describe_the_current_cleaning_problem__c].filter(Boolean).join('\n\n') || null,
       first_answer_at: answer?.m.at || null, first_answer_by: answer?.m.from || null, answer_match: answerMatch,
