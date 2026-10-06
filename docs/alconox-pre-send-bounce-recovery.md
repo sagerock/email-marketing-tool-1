@@ -41,3 +41,11 @@ on 2026-09-22 (`api/reconcile-bounces.js`, same method as the January cleanup):
 
 Related: `docs/` January write-up lives in the Jax memory note
 `jan-2026-cold-ip-bounce-event`; per-address reasons via `node api/sendgrid-lookup.js <email>`.
+
+## Done 2026-10-06
+
+Warmup confirmed on (since 2026-09-22). Cleared 16,492 June/July flags and tagged them
+`Recovered false bounce 2026-10`; skipped `--apply-blocked` (current blocks are recent, not
+cold-IP). The safe-send gate stays on, so only ~2,584 of them reach the Scoop (~15,600 total, not
+45K). Snapshot for revert: `backups/alconox-bounce-recovery-2026-10-06T131518949Z.json`. Full
+reasoning: `sagerock/clients/alconox/emails/LIST-HYGIENE.md` (2026-10-06 section).
