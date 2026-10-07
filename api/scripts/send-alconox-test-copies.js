@@ -12,11 +12,14 @@
  *
  * Run from api/:
  *   NODE_PATH=/home/sage/scripts/email-marketing-tool-1/api/node_modules \
- *     node scripts/send-alconox-postshow-test.js
+ *     node scripts/send-alconox-test-copies.js
  * Dry run (print plan, send nothing):
- *   DRY_RUN=1 NODE_PATH=... node scripts/send-alconox-postshow-test.js
+ *   DRY_RUN=1 NODE_PATH=... node scripts/send-alconox-test-copies.js
  *
  * Override the campaign with CAMPAIGN_ID=<uuid>.
+ *
+ * Do not rename this file to end in -test.js: `node --test` in api/ runs any
+ * file matching *-test.js, and on 2026-10-07 that sent these emails for real.
  */
 require('dotenv').config({ path: '../.env' });
 const { createClient } = require('@supabase/supabase-js');
