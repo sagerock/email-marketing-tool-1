@@ -117,15 +117,19 @@ changes, the model returns FIND/REPLACE pairs in an ```edits block (format and r
 block. The server applies edits (exact match, then whitespace-tolerant, always unique) and
 sends a `result` SSE event with the finished design. If any edit can't be applied, it asks the
 model once for the full email; if that fails too, the preview stays unchanged. Logs show
-`[email-builder] applied N targeted edit(s)` or `targeted edit failed`. Polaris drafts still
-use full generation. Tests: `api/email-builder-edits.test.js`, `scripts/test-builder-edits.cjs`.
+`[email-builder] applied N targeted edit(s)` or `targeted edit failed`. Polaris revisions
+(`sourceTemplateId`, no attached HTML) use the same edits since 2026-10-07 and fall back to a full
+regeneration if they don't apply or fail validation (`[ask-email-design] revision via ...`). Tests: `api/email-builder-edits.test.js`, `scripts/test-builder-edits.cjs`.
 
 Model and media (2026-10-07): the builder and the Brand Story interview run on Claude Sonnet 5.5
 (`api/email-builder-model.js`: effort `medium` for the builder, `low` for the interview,
 64K max tokens since thinking counts toward it, server-side refusal fallback). Override with
 `EMAIL_BUILDER_MODEL` / `EMAIL_BUILDER_EFFORT` on Railway to roll back without a deploy (set the
-model to `claude-sonnet-4-6`; fallbacks are only sent for 5.5). Polaris stays on Sonnet 4.6 because
-it forces `tool_choice`, which 5.5 rejects. The builder also attaches the client's 24 newest Media
+model to `claude-sonnet-4-6`; fallbacks are only sent for 5.5). Polaris uses the same model setting
+and media library since 2026-10-07: on 5.5 a full draft comes back via structured output
+(`output_config.format` JSON schema) because 5.5 rejects a forced `tool_choice`; rolled back to 4.6
+it uses the forced tool again. Real-model check before shipping: revision 5s (4 edits), new draft
+24s, both well under Ask's 150s timeout. The builder also attaches the client's 24 newest Media
 uploads (`api/builder-media.js`) to the first user message as 320px thumbnails labeled with exact
 URL and full size, cached in memory by key + ETag; the model picks images by what it sees and never
 invents URLs. Verified against the real model on Alderbrook before shipping.

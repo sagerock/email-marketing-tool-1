@@ -1,6 +1,9 @@
 const crypto = require('crypto')
 const { SHARED_HEAD_STYLES } = require('./email-templates')
 const { brandStoryPrompt } = require('./brand-story')
+const { BUILDER_MODEL, builderParams, replyText } = require('./email-builder-model')
+const { OUTPUT_FORMAT_PROMPT, currentEmailBlock, resolveDesign } = require('./email-builder-edits')
+const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
 
 const MAX_BRIEF_CHARS = 12000
 const MAX_NAME_CHARS = 160
@@ -90,7 +93,10 @@ function normalizeGeneratedDesign(input) {
   return { name, subject, preview_text: previewText, html_content: html }
 }
 
-function automatedBuilderPrompt(brandReference, referenceEmails, sourceTemplate, attachedHtml, attachmentImages, brandStory = '') {
+// editMode: a revision returned as targeted edits against the <current_email>
+// in the user message (same format as the interactive builder). Otherwise the
+// complete design comes back as one structured object.
+function automatedBuilderPrompt(brandReference, referenceEmails, sourceTemplate, attachedHtml, attachmentImages, brandStory = '', { editMode = false, media = false } = {}) {
   const brand = brandReference
     ? `\nBRAND REFERENCE (copy its visual system, not its wording):\n${brandReference}\n`
     : ''
@@ -99,7 +105,9 @@ function automatedBuilderPrompt(brandReference, referenceEmails, sourceTemplate,
     : ''
   return `You are the production email designer inside SageRock's email-marketing platform.
 Create one finished email design from the user's brief. This is a DESIGN DRAFT only. Never
-schedule or send anything. Return the finished design through the required tool.
+schedule or send anything. ${editMode
+    ? 'Return the revision as targeted edits, as described under OUTPUT FORMAT below. This request arrived by email, so never ask a question: always return the changes.'
+    : 'Return the finished design through the required tool or JSON object.'}
 
 EMAIL HTML RULES:
 - Produce a complete XHTML-compatible document from <!DOCTYPE> through </html>.
@@ -118,8 +126,13 @@ EMAIL HTML RULES:
 
 RESPONSIVE STYLE REFERENCE:
 ${SHARED_HEAD_STYLES}
-${brandStory ? `\n${brandStory}` : ''}${brand}${references}
-${sourceTemplate ? `REVISION OF AN EXISTING DRAFT:
+${brandStory ? `\n${brandStory}` : ''}${media ? `\n${MEDIA_PROMPT}\n` : ''}${brand}${references}
+${sourceTemplate && editMode ? `REVISION OF AN EXISTING DRAFT:
+The source design is the <current_email> in the user message. Apply the user's requested
+changes to it. Preserve all other copy, links, subject, preheader, and layout unless the
+requested changes require altering them.
+
+${OUTPUT_FORMAT_PROMPT}` : ''}${sourceTemplate && !editMode ? `REVISION OF AN EXISTING DRAFT:
 Apply the user's requested changes to the source design below. Preserve all other
 copy, links, subject, preheader, and layout unless the requested changes require
 altering them. Return the complete revised document as a NEW saved version.
@@ -139,7 +152,7 @@ ${JSON.stringify(attachmentImages)}` : ''}`
 async function getSingleClient(supabase, clientId) {
   const { data, error } = await supabase
     .from('clients')
-    .select('id, name, brand_reference_template_id, brand_story, brand_look')
+    .select('id, name, brand_reference_template_id, brand_story, brand_look, s3_prefix')
     .eq('id', clientId)
     .single()
   if (error || !data) throw new AskEmailDesignError('configured SageRock client was not found', 500)
@@ -200,6 +213,7 @@ async function createEmailDesignDraft({
   attachmentImages = [],
   requestKey,
   anthropic,
+  media = defaultMedia,
 }) {
   const digest = crypto.createHash('sha256')
     .update(`${clientId}:${requestKey}`)
@@ -237,31 +251,46 @@ async function createEmailDesignDraft({
   const brandReference = templateContext('brand_reference', brandTemplate)
   const references = referenceTemplates.map(t => templateContext('reference_email', t))
 
-  const response = await anthropic.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 16384,
-    system: automatedBuilderPrompt(brandReference, references, sourceTemplate, attachedHtml, attachmentImages, brandStoryPrompt(client)),
-    messages: [{ role: 'user', content: brief }],
-    tools: [{
-      name: 'save_email_design_draft',
-      description: 'Return the complete production-ready email design draft.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          name: { type: 'string' },
-          subject: { type: 'string' },
-          preview_text: { type: 'string' },
-          html_content: { type: 'string' },
-        },
-        required: ['name', 'subject', 'preview_text', 'html_content'],
-      },
-    }],
-    tool_choice: { type: 'tool', name: 'save_email_design_draft' },
-  })
-  const toolUse = response.content?.find(block =>
-    block.type === 'tool_use' && block.name === 'save_email_design_draft'
-  )
-  const design = normalizeGeneratedDesign(toolUse?.input)
+  const mediaBlocks = await media(client)
+  const storyBlock = brandStoryPrompt(client)
+  const promptFor = editMode => automatedBuilderPrompt(brandReference, references, sourceTemplate, attachedHtml,
+    attachmentImages, storyBlock, { editMode, media: mediaBlocks.length > 0 })
+
+  // Revisions first try targeted edits against the saved source, which keeps
+  // everything the requester didn't ask about byte-for-byte and returns much
+  // faster. An attached document means a rebuild, so it goes straight to full.
+  let design = null
+  if (sourceTemplate && !attachedHtml) {
+    const current = {
+      html_content: sourceTemplate.html_content,
+      subject: sourceTemplate.subject || '',
+      preview_text: sourceTemplate.preview_text || '',
+    }
+    const reply = await generateText(anthropic, promptFor(true), [
+      ...mediaBlocks,
+      { type: 'text', text: brief },
+      { type: 'text', text: currentEmailBlock(current) },
+    ])
+    const resolved = resolveDesign(reply, current)
+    try {
+      if (resolved.kind === 'edits' || resolved.kind === 'full') {
+        design = normalizeGeneratedDesign({
+          name: resolved.design.name || requestedName || sourceTemplate.name,
+          subject: resolved.design.subject,
+          preview_text: resolved.design.preview_text,
+          html_content: resolved.design.html_content,
+        })
+        console.log(`[ask-email-design] revision via ${resolved.kind === 'edits' ? `${resolved.count} targeted edit(s)` : 'full rewrite'}`)
+      }
+    } catch (err) {
+      console.warn(`[ask-email-design] revision result rejected (${err.message}); regenerating in full`)
+    }
+    if (!design) console.warn(`[ask-email-design] targeted revision unusable (${resolved.reason || resolved.kind}); regenerating in full`)
+  }
+  if (!design) {
+    const content = mediaBlocks.length ? [...mediaBlocks, { type: 'text', text: brief }] : brief
+    design = normalizeGeneratedDesign(await generateFullDesign(anthropic, promptFor(false), content))
+  }
   const chosenName = requestedName || design.name
   const storedName = /^polaris draft\b/i.test(chosenName)
     ? chosenName
@@ -293,6 +322,70 @@ async function createEmailDesignDraft({
     preview_html: previewHtml(design.html_content),
     review_url: `${baseUrl}/email-builder?templateId=${created.id}`,
   }
+}
+
+const DESIGN_FIELDS = {
+  type: 'object',
+  properties: {
+    name: { type: 'string' },
+    subject: { type: 'string' },
+    preview_text: { type: 'string' },
+    html_content: { type: 'string' },
+  },
+  required: ['name', 'subject', 'preview_text', 'html_content'],
+}
+
+// Sonnet 4.6 (the EMAIL_BUILDER_MODEL rollback) has no structured outputs;
+// Sonnet 5.5 rejects a forced tool_choice. Each gets the path it supports.
+const usesForcedTool = () => BUILDER_MODEL === 'claude-sonnet-4-6'
+
+async function generateText(anthropic, system, content, format = null) {
+  if (usesForcedTool()) {
+    const response = await anthropic.messages.create({
+      model: BUILDER_MODEL, max_tokens: 16384, system, messages: [{ role: 'user', content }],
+    })
+    return replyText(response)
+  }
+  const params = builderParams()
+  if (format) params.output_config = { ...params.output_config, format }
+  // Streamed so a long design doesn't hit the SDK's request timeout.
+  const stream = anthropic.beta.messages.stream({ ...params, system, messages: [{ role: 'user', content }] })
+  return replyText(await stream.finalMessage())
+}
+
+async function generateFullDesign(anthropic, system, content) {
+  if (usesForcedTool()) {
+    const response = await anthropic.messages.create({
+      model: BUILDER_MODEL,
+      max_tokens: 16384,
+      system,
+      messages: [{ role: 'user', content }],
+      tools: [{
+        name: 'save_email_design_draft',
+        description: 'Return the complete production-ready email design draft.',
+        input_schema: DESIGN_FIELDS,
+      }],
+      tool_choice: { type: 'tool', name: 'save_email_design_draft' },
+    })
+    return response.content?.find(block =>
+      block.type === 'tool_use' && block.name === 'save_email_design_draft'
+    )?.input
+  }
+  const text = await generateText(anthropic, system, content, {
+    type: 'json_schema',
+    schema: { ...DESIGN_FIELDS, additionalProperties: false },
+  })
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new AskEmailDesignError('the email builder returned an unreadable design', 502)
+  }
+}
+
+// The client's media library as labeled thumbnails (empty without a prefix).
+function defaultMedia(client) {
+  const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
+  return mediaLibraryBlocks({ s3, bucket: BUCKET, s3Prefix: client?.s3_prefix, publicUrlForKey })
 }
 
 function createAskEmailDesignHandler({
