@@ -28,6 +28,9 @@ const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('.
 const { listSignupLimiter, validateListSignup, upsertListContact } = require('./public-list-signup')
 const { BrandStoryError, normalizeBrandStoryInput, brandStoryPrompt, runBrandInterview } = require('./brand-story')
 const { optimizeImage, withExtension } = require('./image-optimize')
+const {
+  OUTPUT_FORMAT_PROMPT, currentEmailBlock, normalizeCurrentEmail, resolveDesign, retryAsFullPrompt,
+} = require('./email-builder-edits')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
@@ -2555,6 +2558,8 @@ app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
 
   try {
     const { clientId, messages, referenceTemplateIds } = req.body
+    // The design currently in the preview; edits are applied to it.
+    const currentEmail = normalizeCurrentEmail(req.body.currentEmail)
 
     if (!clientId || !messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'clientId and messages are required' })
@@ -2622,21 +2627,10 @@ app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
 
 ROLE:
 - You are conversational and helpful. Discuss design choices, ask clarifying questions, suggest improvements.
-- When the user asks you to create or modify an email, produce the complete HTML.
-- When you produce or update HTML, ALWAYS include the full complete email HTML — never partial snippets.
+- When the user asks you to create or modify an email, produce it in one of the two formats below: targeted edits for changes to the current email, the full HTML for new emails and redesigns.
 - Learn the client's brand style from any reference emails provided. Match their colors, fonts, header/footer patterns, and overall aesthetic.
 
-OUTPUT FORMAT:
-- For conversational responses (questions, suggestions, no HTML changes): just respond normally with helpful text.
-- When you generate or modify HTML, respond with your explanation FIRST, then include a JSON block fenced with triple backticks and "json" language tag:
-\`\`\`json
-{
-  "subject": "the email subject line",
-  "preview_text": "preview text for email clients (1-2 sentences)",
-  "html_content": "the complete HTML email from <!DOCTYPE to </html>"
-}
-\`\`\`
-- ALWAYS include the complete HTML from <!DOCTYPE> to </html> — never partial updates or diffs.
+${OUTPUT_FORMAT_PROMPT}
 
 CRITICAL EMAIL HTML RULES FOR CROSS-CLIENT COMPATIBILITY:
 - Use XHTML 1.0 Transitional doctype
@@ -2743,6 +2737,15 @@ DESIGN BEST PRACTICES:
       Boolean(referenceTemplateIds && referenceTemplateIds.length > 0)
     )
 
+    // The current design rides on the newest user turn, AFTER its cache
+    // breakpoint: next turn the history copy of this message has no design
+    // attached, so the cached prefix still matches up to the breakpoint.
+    const last = claudeMessages[claudeMessages.length - 1]
+    if (currentEmail && last?.role === 'user') {
+      const blocks = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content
+      last.content = [...blocks, { type: 'text', text: currentEmailBlock(currentEmail) }]
+    }
+
     // Set up SSE streaming
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -2750,43 +2753,62 @@ DESIGN BEST PRACTICES:
       'Connection': 'keep-alive',
     })
 
-    const stream = anthropic.messages.stream({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 16384,
-      // Cached system block: gives every turn (even after the history window
-      // slides) a stable read point covering the design-rules prompt.
-      system: [{
-        type: 'text',
-        text: systemPrompt,
-        cache_control: { type: 'ephemeral' },
-      }],
-      messages: claudeMessages,
-    })
-
-    // Cache telemetry: cache_read > 0 means the prompt cache is working;
-    // all-zero cache fields on repeat turns means a silent no-op
-    stream.on('finalMessage', (m) => {
-      const u = m.usage || {}
+    const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`)
+    const runStream = async (conversation) => {
+      const stream = anthropic.messages.stream({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 16384,
+        // Cached system block: gives every turn (even after the history window
+        // slides) a stable read point covering the design-rules prompt.
+        system: [{
+          type: 'text',
+          text: systemPrompt,
+          cache_control: { type: 'ephemeral' },
+        }],
+        messages: conversation,
+      })
+      stream.on('text', (text) => send({ type: 'text', text }))
+      stream.on('error', () => {}) // surfaced through finalMessage() below
+      const message = await stream.finalMessage()
+      // Cache telemetry: cache_read > 0 means the prompt cache is working;
+      // all-zero cache fields on repeat turns means a silent no-op
+      const u = message.usage || {}
       console.log(
         `[email-builder] tokens: input=${u.input_tokens ?? 0} output=${u.output_tokens ?? 0} ` +
         `cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0}`
       )
-    })
+      return message.content.filter(b => b.type === 'text').map(b => b.text).join('')
+    }
 
-    stream.on('text', (text) => {
-      res.write(`data: ${JSON.stringify({ type: 'text', text })}\n\n`)
-    })
-
-    stream.on('end', () => {
-      res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`)
-      res.end()
-    })
-
-    stream.on('error', (error) => {
+    try {
+      const reply = await runStream(claudeMessages)
+      let resolved = resolveDesign(reply, currentEmail)
+      if (resolved.kind === 'edits') {
+        console.log(`[email-builder] applied ${resolved.count} targeted edit(s)`)
+      }
+      if (resolved.kind === 'failed') {
+        // Never guess at a bad edit: ask for the complete email instead.
+        console.warn(`[email-builder] targeted edit failed (${resolved.reason}); retrying as full HTML`)
+        send({ type: 'status', text: 'That quick edit didn’t line up, so I’m rebuilding the full email…' })
+        const retry = await runStream([
+          ...claudeMessages,
+          { role: 'assistant', content: reply },
+          { role: 'user', content: retryAsFullPrompt(resolved.reason) },
+        ])
+        const full = resolveDesign(retry, null)
+        resolved = full.kind === 'full' ? full : { kind: 'failed', reason: resolved.reason }
+      }
+      if (resolved.kind === 'edits' || resolved.kind === 'full') {
+        send({ type: 'result', mode: resolved.kind, edit_count: resolved.count || 0, design: resolved.design })
+      } else if (resolved.kind === 'failed') {
+        send({ type: 'result', mode: 'failed', reason: resolved.reason })
+      }
+      send({ type: 'done' })
+    } catch (error) {
       console.error('Email builder streaming error:', error)
-      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Generation failed' })}\n\n`)
-      res.end()
-    })
+      send({ type: 'error', error: 'Generation failed' })
+    }
+    res.end()
 
   } catch (error) {
     console.error('Email builder chat error:', error)

@@ -107,6 +107,19 @@ me" (`POST /api/brand-story/interview`) asks a few questions and returns a draft
 before saving; the model may suggest colors and fonts but never a logo URL. Browser test:
 `scripts/test-brand-story.cjs`. Alderbrook (sample) was seeded from Sage's first builder chat.
 
+### Builder edits are targeted, not full rewrites
+
+Since 2026-10-07 the interactive builder (`/api/email-builder/chat`) sends the design in the
+preview once per request as `currentEmail`, attached to the newest user turn after its cache
+breakpoint; earlier designs are dropped from history (`[email design output omitted]`). For
+changes, the model returns FIND/REPLACE pairs in an ```edits block (format and rules in
+`api/email-builder-edits.js`); new emails and redesigns still come back as the full ```json
+block. The server applies edits (exact match, then whitespace-tolerant, always unique) and
+sends a `result` SSE event with the finished design. If any edit can't be applied, it asks the
+model once for the full email; if that fails too, the preview stays unchanged. Logs show
+`[email-builder] applied N targeted edit(s)` or `targeted edit failed`. Polaris drafts still
+use full generation. Tests: `api/email-builder-edits.test.js`, `scripts/test-builder-edits.cjs`.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

@@ -16,6 +16,14 @@ interface ChatMessage {
   htmlContent?: string
   subject?: string
   previewText?: string
+  editCount?: number
+}
+
+interface DesignResult {
+  mode: 'edits' | 'full' | 'failed'
+  edit_count?: number
+  reason?: string
+  design?: { html_content: string; subject?: string; preview_text?: string }
 }
 
 interface TemplateIndexItem {
@@ -51,6 +59,7 @@ export default function EmailBuilder() {
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingText, setStreamingText] = useState('')
+  const [streamStatus, setStreamStatus] = useState('')
 
   // Preview state
   const [currentHtml, setCurrentHtml] = useState('')
@@ -276,8 +285,9 @@ export default function EmailBuilder() {
   }
 
   const getConversationalText = (text: string) => {
-    // Strip the JSON block to get just the conversational part
-    return text.replace(/```json\s*[\s\S]*?```/, '').trim()
+    // Strip the design block (full JSON or targeted edits) to get just the
+    // conversational part. A block still streaming has no closing fence yet.
+    return text.split(/```(?:json|edits)/)[0].trim()
   }
 
   const handleSend = async () => {
@@ -295,12 +305,14 @@ export default function EmailBuilder() {
     setIsStreaming(true)
     setStreamingText('')
 
-    // Build message history for API (last 10 messages)
+    // Build message history for API (last 10 messages). Earlier designs are
+    // left out: the current one is sent once as currentEmail, and the AI
+    // returns targeted edits against it.
     const allMessages = [...messages, userMessage]
     const apiMessages = allMessages.slice(-10).map(m => ({
       role: m.role,
-      content: m.role === 'assistant'
-        ? (m.htmlContent ? `${m.content}\n\n\`\`\`json\n${JSON.stringify({ subject: m.subject, preview_text: m.previewText, html_content: m.htmlContent })}\n\`\`\`` : m.content)
+      content: m.role === 'assistant' && m.htmlContent
+        ? `${m.content}\n\n[email design output omitted]`
         : m.content,
     }))
 
@@ -311,6 +323,9 @@ export default function EmailBuilder() {
           clientId: selectedClient.id,
           messages: apiMessages,
           referenceTemplateIds: referenceTemplateIds.length > 0 ? referenceTemplateIds : undefined,
+          currentEmail: currentHtml
+            ? { html_content: currentHtml, subject: currentSubject, preview_text: currentPreviewText }
+            : undefined,
         }),
       })
 
@@ -328,6 +343,7 @@ export default function EmailBuilder() {
       const decoder = new TextDecoder()
       let buffer = ''
       let accumulated = ''
+      let result: DesignResult | null = null
 
       while (true) {
         const { done, value } = await reader.read()
@@ -344,6 +360,10 @@ export default function EmailBuilder() {
               if (data.type === 'text') {
                 accumulated += data.text
                 setStreamingText(accumulated)
+              } else if (data.type === 'status') {
+                setStreamStatus(data.text)
+              } else if (data.type === 'result') {
+                result = data as DesignResult
               } else if (data.type === 'error') {
                 throw new Error(data.error)
               }
@@ -355,25 +375,30 @@ export default function EmailBuilder() {
         }
       }
 
-      // Process the complete response
-      const jsonData = extractJsonFromText(accumulated)
+      // Process the complete response. The server resolves targeted edits
+      // against the current design; older servers only stream a JSON block.
+      const design = result?.design || extractJsonFromText(accumulated)
       const conversationalText = getConversationalText(accumulated)
+      const failed = result?.mode === 'failed'
 
       const assistantMessage: ChatMessage = {
         id: crypto.randomUUID(),
         role: 'assistant',
-        content: conversationalText || (jsonData ? 'Here\'s the updated email design.' : accumulated),
-        htmlContent: jsonData?.html_content,
-        subject: jsonData?.subject,
-        previewText: jsonData?.preview_text,
+        content: failed
+          ? `${conversationalText ? conversationalText + '\n\n' : ''}I couldn’t apply that change cleanly, so the preview is unchanged. Could you try rephrasing it?`
+          : conversationalText || (design ? 'Here\'s the updated email design.' : accumulated),
+        htmlContent: design?.html_content,
+        subject: design?.subject,
+        previewText: design?.preview_text,
+        editCount: result?.mode === 'edits' ? result.edit_count : undefined,
       }
 
       setMessages(prev => [...prev, assistantMessage])
 
-      if (jsonData?.html_content) {
-        setCurrentHtml(jsonData.html_content)
-        setCurrentSubject(jsonData.subject || '')
-        setCurrentPreviewText(jsonData.preview_text || '')
+      if (design?.html_content) {
+        setCurrentHtml(design.html_content)
+        setCurrentSubject(design.subject || '')
+        setCurrentPreviewText(design.preview_text || '')
       }
     } catch (err: any) {
       const errorMessage: ChatMessage = {
@@ -385,6 +410,7 @@ export default function EmailBuilder() {
     } finally {
       setIsStreaming(false)
       setStreamingText('')
+      setStreamStatus('')
     }
   }
 
@@ -663,6 +689,7 @@ export default function EmailBuilder() {
                     : <div className="whitespace-pre-wrap">{msg.content}</div>}
                   {msg.htmlContent && (
                     <div className="mt-2 text-xs text-green-600 font-medium">
+                      {msg.editCount ? <span className="mr-2 text-gray-500">Quick edit · {msg.editCount} change{msg.editCount === 1 ? '' : 's'}</span> : null}
                       {msg.htmlContent === currentHtml ? 'Current preview' : <button disabled={isStreaming || saving} onClick={() => {
                         setCurrentHtml(msg.htmlContent!)
                         setCurrentSubject(msg.subject || '')
@@ -684,8 +711,12 @@ export default function EmailBuilder() {
                 <div className="flex-1 bg-gray-50 rounded-lg p-3 text-sm text-gray-700">
                   {streamingText ? (
                     <div>
-                      <ChatMarkdown content={getConversationalText(streamingText.split('```json')[0])} />
-                      {streamingText.includes('```json') && (
+                      <ChatMarkdown content={getConversationalText(streamingText)} />
+                      {streamStatus ? (
+                        <span className="mt-1 block text-xs text-purple-500">{streamStatus}</span>
+                      ) : streamingText.includes('```edits') ? (
+                        <span className="mt-1 block text-xs text-purple-500">applying changes...</span>
+                      ) : streamingText.includes('```json') && (
                         <span className="mt-1 block text-xs text-purple-500">generating HTML...</span>
                       )}
                     </div>
