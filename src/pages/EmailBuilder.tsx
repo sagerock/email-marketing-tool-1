@@ -6,6 +6,7 @@ import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
 import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
+import ChatMarkdown from '../components/ui/ChatMarkdown'
 import { cn } from '../lib/utils'
 
 interface ChatMessage {
@@ -635,7 +636,9 @@ export default function EmailBuilder() {
                   'flex-1 rounded-lg p-3 text-sm max-w-[85%]',
                   msg.role === 'assistant' ? 'bg-gray-50 text-gray-700' : 'bg-blue-50 text-blue-900'
                 )}>
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  {msg.role === 'assistant'
+                    ? <ChatMarkdown content={msg.content} />
+                    : <div className="whitespace-pre-wrap">{msg.content}</div>}
                   {msg.htmlContent && (
                     <div className="mt-2 text-xs text-green-600 font-medium">
                       {msg.htmlContent === currentHtml ? 'Current preview' : <button disabled={isStreaming || saving} onClick={() => {
@@ -658,10 +661,10 @@ export default function EmailBuilder() {
                 </div>
                 <div className="flex-1 bg-gray-50 rounded-lg p-3 text-sm text-gray-700">
                   {streamingText ? (
-                    <div className="whitespace-pre-wrap">
-                      {getConversationalText(streamingText) || streamingText.substring(0, 500)}
+                    <div>
+                      <ChatMarkdown content={getConversationalText(streamingText.split('```json')[0])} />
                       {streamingText.includes('```json') && (
-                        <span className="text-xs text-purple-500 ml-1">generating HTML...</span>
+                        <span className="mt-1 block text-xs text-purple-500">generating HTML...</span>
                       )}
                     </div>
                   ) : (
