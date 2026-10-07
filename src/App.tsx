@@ -23,6 +23,7 @@ import BounceRecovery from './pages/BounceRecovery'
 import ContactDetail from './pages/ContactDetail'
 import EmailBuilder from './pages/EmailBuilder'
 import Media from './pages/Media'
+import BrandStory from './pages/BrandStory'
 import Engagement from './pages/Engagement'
 import DebugAuth from './pages/DebugAuth'
 
@@ -83,6 +84,7 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            <Route path="/brand-story" element={<ProtectedRoute><Layout><BrandStory /></Layout></ProtectedRoute>} />
             <Route
               path="/media"
               element={

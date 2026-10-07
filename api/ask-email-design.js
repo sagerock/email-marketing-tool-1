@@ -1,5 +1,6 @@
 const crypto = require('crypto')
 const { SHARED_HEAD_STYLES } = require('./email-templates')
+const { brandStoryPrompt } = require('./brand-story')
 
 const MAX_BRIEF_CHARS = 12000
 const MAX_NAME_CHARS = 160
@@ -89,7 +90,7 @@ function normalizeGeneratedDesign(input) {
   return { name, subject, preview_text: previewText, html_content: html }
 }
 
-function automatedBuilderPrompt(brandReference, referenceEmails, sourceTemplate, attachedHtml, attachmentImages) {
+function automatedBuilderPrompt(brandReference, referenceEmails, sourceTemplate, attachedHtml, attachmentImages, brandStory = '') {
   const brand = brandReference
     ? `\nBRAND REFERENCE (copy its visual system, not its wording):\n${brandReference}\n`
     : ''
@@ -117,7 +118,7 @@ EMAIL HTML RULES:
 
 RESPONSIVE STYLE REFERENCE:
 ${SHARED_HEAD_STYLES}
-${brand}${references}
+${brandStory ? `\n${brandStory}` : ''}${brand}${references}
 ${sourceTemplate ? `REVISION OF AN EXISTING DRAFT:
 Apply the user's requested changes to the source design below. Preserve all other
 copy, links, subject, preheader, and layout unless the requested changes require
@@ -138,7 +139,7 @@ ${JSON.stringify(attachmentImages)}` : ''}`
 async function getSingleClient(supabase, clientId) {
   const { data, error } = await supabase
     .from('clients')
-    .select('id, name, brand_reference_template_id')
+    .select('id, name, brand_reference_template_id, brand_story, brand_look')
     .eq('id', clientId)
     .single()
   if (error || !data) throw new AskEmailDesignError('configured SageRock client was not found', 500)
@@ -239,7 +240,7 @@ async function createEmailDesignDraft({
   const response = await anthropic.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 16384,
-    system: automatedBuilderPrompt(brandReference, references, sourceTemplate, attachedHtml, attachmentImages),
+    system: automatedBuilderPrompt(brandReference, references, sourceTemplate, attachedHtml, attachmentImages, brandStoryPrompt(client)),
     messages: [{ role: 'user', content: brief }],
     tools: [{
       name: 'save_email_design_draft',

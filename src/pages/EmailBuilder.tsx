@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
@@ -108,6 +108,20 @@ export default function EmailBuilder() {
 
   // Media picker state
   const [pickerOpen, setPickerOpen] = useState(false)
+
+  // Whether this client has a Brand Story; null until known
+  const [hasBrandStory, setHasBrandStory] = useState<boolean | null>(null)
+
+  useEffect(() => {
+    if (!selectedClient) return
+    let cancelled = false
+    setHasBrandStory(null)
+    apiFetch(`/api/brand-story?clientId=${selectedClient.id}`)
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => { if (!cancelled && data) setHasBrandStory(Boolean(data.brand_story?.trim())) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [selectedClient])
 
   // Fetch template index and folders on mount
   useEffect(() => {
@@ -596,6 +610,14 @@ export default function EmailBuilder() {
                     <li>Iterate on the current design ("make the button bigger", "change the colors")</li>
                   </ul>
                   <p className="mt-2">What would you like to build?</p>
+                  {hasBrandStory === false && (
+                    <p className="mt-2 rounded-md bg-amber-50 px-2 py-1.5 text-xs text-amber-800">
+                      Tip: <Link to="/brand-story" className="font-medium underline">tell me {selectedClient?.name}’s story</Link> first, and every email will start out sounding like you.
+                    </p>
+                  )}
+                  {hasBrandStory && (
+                    <p className="mt-2 text-xs text-gray-500">Using {selectedClient?.name}’s <Link to="/brand-story" className="underline">Brand Story</Link>.</p>
+                  )}
                   {starters.length > 0 && (
                     <div className="mt-3 pt-3 border-t border-gray-200">
                       <p className="text-xs font-medium text-gray-500 mb-2">Start from a layout</p>

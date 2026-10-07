@@ -26,6 +26,7 @@ require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
 const { listSignupLimiter, validateListSignup, upsertListContact } = require('./public-list-signup')
+const { BrandStoryError, normalizeBrandStoryInput, brandStoryPrompt, runBrandInterview } = require('./brand-story')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
@@ -2476,6 +2477,71 @@ app.get('/api/email-builder/template/:id', authenticateUser, async (req, res) =>
   }
 })
 
+// ---- Brand Story (migration 109) ----
+// The client's own story + light look, read by every email generation.
+// Written here rather than from the browser because clients-table RLS only
+// lets super admins update; the /api middleware's validateClientAccess pins
+// client admins to their own client.
+
+app.get('/api/brand-story', authenticateUser, async (req, res) => {
+  const { clientId } = req.query
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+  const { data, error } = await supabase
+    .from('clients')
+    .select('id, name, brand_story, brand_look, brand_story_updated_at')
+    .eq('id', clientId)
+    .single()
+  if (error || !data) return res.status(404).json({ error: 'Client not found' })
+  res.json(data)
+})
+
+app.put('/api/brand-story', authenticateUser, async (req, res) => {
+  const { clientId } = req.body
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+  try {
+    const fields = normalizeBrandStoryInput(req.body)
+    const { data, error } = await supabase
+      .from('clients')
+      .update({ ...fields, brand_story_updated_at: new Date().toISOString() })
+      .eq('id', clientId)
+      .select('id, name, brand_story, brand_look, brand_story_updated_at')
+      .single()
+    if (error || !data) throw error || new Error('Client not found')
+    res.json(data)
+  } catch (error) {
+    if (error instanceof BrandStoryError) return res.status(error.status).json({ error: error.message })
+    console.error('Brand story save error:', error)
+    res.status(500).json({ error: 'Failed to save the brand story' })
+  }
+})
+
+app.post('/api/brand-story/interview', authenticateUser, async (req, res) => {
+  const now = Date.now()
+  emailBuilderRateLimit.timestamps = emailBuilderRateLimit.timestamps.filter(t => now - t < 60000)
+  if (emailBuilderRateLimit.timestamps.length >= 10) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a minute.' })
+  }
+  emailBuilderRateLimit.timestamps.push(now)
+
+  const { clientId, messages } = req.body
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  try {
+    const { data: client, error } = await supabase
+      .from('clients')
+      .select('name, brand_story, brand_look')
+      .eq('id', clientId)
+      .single()
+    if (error || !client) return res.status(404).json({ error: 'Client not found' })
+    const Anthropic = require('@anthropic-ai/sdk')
+    res.json(await runBrandInterview({ anthropic: new Anthropic(), client, messages }))
+  } catch (error) {
+    if (error instanceof BrandStoryError) return res.status(error.status).json({ error: error.message })
+    console.error('Brand story interview error:', error)
+    res.status(500).json({ error: 'The interview hit a snag. Please try again.' })
+  }
+})
+
 // Chat endpoint with SSE streaming
 app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
   // Rate limiting: 10 requests per minute
@@ -2512,9 +2578,10 @@ app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
     let brandReferenceContext = ''
     const { data: clientRow } = await supabase
       .from('clients')
-      .select('brand_reference_template_id')
+      .select('name, brand_reference_template_id, brand_story, brand_look')
       .eq('id', clientId)
       .single()
+    const brandStoryContext = brandStoryPrompt(clientRow)
 
     if (clientRow?.brand_reference_template_id) {
       const { data: brandTemplate } = await supabase
@@ -2614,7 +2681,7 @@ Every email MUST include:
 2. A physical mailing address using {{mailing_address}}
 Remind the user if they ask you to remove these.
 
-${brandReferenceContext ? `BRAND REFERENCE:
+${brandStoryContext ? `${brandStoryContext}\n` : ''}${brandReferenceContext ? `BRAND REFERENCE:
 The user message may include a <brand_reference> block containing the client's current canonical brand template. Treat it as the default visual style: match its colors, fonts, header/footer, button styling, layout structure, and overall aesthetic in any email you produce, unless the user explicitly asks for a different style. The brand reference is a style guide, not the email content — copy its structure and styling, not its words.\n` : ''}${templateListStr ? `AVAILABLE PREVIOUS EMAILS (the user may reference these by name):\n${templateListStr}\n\nWhen the user references a previous email, they may provide its HTML as a <reference_email> block. Use it as a starting point or inspiration as directed.` : ''}
 
 OUTLOOK / WORD-ENGINE HARD RULES (these bugs are INVISIBLE in browser preview — they only appear in classic desktop Outlook on Windows, which renders with Microsoft Word, not a browser engine. Follow these exactly):

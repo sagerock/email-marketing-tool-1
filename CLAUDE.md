@@ -94,6 +94,19 @@ accessible client, and shows an explicit loading/error state instead of silently
 leaving the preview empty. `scripts/test-newsletter-review.cjs` exercises this
 flow in Chromium with mocked authentication and data (see its build command).
 
+### Brand Story
+
+Each client can tell its own story at `/brand-story` (since 2026-10-07, migration 109):
+free-text `clients.brand_story` plus an optional `clients.brand_look` jsonb (logo URL from
+Media, up to eight named colors, fonts, website). `api/brand-story.js` validates input and
+builds the prompt block that both the interactive builder (`/api/email-builder/chat`) and
+Polaris drafts (`ask-email-design.js`) include on every generation. The story sets voice and
+feel; a `brand_reference_template_id` email still wins on layout. Reads and writes go through
+`GET/PUT /api/brand-story`, because clients-table RLS only lets super admins update. "Interview
+me" (`POST /api/brand-story/interview`) asks a few questions and returns a draft the user edits
+before saving; the model may suggest colors and fonts but never a logo URL. Browser test:
+`scripts/test-brand-story.cjs`. Alderbrook (sample) was seeded from Sage's first builder chat.
+
 ### Public List Signups
 
 `POST /api/public/list-signup` (body: `email`, optional `first_name`, `list`) lets a
