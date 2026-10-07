@@ -30,6 +30,7 @@ const { BrandStoryError, normalizeBrandStoryInput, brandStoryPrompt, runBrandInt
 const { optimizeImage, withExtension } = require('./image-optimize')
 const {
   OUTPUT_FORMAT_PROMPT, currentEmailBlock, normalizeCurrentEmail, resolveDesign, retryAsFullPrompt,
+  conversationalText,
 } = require('./email-builder-edits')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
@@ -2799,9 +2800,12 @@ DESIGN BEST PRACTICES:
         resolved = full.kind === 'full' ? full : { kind: 'failed', reason: resolved.reason }
       }
       if (resolved.kind === 'edits' || resolved.kind === 'full') {
-        send({ type: 'result', mode: resolved.kind, edit_count: resolved.count || 0, design: resolved.design })
+        send({
+          type: 'result', mode: resolved.kind, edit_count: resolved.count || 0, design: resolved.design,
+          note: conversationalText(reply),
+        })
       } else if (resolved.kind === 'failed') {
-        send({ type: 'result', mode: 'failed', reason: resolved.reason })
+        send({ type: 'result', mode: 'failed', reason: resolved.reason, note: conversationalText(reply) })
       }
       send({ type: 'done' })
     } catch (error) {

@@ -102,6 +102,23 @@ test('resolveDesign: edits, full JSON, failure, and plain conversation', () => {
   assert.equal(resolveDesign('```edits\n<<<<<<< FIND\na\n=======\nb\n>>>>>>> REPLACE\n```', null).kind, 'none')
 })
 
+test('edits in a ```html fence or with no fence still apply (2026-10-07 Alderbrook reply)', () => {
+  const header = '<!DOCTYPE html><html><body><table><tr>\n          <td align="center" style="background-color:#3A6B35;padding:28px 40px 24px 40px">\n            <img src="logo.png" alt="Alderbrook">\n          </td>\n</tr></table></body></html>'
+  const email = { html_content: header, subject: 'A quiet place', preview_text: '' }
+  const pair = '<<<<<<< FIND\n          <td align="center" style="background-color:#3A6B35;padding:28px 40px 24px 40px">\n=======\n          <td align="center" style="background-color:#F7F3ED;padding:28px 40px 24px 40px">\n>>>>>>> REPLACE'
+  const note = 'Changed the header background from forest green to parchment.'
+  for (const reply of [`${note}\n\n${pair}`, `${note}\n\n\`\`\`html\n${pair}\n\`\`\``]) {
+    const r = resolveDesign(reply, email)
+    assert.equal(r.kind, 'edits', reply.slice(0, 80))
+    assert.ok(r.design.html_content.includes('background-color:#F7F3ED'))
+    assert.ok(!r.design.html_content.includes('#3A6B35'))
+    assert.equal(conversationalText(reply), note)
+  }
+  // Without a fence, a SUBJECT: line in the note is never treated as a change.
+  const r = resolveDesign(`SUBJECT: just chatting\n${pair}`, email)
+  assert.equal(r.design.subject, 'A quiet place')
+})
+
 test('an unterminated edits block (reply cut off) still parses what arrived', () => {
   const parsed = parseEditBlock('```edits\n<<<<<<< FIND\nSchedule a Tour\n=======\nBook a Visit\n>>>>>>> REPLACE\n')
   assert.equal(parsed.edits.length, 1)

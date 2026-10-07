@@ -23,6 +23,7 @@ interface DesignResult {
   mode: 'edits' | 'full' | 'failed'
   edit_count?: number
   reason?: string
+  note?: string
   design?: { html_content: string; subject?: string; preview_text?: string }
 }
 
@@ -286,8 +287,9 @@ export default function EmailBuilder() {
 
   const getConversationalText = (text: string) => {
     // Strip the design block (full JSON or targeted edits) to get just the
-    // conversational part. A block still streaming has no closing fence yet.
-    return text.split(/```(?:json|edits)/)[0].trim()
+    // conversational part. A block still streaming has no closing fence yet,
+    // and edits sometimes arrive in a ```html fence or with no fence at all.
+    return text.split(/```(?:json|edits)|<<<<<<< FIND/)[0].replace(/```[a-z]*\s*$/, '').trim()
   }
 
   const handleSend = async () => {
@@ -378,7 +380,7 @@ export default function EmailBuilder() {
       // Process the complete response. The server resolves targeted edits
       // against the current design; older servers only stream a JSON block.
       const design = result?.design || extractJsonFromText(accumulated)
-      const conversationalText = getConversationalText(accumulated)
+      const conversationalText = result?.note ?? getConversationalText(accumulated)
       const failed = result?.mode === 'failed'
 
       const assistantMessage: ChatMessage = {
@@ -714,7 +716,7 @@ export default function EmailBuilder() {
                       <ChatMarkdown content={getConversationalText(streamingText)} />
                       {streamStatus ? (
                         <span className="mt-1 block text-xs text-purple-500">{streamStatus}</span>
-                      ) : streamingText.includes('```edits') ? (
+                      ) : /```edits|<<<<<<< FIND/.test(streamingText) ? (
                         <span className="mt-1 block text-xs text-purple-500">applying changes...</span>
                       ) : streamingText.includes('```json') && (
                         <span className="mt-1 block text-xs text-purple-500">generating HTML...</span>

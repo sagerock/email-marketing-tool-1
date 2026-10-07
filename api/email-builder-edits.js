@@ -11,6 +11,7 @@ const MAX_CURRENT_HTML_CHARS = 500000
 const OUTPUT_FORMAT_PROMPT = `OUTPUT FORMAT:
 - For conversational responses (questions, suggestions, no HTML changes): just respond normally with helpful text.
 - Whenever you change the email, write a short note about what you changed FIRST, then exactly ONE of the two blocks below. Never both.
+- The note must describe only what your block actually changes. If you mention a change, include the edit for it.
 
 A) TARGETED EDITS — the default whenever a <current_email> is provided and the request changes part of it
 (copy, colors, fonts, a button, an image, links, spacing, adding/removing/moving a section):
@@ -24,6 +25,7 @@ replacement text
 >>>>>>> REPLACE
 \`\`\`
 Rules for edits:
+- The block must open with \`\`\`edits on its own line (not \`\`\`html) and close with \`\`\`.
 - Copy each FIND character for character from <current_email>, including indentation and attribute order. Never paraphrase, abbreviate, or use "..." inside FIND.
 - Keep each FIND small but unique in the document: usually 1–6 lines. Add a neighboring line if the text appears more than once.
 - Use as many FIND/REPLACE pairs as needed. They apply top to bottom and must not overlap.
@@ -70,18 +72,36 @@ function extractJsonDesign(text) {
   }
 }
 
-function parseEditBlock(text) {
-  const block = text.match(/```edits[^\n]*\n([\s\S]*?)(?:\n```[ \t]*(?:\n|$)|$)/)
-  if (!block) return null
-  const body = block[1].replace(/\r\n/g, '\n')
-  const edits = []
-  const pair = /<<<<<<< FIND\n([\s\S]*?)\n=======\n([\s\S]*?)\n?>>>>>>> REPLACE/g
-  let m
-  while ((m = pair.exec(body))) edits.push({ find: m[1], replace: m[2] })
+// Fenced code blocks, including one cut off before its closing fence.
+const FENCE = /```([a-z]*)[^\n]*\n([\s\S]*?)(?:\n```[ \t]*(?=\n|$)|$)/g
+const PAIR = /<<<<<<< FIND\n([\s\S]*?)\n=======\n([\s\S]*?)\n?>>>>>>> REPLACE/g
 
-  const header = body.split('<<<<<<< FIND')[0]
-  const subject = header.match(/^SUBJECT:[ \t]*(.+)$/m)?.[1]?.trim()
-  const preview = header.match(/^PREVIEW:[ \t]*(.+)$/m)?.[1]?.trim()
+// The edits region: the ```edits block if there is one. Models sometimes
+// label it ```html or drop the fence entirely, so any fenced block holding
+// FIND markers counts too, and bare markers in the text as a last resort.
+function editRegions(text) {
+  const blocks = [...text.replace(/\r\n/g, '\n').matchAll(FENCE)]
+    .filter(b => b[1] === 'edits' || b[2].includes('<<<<<<< FIND'))
+    .map(b => b[2])
+  if (blocks.length) return { bodies: blocks, fenced: true }
+  return text.includes('<<<<<<< FIND') ? { bodies: [text.replace(/\r\n/g, '\n')], fenced: false } : null
+}
+
+function parseEditBlock(text) {
+  const regions = editRegions(text)
+  if (!regions) return null
+  const edits = []
+  let subject, preview
+  for (const body of regions.bodies) {
+    for (const m of body.matchAll(PAIR)) edits.push({ find: m[1], replace: m[2] })
+    // SUBJECT/PREVIEW lines are only trusted inside a fenced block, never
+    // picked out of the conversational note.
+    if (regions.fenced) {
+      const header = body.split('<<<<<<< FIND')[0]
+      subject ??= header.match(/^SUBJECT:[ \t]*(.+)$/m)?.[1]?.trim()
+      preview ??= header.match(/^PREVIEW:[ \t]*(.+)$/m)?.[1]?.trim()
+    }
+  }
   if (!edits.length && !subject && !preview) return null
   return { edits, subject, preview_text: preview }
 }
@@ -124,8 +144,10 @@ function applyEdits(html, edits) {
 // The model's visible note, without any design block.
 function conversationalText(text) {
   return text
-    .replace(/```json\s*[\s\S]*?```/, '')
-    .replace(/```edits[^\n]*\n[\s\S]*?(?:\n```[ \t]*(?:\n|$)|$)/, '')
+    .replace(/\r\n/g, '\n')
+    .replace(FENCE, (block, lang, body) =>
+      (lang === 'json' || lang === 'edits' || body.includes('<<<<<<< FIND') ? '' : block))
+    .replace(PAIR, '')
     .trim()
 }
 
