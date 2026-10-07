@@ -419,6 +419,20 @@ Regular campaigns can filter recipients by:
 
 Both filters can be combined (AND logic) - e.g., "contacts in Tradeshow X who also have tag Y"
 
+### Click Heatmap Report
+
+Analytics → Click Heatmap → Download PNG / PDF calls `GET /api/campaigns/:id/heatmap-report?clientId=&format=png|pdf`
+(since 2026-10-07). `api/heatmap-report.js` renders the campaign's template in the locked-down headless
+Chromium (no JS, public images only), measures each link, and draws a one-page report: campaign name,
+subject, send date; Sent / Delivered / people who clicked (`get_campaign_unique_clicks` engaged, bot-filtered)
+/ click rate; the email with each link shaded by unique clicks and a rank badge; a ranked link table (share
+of clickers, "N places in the email" when one URL appears several times); a color key. Clicks match links
+exactly after dropping UTM tags, host case, `www.` and a trailing slash (no substring matching). Clicks on
+URLs no longer in the template (it was edited after sending) are listed as such, never misattributed. The
+campaign must belong to the requesting client. If the server report fails, the PNG button falls back to the
+older browser-side image. The unrestricted `/api/screenshot` endpoint was removed the same day (unused since
+March). First real run: September 2026 Scoop, 5s PNG / 4s PDF.
+
 ### Bot Click Filtering
 
 Email security scanners (Barracuda, Proofpoint, Mimecast, etc.) automatically click all links in emails to check for malware. This creates inflated click stats that don't represent real human engagement.

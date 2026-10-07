@@ -21,7 +21,6 @@ const sgClient = require('@sendgrid/client')
 const { computeNextSendTime } = require('./sequence-scheduler')
 const { createClient } = require('@supabase/supabase-js')
 const jsforce = require('jsforce')
-const puppeteer = require('puppeteer')
 require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
@@ -36,6 +35,7 @@ const { builderParams, replyText, BuilderRefusal } = require('./email-builder-mo
 const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
 const { checkLinks } = require('./link-check')
 const { renderSlices, reviewDesign } = require('./visual-check')
+const { buildHeatmapReport } = require('./heatmap-report')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
@@ -2234,6 +2234,58 @@ app.get('/api/campaigns/:id/link-stats', async (req, res) => {
 })
 
 /**
+ * One-page click heatmap report (PNG or PDF) for a sent campaign:
+ * api/heatmap-report.js renders it in the locked-down headless browser.
+ */
+let heatmapReportsRunning = 0
+app.get('/api/campaigns/:id/heatmap-report', async (req, res) => {
+  const { clientId } = req.query
+  const format = req.query.format === 'pdf' ? 'pdf' : 'png'
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+  if (heatmapReportsRunning >= 2) return res.status(429).json({ error: 'Another report is being made; try again in a moment.' })
+  heatmapReportsRunning++
+  try {
+    const { data: campaign } = await supabase
+      .from('campaigns')
+      .select('id, name, subject, sent_at, sent_count, recipient_count, template_id, client_id')
+      .eq('id', req.params.id)
+      .eq('client_id', clientId)
+      .single()
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' })
+    const [{ data: template }, { data: client }, links, unique, delivered] = await Promise.all([
+      supabase.from('templates').select('html_content').eq('id', campaign.template_id).eq('client_id', clientId).single(),
+      supabase.from('clients').select('name, mailing_address').eq('id', clientId).single(),
+      supabase.rpc('get_campaign_link_stats', { p_campaign_id: campaign.id }),
+      supabase.rpc('get_campaign_unique_clicks', { p_campaign_id: campaign.id }),
+      supabase.from('analytics_events').select('id', { count: 'exact', head: true })
+        .eq('campaign_id', campaign.id).eq('event_type', 'delivered'),
+    ])
+    if (!template?.html_content) return res.status(404).json({ error: 'This campaign has no email design to show' })
+    if (links.error) throw links.error
+    const report = await buildHeatmapReport({
+      campaign,
+      client,
+      html: template.html_content,
+      linkStats: links.data || [],
+      summary: {
+        sent: campaign.sent_count || campaign.recipient_count || 0,
+        delivered: delivered.count || 0,
+        clickers: unique.data?.[0]?.engaged_clicks || 0,
+      },
+      format,
+    })
+    res.setHeader('Content-Type', report.contentType)
+    res.setHeader('Content-Disposition', `attachment; filename="${report.filename}"`)
+    res.send(report.buffer)
+  } catch (error) {
+    console.error('Heatmap report error:', error)
+    res.status(500).json({ error: 'Could not make the heatmap report' })
+  } finally {
+    heatmapReportsRunning--
+  }
+})
+
+/**
  * Get unique click counts for a campaign
  * Calls the database function which handles aggregation efficiently
  */
@@ -2262,74 +2314,10 @@ app.get('/api/campaigns/:id/unique-clicks', async (req, res) => {
   }
 })
 
-/**
- * Generate a screenshot of HTML content (for heatmap PDF export)
- * Uses Puppeteer to render HTML with all images and styles
- */
-app.post('/api/screenshot', async (req, res) => {
-  let browser = null
-  try {
-    const { html, width = 800 } = req.body
-
-    if (!html) {
-      return res.status(400).json({ error: 'HTML content is required' })
-    }
-
-    console.log('📸 Generating screenshot...')
-
-    // Launch Puppeteer (use system Chromium in production)
-    browser = await puppeteer.launch({
-      headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-      ],
-    })
-
-    const page = await browser.newPage()
-
-    // Set viewport
-    await page.setViewport({ width: parseInt(width), height: 800 })
-
-    // Set content and wait for images to load
-    await page.setContent(html, {
-      waitUntil: ['load', 'networkidle0'],
-      timeout: 30000,
-    })
-
-    // Wait a bit more for any lazy-loaded content
-    await new Promise(resolve => setTimeout(resolve, 500))
-
-    // Get the full page height
-    const bodyHeight = await page.evaluate(() => document.body.scrollHeight)
-    await page.setViewport({ width: parseInt(width), height: bodyHeight })
-
-    // Take screenshot
-    const screenshot = await page.screenshot({
-      type: 'png',
-      fullPage: true,
-      encoding: 'base64',
-    })
-
-    console.log('   Screenshot generated successfully')
-
-    res.json({
-      image: `data:image/png;base64,${screenshot}`,
-      width: parseInt(width),
-      height: bodyHeight,
-    })
-  } catch (error) {
-    console.error('Error generating screenshot:', error)
-    res.status(500).json({ error: error.message })
-  } finally {
-    if (browser) {
-      await browser.close()
-    }
-  }
-})
+// /api/screenshot (unrestricted HTML rendering) was removed 2026-10-07: unused
+// since the heatmap export moved to the browser in March, and it rendered
+// arbitrary HTML with JavaScript on and open network access. Heatmap reports
+// now use /api/campaigns/:id/heatmap-report (locked-down renderer).
 
 /**
  * Health check endpoint

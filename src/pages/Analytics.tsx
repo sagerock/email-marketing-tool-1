@@ -112,7 +112,8 @@ export default function Analytics() {
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null)
   const [aiAnalysisLoading, setAiAnalysisLoading] = useState(false)
   const [aiAnalysisError, setAiAnalysisError] = useState<string | null>(null)
-  const [downloadingImage, setDownloadingImage] = useState(false)
+  // Which heatmap download is in progress, if any.
+  const [downloadingImage, setDownloadingImage] = useState<false | 'png' | 'pdf'>(false)
 
   useEffect(() => {
     fetchCampaigns()
@@ -692,8 +693,38 @@ export default function Analytics() {
     return doc.documentElement.outerHTML
   }
 
+  // The one-page report (summary, heat overlay, ranked links, key) is made on
+  // the server so every image renders; the browser-side image is the fallback.
+  const downloadHeatmapReport = async (campaignId: string, campaignName: string, heatmapHtml: string, format: 'png' | 'pdf') => {
+    if (!selectedClient) return
+    setDownloadingImage(format)
+    try {
+      const r = await apiFetch(`/api/campaigns/${campaignId}/heatmap-report?clientId=${selectedClient.id}&format=${format}`)
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'Report failed')
+      const blob = await r.blob()
+      const name = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '')?.[1] || `heatmap.${format}`
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = name
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      setTimeout(() => URL.revokeObjectURL(url), 10000)
+      setDownloadingImage(false)
+    } catch (error) {
+      console.error('Heatmap report failed:', error)
+      if (format === 'png') {
+        await downloadHeatmapImage(campaignName, heatmapHtml)
+      } else {
+        alert('Couldn’t make the PDF right now. Please try again in a moment.')
+        setDownloadingImage(false)
+      }
+    }
+  }
+
   const downloadHeatmapImage = async (campaignName: string, heatmapHtml: string) => {
-    setDownloadingImage(true)
+    setDownloadingImage('png')
     try {
       // Render heatmap HTML in a hidden iframe and capture with html-to-image
       const { toPng } = await import('html-to-image')
@@ -2413,26 +2444,23 @@ export default function Analytics() {
                   {/* Footer */}
                   <div className="px-6 py-3 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
                     <span className="text-xs text-gray-500">
-                      Hover over links to see click counts. Badges show unique clicks per link.
+                      Hover over links to see click counts. Downloads are a one-page report with totals, ranked links and a color key.
                     </span>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => downloadHeatmapImage(campaign?.name || 'campaign', heatmapHtml)}
-                      disabled={downloadingImage}
-                    >
-                      {downloadingImage ? (
-                        <>
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Generating...
-                        </>
-                      ) : (
-                        <>
-                          <FileDown className="h-4 w-4 mr-2" />
-                          Download Image
-                        </>
-                      )}
-                    </Button>
+<div className="flex gap-2">
+                      {(['png', 'pdf'] as const).map(format => (
+                        <Button
+                          key={format}
+                          variant="outline"
+                          size="sm"
+                          onClick={() => campaign && downloadHeatmapReport(campaign.id, campaign.name || 'campaign', heatmapHtml, format)}
+                          disabled={Boolean(downloadingImage)}
+                        >
+                          {downloadingImage === format
+                            ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Making report…</>
+                            : <><FileDown className="h-4 w-4 mr-2" />Download {format.toUpperCase()}</>}
+                        </Button>
+                      ))}
+                    </div>
                   </div>
                 </div>
               </div>
