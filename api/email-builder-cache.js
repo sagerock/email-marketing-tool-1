@@ -10,6 +10,10 @@ function markConversationTailForCaching(messages, messageCount, hasEphemeralRefe
       text: last.content,
       cache_control: { type: 'ephemeral' },
     }]
+  } else if (last && Array.isArray(last.content) && last.content.length) {
+    // First turn with the media library attached: content is already blocks.
+    const blocks = last.content
+    blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], cache_control: { type: 'ephemeral' } }
   }
 }
 

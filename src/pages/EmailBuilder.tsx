@@ -346,6 +346,7 @@ export default function EmailBuilder() {
       let buffer = ''
       let accumulated = ''
       let result: DesignResult | null = null
+      let streamError = ''
 
       while (true) {
         const { done, value } = await reader.read()
@@ -367,15 +368,16 @@ export default function EmailBuilder() {
               } else if (data.type === 'result') {
                 result = data as DesignResult
               } else if (data.type === 'error') {
-                throw new Error(data.error)
+                streamError = data.error || 'Generation failed'
               }
-            } catch (e: any) {
-              if (e.message === 'Generation failed') throw e
+            } catch {
               // ignore parse errors for incomplete chunks
             }
           }
         }
       }
+
+      if (streamError) throw new Error(streamError)
 
       // Process the complete response. The server resolves targeted edits
       // against the current design; older servers only stream a JSON block.

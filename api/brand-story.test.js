@@ -92,10 +92,12 @@ test('validateInterviewMessages enforces roles and user-last', () => {
 test('runBrandInterview sends the existing story and returns parsed output', async () => {
   let sent
   const anthropic = {
-    messages: {
-      create: async (req) => {
-        sent = req
-        return { content: [{ type: 'text', text: 'Tell me more about your families.' }] }
+    beta: {
+      messages: {
+        create: async (req) => {
+          sent = req
+          return { stop_reason: 'end_turn', content: [{ type: 'thinking', thinking: '' }, { type: 'text', text: 'Tell me more about your families.' }] }
+        },
       },
     },
   }
@@ -108,4 +110,6 @@ test('runBrandInterview sends the existing story and returns parsed output', asy
   assert.match(sent.system, /The organization is: Alderbrook/)
   assert.match(sent.system, /Outdoorsy school\./)
   assert.equal(sent.messages.length, 1)
+  assert.equal(sent.model, 'claude-sonnet-5-5')
+  assert.deepEqual(sent.output_config, { effort: 'low' })
 })

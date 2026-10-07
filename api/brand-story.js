@@ -5,7 +5,7 @@
 // clients.brand_story / clients.brand_look (migration 109) and read by both the
 // interactive email builder and the Ask/Polaris draft endpoint.
 
-const BUILDER_MODEL = 'claude-sonnet-4-6'
+const { builderParams, replyText } = require('./email-builder-model')
 const MAX_STORY_CHARS = 20000
 const MAX_COLORS = 8
 const MAX_INTERVIEW_MESSAGES = 30
@@ -174,14 +174,13 @@ async function runBrandInterview({ anthropic, client, messages }) {
 
 The organization is: ${client?.name || 'unnamed'}.
 ${existing ? `They already have this on file; build on it rather than starting over:\n${existing}` : 'They have nothing on file yet.'}`
-  const response = await anthropic.messages.create({
-    model: BUILDER_MODEL,
-    max_tokens: 2048,
+  // Conversation, not design: low effort keeps replies quick.
+  const response = await anthropic.beta.messages.create({
+    ...builderParams({ maxTokens: 16000, effort: 'low' }),
     system,
     messages: convo,
   })
-  const text = (response.content || []).filter(b => b.type === 'text').map(b => b.text).join('')
-  return parseInterviewReply(text)
+  return parseInterviewReply(replyText(response))
 }
 
 module.exports = {

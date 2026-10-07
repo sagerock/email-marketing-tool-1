@@ -32,6 +32,8 @@ const {
   OUTPUT_FORMAT_PROMPT, currentEmailBlock, normalizeCurrentEmail, resolveDesign, retryAsFullPrompt,
   conversationalText,
 } = require('./email-builder-edits')
+const { builderParams, replyText, BuilderRefusal } = require('./email-builder-model')
+const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
@@ -2585,10 +2587,13 @@ app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
     let brandReferenceContext = ''
     const { data: clientRow } = await supabase
       .from('clients')
-      .select('name, brand_reference_template_id, brand_story, brand_look')
+      .select('name, brand_reference_template_id, brand_story, brand_look, s3_prefix')
       .eq('id', clientId)
       .single()
     const brandStoryContext = brandStoryPrompt(clientRow)
+    const mediaBlocks = await mediaLibraryBlocks({
+      s3, bucket: BUCKET, s3Prefix: clientRow?.s3_prefix, publicUrlForKey,
+    })
 
     if (clientRow?.brand_reference_template_id) {
       const { data: brandTemplate } = await supabase
@@ -2677,7 +2682,7 @@ Every email MUST include:
 2. A physical mailing address using {{mailing_address}}
 Remind the user if they ask you to remove these.
 
-${brandStoryContext ? `${brandStoryContext}\n` : ''}${brandReferenceContext ? `BRAND REFERENCE:
+${brandStoryContext ? `${brandStoryContext}\n` : ''}${mediaBlocks.length ? `${MEDIA_PROMPT}\n\n` : ''}${brandReferenceContext ? `BRAND REFERENCE:
 The user message may include a <brand_reference> block containing the client's current canonical brand template. Treat it as the default visual style: match its colors, fonts, header/footer, button styling, layout structure, and overall aesthetic in any email you produce, unless the user explicitly asks for a different style. The brand reference is a style guide, not the email content — copy its structure and styling, not its words.\n` : ''}${templateListStr ? `AVAILABLE PREVIOUS EMAILS (the user may reference these by name):\n${templateListStr}\n\nWhen the user references a previous email, they may provide its HTML as a <reference_email> block. Use it as a starting point or inspiration as directed.` : ''}
 
 OUTLOOK / WORD-ENGINE HARD RULES (these bugs are INVISIBLE in browser preview — they only appear in classic desktop Outlook on Windows, which renders with Microsoft Word, not a browser engine. Follow these exactly):
@@ -2708,17 +2713,25 @@ DESIGN BEST PRACTICES:
 - Test with and without images — ensure content is readable with images blocked`
 
     // Build message array for Claude
-    const claudeMessages = messages.slice(-10).map((msg, idx) => {
+    const recent = messages.slice(-10)
+    // A loaded template starts the chat with an assistant greeting, so the
+    // shared context goes on the first USER message, wherever it is.
+    const firstUserIdx = recent.findIndex(m => m.role === 'user')
+    const claudeMessages = recent.map((msg, idx) => {
       let content = msg.content
       // Strip any cache_control markers on caller-provided content blocks —
       // the API allows max 4 breakpoints per request and ours are managed here
       if (Array.isArray(content)) {
         content = content.map(({ cache_control: _stray, ...block }) => block)
       }
-      // Inject brand reference + paperclipped references into the first user message
-      if (idx === 0 && msg.role === 'user') {
+      // Inject brand reference + paperclipped references + media library into the first user message
+      if (idx === firstUserIdx) {
         const prefix = [brandReferenceContext, referenceContext].filter(Boolean).join('\n\n')
         if (prefix) content = `${prefix}\n\n${content}`
+        if (mediaBlocks.length) {
+          const own = typeof content === 'string' ? [{ type: 'text', text: content }] : content
+          content = [...mediaBlocks, ...own]
+        }
       }
       return { role: msg.role, content }
     })
@@ -2756,9 +2769,8 @@ DESIGN BEST PRACTICES:
 
     const send = (payload) => res.write(`data: ${JSON.stringify(payload)}\n\n`)
     const runStream = async (conversation) => {
-      const stream = anthropic.messages.stream({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 16384,
+      const stream = anthropic.beta.messages.stream({
+        ...builderParams(),
         // Cached system block: gives every turn (even after the history window
         // slides) a stable read point covering the design-rules prompt.
         system: [{
@@ -2778,7 +2790,7 @@ DESIGN BEST PRACTICES:
         `[email-builder] tokens: input=${u.input_tokens ?? 0} output=${u.output_tokens ?? 0} ` +
         `cache_read=${u.cache_read_input_tokens ?? 0} cache_write=${u.cache_creation_input_tokens ?? 0}`
       )
-      return message.content.filter(b => b.type === 'text').map(b => b.text).join('')
+      return replyText(message)
     }
 
     try {
@@ -2809,8 +2821,13 @@ DESIGN BEST PRACTICES:
       }
       send({ type: 'done' })
     } catch (error) {
-      console.error('Email builder streaming error:', error)
-      send({ type: 'error', error: 'Generation failed' })
+      if (error instanceof BuilderRefusal) {
+        console.warn(`[email-builder] model declined (category ${error.category})`)
+        send({ type: 'error', error: 'The AI declined this request. Try rewording it.' })
+      } else {
+        console.error('Email builder streaming error:', error)
+        send({ type: 'error', error: 'Generation failed' })
+      }
     }
     res.end()
 
