@@ -253,3 +253,49 @@ export function checkEmail(html: string, subject = '', previewText = ''): EmailI
   const rank = { error: 0, warning: 1 }
   return groupRepeats(issues).sort((a, b) => rank[a.severity] - rank[b.severity])
 }
+
+// ---- Link health (results come from the server, which fetches each link) ----
+
+export interface LinkResult {
+  url: string
+  outcome: 'ok' | 'broken' | 'unverified' | 'blocked'
+  status?: number
+  detail?: string
+}
+
+/** Absolute web links in the email, in order, without duplicates. */
+export function collectLinkUrls(html: string): string[] {
+  const urls = new Set<string>()
+  for (const el of scanElements(html).filter(e => e.tag === 'a')) {
+    const href = attr(html.slice(el.start, el.openEnd), 'href')?.trim()
+    if (href && /^https?:\/\//i.test(href) && !href.includes('{{')) urls.add(decodeEntities(href))
+  }
+  return [...urls]
+}
+
+/** Broken links are errors; only reported where a link really fails to load. */
+export function linkHealthIssues(html: string, results: Record<string, LinkResult>): EmailIssue[] {
+  const issues: EmailIssue[] = []
+  for (const el of scanElements(html).filter(e => e.tag === 'a')) {
+    const href = attr(html.slice(el.start, el.openEnd), 'href')?.trim()
+    const result = href ? results[decodeEntities(href)] : undefined
+    if (!result || result.outcome === 'ok' || result.outcome === 'unverified') continue
+    const inner = html.slice(el.openEnd, el.end)
+    const imgAlt = /<img\b[^>]*\balt\s*=\s*["']([^"']+)/i.exec(inner)?.[1]
+    const label = shorten(visibleText(inner)) || (imgAlt ? `Image link "${shorten(imgAlt, 30)}"` : 'A link')
+    const span = { start: el.start, end: el.end }
+    if (result.outcome === 'broken') {
+      issues.push({ id: `link-dead-${el.id}`, severity: 'error', title: `${quoteLabel(label)} leads to a broken page`,
+        detail: `${shorten(href!, 60)}: ${result.detail || 'it doesn’t load'}.`, span, fixDraft: 'Change this link to: ' })
+    } else {
+      issues.push({ id: `link-private-${el.id}`, severity: 'warning', title: `${quoteLabel(label)} can’t be checked`,
+        detail: `${result.detail || 'It points somewhere readers can’t reach'}.`, span, fixDraft: 'Change this link to: ' })
+    }
+  }
+  return issues
+}
+
+export function sortIssues(issues: EmailIssue[]): EmailIssue[] {
+  const rank = { error: 0, warning: 1 }
+  return [...issues].sort((a, b) => rank[a.severity] - rank[b.severity])
+}

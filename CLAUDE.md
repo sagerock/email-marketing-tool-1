@@ -160,6 +160,20 @@ grouped. "Fix it" sends the issue's `fixPrompt` scoped to its element via click-
 selects the element and pre-fills the chat (e.g. "Change this link to: "). The header CAN-SPAM
 warning reads from the same checks. Browser test: `scripts/test-ready-to-send.cjs <email.html>`.
 
+Link health and visual check (2026-10-07): `POST /api/email-builder/check-links` checks whether
+each link loads (`api/link-check.js`): public addresses only, enforced in the connection's own DNS
+lookup (no rebinding), redirects followed by hand with each hop re-checked, ports 80/443 only,
+HEAD then GET, 8s timeout, 40 URLs max, 10-minute cache. Only clear failures (404/410, no such
+site, refused) become errors; bot-blocking 403s, 5xx and timeouts are not reported. After each
+builder change the frontend calls `POST /api/email-builder/visual-check`: `api/visual-check.js`
+renders the email in headless Chromium with JavaScript off and only public images, stylesheets and
+fonts allowed, slices it into up to five 640x1000 JPEGs, and asks the model (low effort,
+structured output) whether the requested change is visible and anything looks broken. The verdict
+shows under the chat message with a "Fix these" button; it is advisory and never edits on its own.
+Rate limit 20/min, 2 at a time. Real-model check: it confirmed a correct change, caught a
+claimed-but-missing change and a broken image, in 4-7s. Structured output needs Sonnet 5.5, so with
+the 4.6 rollback the check reports unavailable and the UI shows nothing.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

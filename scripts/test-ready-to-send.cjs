@@ -22,6 +22,8 @@ const sse = events => events.map(e => 'data: ' + JSON.stringify(e) + '\n\n').joi
 // One image loses its alt text so there's also a one-click fix to try.
 const original = fs.readFileSync(file, 'utf8').replace(/(<img\b[^>]*?)\s+alt=(["'])[^"']*\2/i, '$1')
 const chats = []
+const linkChecks = []
+const visualChecks = []
 
 ;(async()=>{
   const server = app.listen(0,'127.0.0.1')
@@ -54,7 +56,7 @@ const chats = []
           const part = html.slice(start, end)
           // Pretend the AI did what was asked to the selected element.
           const changed = /Change this link to: (\S+)/.test(body.messages.at(-1).content)
-            ? part.replace(/href=(["'])#\1/, `href="${body.messages.at(-1).content.split(': ')[1]}"`)
+            ? part.replace(/href=(["'])[^"']*\1/, `href="${body.messages.at(-1).content.split(': ')[1]}"`)
             : part.replace(/<img\b/i, '<img alt="Alderbrook logo"')
           const next = html.slice(0, start) + changed + html.slice(end)
           return req.respond({status:200,contentType:'text/event-stream',body:sse([
@@ -62,6 +64,19 @@ const chats = []
             {type:'result',mode:'edits',edit_count:1,note:'Done.',selection:{start,end:start+changed.length},design:{html_content:next,subject:'Fall Open House',preview_text:'Come visit'}},
             {type:'done'},
           ])})
+        }
+        if(u.pathname==='/api/email-builder/check-links'){
+          const { urls } = JSON.parse(req.postData())
+          linkChecks.push(urls)
+          return reply({ results: Object.fromEntries(urls.map(url => [url, url.includes('missing')
+            ? { url, outcome: 'broken', status: 404, detail: 'the page returns 404 (not found)' }
+            : { url, outcome: 'ok', status: 200 }])) })
+        }
+        if(u.pathname==='/api/email-builder/visual-check'){
+          visualChecks.push(JSON.parse(req.postData()))
+          return reply(visualChecks.length === 1
+            ? { looks_right: false, summary: 'One problem.', problems: [{ problem: 'The button text is hard to read on gold', where: 'the RSVP button' }] }
+            : { looks_right: true, summary: 'Looks right.', problems: [] })
         }
         if(u.pathname==='/api/brand-story')return reply({brand_story:'x'})
         if(u.pathname.startsWith('/api/'))return reply({templates:[],sentCampaigns:[]})
@@ -95,12 +110,33 @@ const chats = []
     await clickButton('Fix it…')
     await page.waitForSelector('[aria-label="Clear selection"]')
     assert.equal(await page.$eval('textarea[aria-label="Newsletter instructions"]', t => t.value), 'Change this link to: ')
-    await page.type('textarea[aria-label="Newsletter instructions"]', 'https://alderbrook.example/open-house')
+    await page.type('textarea[aria-label="Newsletter instructions"]', 'https://alderbrook.example/missing-page')
     await page.click('button[aria-label="Send instructions"]')
     await page.waitForFunction(() => document.body.innerText.includes('Quick edit · 1 change'))
     const span1 = chats[0].currentEmail.html_content.slice(chats[0].selection.start, chats[0].selection.end)
     assert.match(span1, /^<a\b[^>]*href=(["'])#\1/i, 'the link fix is scoped to the button')
-    await page.waitForFunction(() => /^1 to review/.test(document.querySelector('[aria-label="Ready to send check"]').innerText.trim()))
+    // The new address is checked and found broken.
+    await page.waitForFunction(() => /^1 to fix, 1 to review/.test(document.querySelector('[aria-label="Ready to send check"]').innerText.trim()), { timeout: 10000 })
+    assert.ok(linkChecks.flat().includes('https://alderbrook.example/missing-page'))
+    await page.click('[aria-label="Ready to send check"]')
+    await page.waitForFunction(() => document.body.innerText.includes('leads to a broken page'))
+    await page.click('[aria-label="Ready to send check"]')
+    // The visual check ran on the change and its finding is offered as a fix.
+    await page.waitForFunction(() => document.body.innerText.includes('Looking at the result, I noticed'))
+    assert.match(await page.$eval('body', b => b.innerText), /the RSVP button: The button text is hard to read on gold/)
+    assert.equal(visualChecks[0].request, 'Change this link to: https://alderbrook.example/missing-page')
+    assert.ok(!visualChecks[0].html.includes('data-sr'))
+    await page.type('textarea[aria-label="Newsletter instructions"]', 'Change this link to: https://alderbrook.example/open-house')
+    // Re-select the button by fixing the broken-link issue.
+    await page.evaluate(() => document.querySelector('textarea[aria-label="Newsletter instructions"]').value = '')
+    await page.click('[aria-label="Ready to send check"]')
+    await page.waitForFunction(() => document.body.innerText.includes('leads to a broken page'))
+    await clickButton('Fix it…')
+    await page.waitForSelector('[aria-label="Clear selection"]')
+    await page.type('textarea[aria-label="Newsletter instructions"]', 'https://alderbrook.example/open-house')
+    await page.click('button[aria-label="Send instructions"]')
+    await page.waitForFunction(() => document.body.innerText.includes('it looks right'), { timeout: 10000 })
+    await page.waitForFunction(() => /^1 to review/.test(document.querySelector('[aria-label="Ready to send check"]').innerText.trim()), { timeout: 10000 })
 
     // Alt-text fix: one click sends a scoped request straight away.
     await page.click('[aria-label="Ready to send check"]')
@@ -108,13 +144,13 @@ const chats = []
     await clickButton('Fix it')
     await page.waitForFunction(() => document.querySelectorAll('[class*="bg-blue-50"]').length >= 2)
     await page.waitForFunction(() => /Ready to send/.test(document.querySelector('[aria-label="Ready to send check"]').innerText))
-    assert.equal(chats.length, 2)
-    assert.match(chats[1].messages.at(-1).content, /alt text/)
-    const span2 = chats[1].currentEmail.html_content.slice(chats[1].selection.start, chats[1].selection.end)
+    assert.equal(chats.length, 3)
+    assert.match(chats[2].messages.at(-1).content, /alt text/)
+    const span2 = chats[2].currentEmail.html_content.slice(chats[2].selection.start, chats[2].selection.end)
     assert.match(span2, /^<img\b/i, 'the alt-text fix is scoped to the image')
     await page.click('[aria-label="Ready to send check"]')
     await page.waitForFunction(() => document.body.innerText.includes('No problems found'))
     await page.screenshot({ path: '/tmp/sagerock-ready-to-send.png' })
-    console.log('PASS: ready-to-send lists issues, fixes a link (user-finished) and alt text (one click), then shows ready')
+    console.log('PASS: ready-to-send lists issues, catches a broken link, shows the visual check, fixes a link (user-finished) and alt text (one click), then shows ready')
   } finally { await browser.close(); server.close() }
 })().catch(e=>{console.error(e);process.exitCode=1})

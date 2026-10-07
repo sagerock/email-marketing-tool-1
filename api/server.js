@@ -34,6 +34,8 @@ const {
 } = require('./email-builder-edits')
 const { builderParams, replyText, BuilderRefusal } = require('./email-builder-model')
 const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
+const { checkLinks } = require('./link-check')
+const { renderSlices, reviewDesign } = require('./visual-check')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
@@ -2546,6 +2548,53 @@ app.post('/api/brand-story/interview', authenticateUser, async (req, res) => {
     if (error instanceof BrandStoryError) return res.status(error.status).json({ error: error.message })
     console.error('Brand story interview error:', error)
     res.status(500).json({ error: 'The interview hit a snag. Please try again.' })
+  }
+})
+
+// ---- Builder checks: link health and a visual look at the result ----
+
+// Whether each link in the email actually loads. Fetching goes through
+// api/link-check.js, which only ever reaches public addresses.
+app.post('/api/email-builder/check-links', authenticateUser, async (req, res) => {
+  const { urls } = req.body
+  if (!Array.isArray(urls)) return res.status(400).json({ error: 'urls must be a list' })
+  try {
+    res.json({ results: await checkLinks(urls) })
+  } catch (error) {
+    console.error('Link check error:', error)
+    res.status(500).json({ error: 'Link check failed' })
+  }
+})
+
+const visualCheckRateLimit = { timestamps: [] }
+let visualChecksRunning = 0
+
+// Renders the email and asks the model whether the requested change is
+// visible and nothing looks broken. Advisory only: the UI shows the verdict.
+app.post('/api/email-builder/visual-check', authenticateUser, async (req, res) => {
+  const now = Date.now()
+  visualCheckRateLimit.timestamps = visualCheckRateLimit.timestamps.filter(t => now - t < 60000)
+  if (visualCheckRateLimit.timestamps.length >= 20 || visualChecksRunning >= 2) {
+    return res.status(429).json({ error: 'Visual check is busy; try again shortly.' })
+  }
+  const { html, request, note } = req.body
+  if (typeof html !== 'string' || !html.trim() || html.length > 500000) {
+    return res.status(400).json({ error: 'html is required (at most 500000 characters)' })
+  }
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  visualCheckRateLimit.timestamps.push(now)
+  visualChecksRunning++
+  try {
+    const render = await renderSlices(html)
+    const Anthropic = require('@anthropic-ai/sdk')
+    const verdict = await reviewDesign({ anthropic: new Anthropic(), render, request, note })
+    console.log(`[email-builder] visual check: ${verdict.looks_right ? 'looks right' : `${verdict.problems.length} problem(s)`}`)
+    res.json(verdict)
+  } catch (error) {
+    console.warn('[email-builder] visual check unavailable:', error.message)
+    res.status(502).json({ error: 'Visual check unavailable' })
+  } finally {
+    visualChecksRunning--
   }
 })
 

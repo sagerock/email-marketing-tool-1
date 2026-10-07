@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, MousePointerClick, Wand2 } from 'lucide-react'
+import { AlertCircle, AlertTriangle, CheckCircle2, ChevronDown, Loader2, MousePointerClick, Wand2 } from 'lucide-react'
 import type { EmailIssue } from '../../lib/emailChecks'
 import { cn } from '../../lib/utils'
 
 interface Props {
   issues: EmailIssue[]
   busy: boolean
+  /** Link health is still being fetched. */
+  checkingLinks?: boolean
   /** Select the issue's element in the preview. */
   onShow: (issue: EmailIssue) => void
   /** Ask the AI to fix it, or put a starter sentence in the chat box. */
   onFix: (issue: EmailIssue) => void
 }
 
-export default function ReadyToSendPanel({ issues, busy, onShow, onFix }: Props) {
+export default function ReadyToSendPanel({ issues, busy, checkingLinks = false, onShow, onFix }: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const errors = issues.filter(i => i.severity === 'error').length
@@ -54,10 +56,13 @@ export default function ReadyToSendPanel({ issues, busy, onShow, onFix }: Props)
           <div className="border-b border-gray-100 px-3 py-2">
             <p className="text-sm font-semibold text-gray-900">Ready to send?</p>
             <p className="text-xs text-gray-500">Checked on every change. Red items should be fixed before sending.</p>
+            {checkingLinks && (
+              <p className="mt-1 flex items-center gap-1 text-xs text-gray-500"><Loader2 className="h-3 w-3 animate-spin" /> Checking that links load…</p>
+            )}
           </div>
           {issues.length === 0 ? (
             <div className="flex items-center gap-2 px-3 py-4 text-sm text-green-700">
-              <CheckCircle2 className="h-4 w-4" /> No problems found: links, images, footer and Outlook checks all pass.
+              <CheckCircle2 className="h-4 w-4" /> No problems found: links load, and images, footer and Outlook checks all pass.
             </div>
           ) : (
             <ul className="divide-y divide-gray-100">

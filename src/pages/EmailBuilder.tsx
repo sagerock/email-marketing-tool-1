@@ -4,12 +4,12 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2 } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
 import ChatMarkdown from '../components/ui/ChatMarkdown'
 import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
 import ReadyToSendPanel from '../components/builder/ReadyToSendPanel'
-import { checkEmail, type EmailIssue } from '../lib/emailChecks'
+import { checkEmail, collectLinkUrls, linkHealthIssues, sortIssues, type EmailIssue, type LinkResult } from '../lib/emailChecks'
 import { cn } from '../lib/utils'
 
 interface ChatMessage {
@@ -20,6 +20,14 @@ interface ChatMessage {
   subject?: string
   previewText?: string
   editCount?: number
+  /** The AI's look at the rendered result of this change. */
+  visual?: VisualCheck
+}
+
+interface VisualCheck {
+  status: 'checking' | 'ok' | 'issues' | 'unavailable'
+  summary?: string
+  problems?: { problem: string; where: string }[]
 }
 
 interface DesignResult {
@@ -73,9 +81,17 @@ export default function EmailBuilder() {
   const [previewMode, setPreviewMode] = useState<'desktop' | 'mobile'>('desktop')
   // The part of the email clicked in the preview; edits are kept inside it.
   const [selection, setSelection] = useState<PreviewSelection | null>(null)
+  // Link health comes from the server (it fetches each link); results are
+  // kept per URL so an edit only checks links it hasn't seen.
+  const [linkResults, setLinkResults] = useState<Record<string, LinkResult>>({})
+  const [checkingLinks, setCheckingLinks] = useState(false)
+  const linkResultsRef = useRef(linkResults)
+  useEffect(() => { linkResultsRef.current = linkResults }, [linkResults])
   const issues = useMemo(
-    () => (currentHtml ? checkEmail(currentHtml, currentSubject, currentPreviewText) : []),
-    [currentHtml, currentSubject, currentPreviewText]
+    () => (currentHtml
+      ? sortIssues([...checkEmail(currentHtml, currentSubject, currentPreviewText), ...linkHealthIssues(currentHtml, linkResults)])
+      : []),
+    [currentHtml, currentSubject, currentPreviewText, linkResults]
   )
   // CAN-SPAM problems also show in the header, where they're hard to miss.
   const complianceWarnings = issues.filter(i => i.id === 'no-unsub' || i.id === 'no-address').map(i => i.title)
@@ -406,6 +422,7 @@ export default function EmailBuilder() {
         // Keep the same part selected (the server returns its new span) so
         // follow-ups like "a bit more" still apply to it.
         setSelection(prev => (prev && result?.selection ? { ...prev, ...result.selection } : null))
+        void runVisualCheck(assistantMessage.id, design.html_content, trimmed, conversationalText)
       }
     } catch (err: any) {
       const errorMessage: ChatMessage = {
@@ -418,6 +435,52 @@ export default function EmailBuilder() {
       setIsStreaming(false)
       setStreamingText('')
       setStreamStatus('')
+    }
+  }
+
+  useEffect(() => {
+    if (!currentHtml || !selectedClient) return
+    const urls = collectLinkUrls(currentHtml).filter(u => !(u in linkResultsRef.current))
+    if (!urls.length) return
+    let cancelled = false
+    const timer = setTimeout(async () => {
+      setCheckingLinks(true)
+      try {
+        const r = await apiFetch('/api/email-builder/check-links', {
+          method: 'POST',
+          body: JSON.stringify({ clientId: selectedClient.id, urls }),
+        })
+        if (r.ok && !cancelled) {
+          const data = await r.json()
+          setLinkResults(prev => ({ ...prev, ...data.results }))
+        }
+      } catch {
+        // Link health is advisory; the other checks still run.
+      } finally {
+        if (!cancelled) setCheckingLinks(false)
+      }
+    }, 1200)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [currentHtml, selectedClient])
+
+  // After a change lands, the server renders the email and the AI looks at it.
+  const runVisualCheck = async (messageId: string, html: string, request: string, note: string) => {
+    const update = (visual: VisualCheck) =>
+      setMessages(prev => prev.map(m => (m.id === messageId ? { ...m, visual } : m)))
+    update({ status: 'checking' })
+    try {
+      const r = await apiFetch('/api/email-builder/visual-check', {
+        method: 'POST',
+        body: JSON.stringify({ clientId: selectedClient?.id, html, request, note }),
+      })
+      if (!r.ok) throw new Error('unavailable')
+      const v = await r.json()
+      if (typeof v.looks_right !== 'boolean') throw new Error('unexpected reply')
+      update(v.looks_right
+        ? { status: 'ok', summary: v.summary }
+        : { status: 'issues', summary: v.summary, problems: v.problems })
+    } catch {
+      update({ status: 'unavailable' })
     }
   }
 
@@ -728,8 +791,36 @@ export default function EmailBuilder() {
                         setSelection(null)
                         setCurrentSubject(msg.subject || '')
                         setCurrentPreviewText(msg.previewText || '')
-                        setMessages(prev => [...prev, { ...msg, id: crypto.randomUUID(), content: 'Restored this earlier preview. Save it to keep these changes.' }])
+                        setMessages(prev => [...prev, { ...msg, visual: undefined, id: crypto.randomUUID(), content: 'Restored this earlier preview. Save it to keep these changes.' }])
                       }} className="text-blue-700 underline disabled:opacity-50">Restore this preview</button>}
+                    </div>
+                  )}
+                  {msg.visual?.status === 'checking' && (
+                    <p className="mt-1.5 flex items-center gap-1 text-xs text-gray-400">
+                      <Loader2 className="h-3 w-3 animate-spin" /> Checking how it looks…
+                    </p>
+                  )}
+                  {msg.visual?.status === 'ok' && (
+                    <p className="mt-1.5 flex items-center gap-1 text-xs text-green-700" title={msg.visual.summary}>
+                      <CheckCircle2 className="h-3 w-3" /> Looked at the result: it looks right
+                    </p>
+                  )}
+                  {msg.visual?.status === 'issues' && (
+                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                      <p className="flex items-center gap-1 font-medium"><Eye className="h-3 w-3" /> Looking at the result, I noticed:</p>
+                      <ul className="mt-1 ml-4 list-disc space-y-0.5">
+                        {msg.visual.problems?.map((p, i) => <li key={i}><span className="font-medium">{p.where}:</span> {p.problem}</li>)}
+                      </ul>
+                      <button
+                        disabled={isStreaming || saving}
+                        onClick={() => handleSend({
+                          text: `Fix these visual problems: ${msg.visual!.problems!.map(p => `${p.where}: ${p.problem}`).join('; ')}`,
+                          selection: null,
+                        })}
+                        className="mt-1.5 rounded border border-amber-300 bg-white px-2 py-0.5 font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        Fix these
+                      </button>
                     </div>
                   )}
                 </div>
@@ -887,7 +978,7 @@ export default function EmailBuilder() {
             </div>
             <div className="flex items-center gap-1 ml-4 flex-shrink-0">
               {currentHtml && (
-                <ReadyToSendPanel issues={issues} busy={isStreaming || saving} onShow={showIssue} onFix={fixIssue} />
+                <ReadyToSendPanel issues={issues} busy={isStreaming || saving} checkingLinks={checkingLinks} onShow={showIssue} onFix={fixIssue} />
               )}
               <button
                 type="button"
