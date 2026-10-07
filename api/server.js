@@ -27,6 +27,7 @@ const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
 const { listSignupLimiter, validateListSignup, upsertListContact } = require('./public-list-signup')
 const { BrandStoryError, normalizeBrandStoryInput, brandStoryPrompt, runBrandInterview } = require('./brand-story')
+const { optimizeImage, withExtension } = require('./image-optimize')
 const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
@@ -8682,7 +8683,9 @@ app.get('/api/media', async (req, res) => {
 })
 
 const ALLOWED_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
-const MAX_UPLOAD_BYTES = 5 * 1024 * 1024 // 5 MB
+// Generous because uploads are shrunk (api/image-optimize.js) before storage;
+// phone photos are routinely 5–15 MB.
+const MAX_UPLOAD_BYTES = 25 * 1024 * 1024 // 25 MB
 
 const mediaUpload = multer({
   storage: multer.memoryStorage(),
@@ -8716,20 +8719,37 @@ app.post('/api/media/upload', mediaUpload.single('file'), async (req, res) => {
     return res.status(400).json({ error: 'Client has no s3_prefix configured' })
   }
 
-  const key = `${client.s3_prefix}/${Date.now()}-${safeFilename(req.file.originalname)}`
+  let image
+  try {
+    image = await optimizeImage(req.file.buffer, req.file.mimetype)
+  } catch (err) {
+    console.error('[media] could not read image', err.message)
+    return res.status(400).json({ error: 'That file could not be read as an image' })
+  }
+
+  const filename = safeFilename(withExtension(req.file.originalname, image.ext))
+  const key = `${client.s3_prefix}/${Date.now()}-${filename}`
   try {
     await s3.send(new PutObjectCommand({
       Bucket: BUCKET,
       Key: key,
-      Body: req.file.buffer,
-      ContentType: req.file.mimetype,
+      Body: image.buffer,
+      ContentType: image.mimetype,
     }))
   } catch (err) {
     console.error('[media] upload failed', err)
     return res.status(500).json({ error: 'S3 upload failed' })
   }
 
-  res.json({ key, url: publicUrlForKey(key) })
+  res.json({
+    key,
+    url: publicUrlForKey(key),
+    width: image.width,
+    height: image.height,
+    original_bytes: image.originalBytes,
+    bytes: image.bytes,
+    optimized: image.changed,
+  })
 })
 
 // multer error handler — catches file-too-large and bad mimetype

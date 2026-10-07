@@ -1,5 +1,5 @@
 // src/pages/Media.tsx
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useClient } from '../context/ClientContext'
 import {
   useMediaAssets,
@@ -16,6 +16,7 @@ export default function Media() {
   const { selectedClient } = useClient()
   const clientId = selectedClient?.id || ''
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [uploadNote, setUploadNote] = useState('')
 
   const { data, isLoading } = useMediaAssets(clientId)
   const upload = useUploadMedia(clientId)
@@ -53,7 +54,14 @@ export default function Media() {
   const handleFileChosen = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    try { await upload.mutateAsync(file) }
+    setUploadNote('')
+    try {
+      const r = await upload.mutateAsync(file)
+      const size = r.width && r.height ? `, ${r.width}×${r.height}` : ''
+      setUploadNote(r.optimized
+        ? `${file.name} resized for email: ${formatBytes(r.original_bytes)} → ${formatBytes(r.bytes)}${size}.`
+        : `${file.name} uploaded (${formatBytes(r.bytes)}${size}). It was already email-ready.`)
+    }
     catch (err) { alert(err instanceof Error ? err.message : 'Upload failed') }
     finally { if (fileInputRef.current) fileInputRef.current.value = '' }
   }
@@ -74,6 +82,10 @@ export default function Media() {
           <p className="text-sm text-gray-600">
             Images for {selectedClient.name}. Click "Copy URL" to paste into your email HTML.
           </p>
+          <p className="text-xs text-gray-500">
+            Uploads up to 25 MB are resized to 1200px and compressed automatically. Animated GIFs are kept as-is.
+          </p>
+          {uploadNote && <p className="mt-1 text-sm text-green-700">{uploadNote}</p>}
         </div>
         <div className="flex gap-2">
           <input
@@ -99,4 +111,9 @@ export default function Media() {
       />
     </div>
   )
+}
+
+function formatBytes(n: number) {
+  if (n >= 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${Math.max(1, Math.round(n / 1024))} KB`
 }

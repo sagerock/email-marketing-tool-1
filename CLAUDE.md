@@ -107,6 +107,17 @@ me" (`POST /api/brand-story/interview`) asks a few questions and returns a draft
 before saving; the model may suggest colors and fonts but never a logo URL. Browser test:
 `scripts/test-brand-story.cjs`. Alderbrook (sample) was seeded from Sage's first builder chat.
 
+### Media uploads are resized
+
+Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`
+(sharp) before storing it: longest side ≤ 1200px, EXIF orientation baked in, metadata/GPS
+stripped, recompressed. Opaque photo PNGs become JPEG and WebP becomes JPEG/PNG (classic
+Outlook can't show WebP); transparent PNGs stay PNG; animated GIFs and already-small images are
+stored untouched. Upload limit is 25 MB. If sharp fails to load, uploads fall back to the
+original file. `scripts/optimize-media-library.mjs` shrinks files already in the library in
+place (same key and format, so sent emails keep working), backing originals up to
+`_originals/<key>`; `--restore` puts them back. Ran 2026-10-07: 9 files, 3.5 MB → 1 MB.
+
 ### Public List Signups
 
 `POST /api/public/list-signup` (body: `email`, optional `first_name`, `list`) lets a

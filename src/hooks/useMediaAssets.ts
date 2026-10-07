@@ -25,6 +25,16 @@ export function useMediaAssets(clientId: string | null | undefined) {
   })
 }
 
+export type UploadResult = {
+  key: string
+  url: string
+  width: number | null
+  height: number | null
+  original_bytes: number
+  bytes: number
+  optimized: boolean
+}
+
 export function useUploadMedia(clientId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -37,7 +47,7 @@ export function useUploadMedia(clientId: string) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || `Upload failed: ${res.status}`)
       }
-      return res.json() as Promise<{ key: string; url: string }>
+      return res.json() as Promise<UploadResult>
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['media', clientId] }),
   })
