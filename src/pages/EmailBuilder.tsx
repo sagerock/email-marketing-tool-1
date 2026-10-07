@@ -8,6 +8,8 @@ import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle
 import MediaPicker from '../components/media/MediaPicker'
 import ChatMarkdown from '../components/ui/ChatMarkdown'
 import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
+import ReadyToSendPanel from '../components/builder/ReadyToSendPanel'
+import { checkEmail, type EmailIssue } from '../lib/emailChecks'
 import { cn } from '../lib/utils'
 
 interface ChatMessage {
@@ -71,6 +73,12 @@ export default function EmailBuilder() {
   const [previewMode, setPreviewMode] = useState<'desktop' | 'mobile'>('desktop')
   // The part of the email clicked in the preview; edits are kept inside it.
   const [selection, setSelection] = useState<PreviewSelection | null>(null)
+  const issues = useMemo(
+    () => (currentHtml ? checkEmail(currentHtml, currentSubject, currentPreviewText) : []),
+    [currentHtml, currentSubject, currentPreviewText]
+  )
+  // CAN-SPAM problems also show in the header, where they're hard to miss.
+  const complianceWarnings = issues.filter(i => i.id === 'no-unsub' || i.id === 'no-address').map(i => i.title)
 
   // Template reference state
   const [templateIndex, setTemplateIndex] = useState<TemplateIndexItem[]>([])
@@ -111,8 +119,6 @@ export default function EmailBuilder() {
   const [folders, setFolders] = useState<Folder[]>([])
   const [saving, setSaving] = useState(false)
 
-  // CAN-SPAM warnings
-  const [complianceWarnings, setComplianceWarnings] = useState<string[]>([])
 
   // Edit mode state
   const [editTemplateName, setEditTemplateName] = useState<string | null>(null)
@@ -193,23 +199,6 @@ export default function EmailBuilder() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, streamingText])
-
-  // Check CAN-SPAM compliance when HTML updates
-  useEffect(() => {
-    if (!currentHtml) {
-      setComplianceWarnings([])
-      return
-    }
-    const htmlLower = currentHtml.toLowerCase()
-    const warnings: string[] = []
-    if (!htmlLower.includes('{{unsubscribe_url}}')) {
-      warnings.push('Missing {{unsubscribe_url}}')
-    }
-    if (!htmlLower.includes('{{mailing_address}}')) {
-      warnings.push('Missing {{mailing_address}}')
-    }
-    setComplianceWarnings(warnings)
-  }, [currentHtml])
 
   const fetchTemplateIndex = async () => {
     try {
@@ -299,8 +288,11 @@ export default function EmailBuilder() {
     return text.split(/```(?:json|edits)|<<<<<<< FIND/)[0].replace(/```[a-z]*\s*$/, '').trim()
   }
 
-  const handleSend = async () => {
-    const trimmed = input.trim()
+  // `opts` lets the ready-to-send panel send a fix with its own selection,
+  // without waiting for state updates to land.
+  const handleSend = async (opts?: { text?: string; selection?: PreviewSelection | null }) => {
+    const trimmed = (opts?.text ?? input).trim()
+    const activeSelection = opts && 'selection' in opts ? opts.selection ?? null : selection
     if (!trimmed || isStreaming || saving || !selectedClient) return
 
     const userMessage: ChatMessage = {
@@ -335,7 +327,7 @@ export default function EmailBuilder() {
           currentEmail: currentHtml
             ? { html_content: currentHtml, subject: currentSubject, preview_text: currentPreviewText }
             : undefined,
-          selection: currentHtml && selection ? selection : undefined,
+          selection: currentHtml && activeSelection ? activeSelection : undefined,
         }),
       })
 
@@ -426,6 +418,28 @@ export default function EmailBuilder() {
       setIsStreaming(false)
       setStreamingText('')
       setStreamStatus('')
+    }
+  }
+
+  const showIssue = (issue: EmailIssue) => {
+    if (issue.span) setSelection({ ...issue.span, label: issue.title })
+  }
+
+  // A fix prompt goes straight to the AI, scoped to the issue's element when it
+  // has one; a fix draft (e.g. "Change this link to: ") waits for the user.
+  const fixIssue = (issue: EmailIssue) => {
+    const sel = issue.span ? { ...issue.span, label: issue.title } : null
+    setSelection(sel)
+    if (issue.fixPrompt) {
+      handleSend({ text: issue.fixPrompt, selection: sel })
+    } else if (issue.fixDraft) {
+      setInput(issue.fixDraft)
+      requestAnimationFrame(() => {
+        const box = inputRef.current
+        if (!box) return
+        box.focus()
+        box.setSelectionRange(box.value.length, box.value.length)
+      })
     }
   }
 
@@ -835,7 +849,7 @@ export default function EmailBuilder() {
               />
               <button
                 aria-label="Send instructions"
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={!input.trim() || isStreaming || saving}
                 className={cn(
                   'flex-shrink-0 p-2 rounded-md transition-colors',
@@ -872,6 +886,9 @@ export default function EmailBuilder() {
               )}
             </div>
             <div className="flex items-center gap-1 ml-4 flex-shrink-0">
+              {currentHtml && (
+                <ReadyToSendPanel issues={issues} busy={isStreaming || saving} onShow={showIssue} onFix={fixIssue} />
+              )}
               <button
                 type="button"
                 onClick={() => setPickerOpen(true)}

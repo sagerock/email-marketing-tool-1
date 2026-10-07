@@ -149,6 +149,17 @@ than a full rewrite, and returns the shifted span so the selection persists. A g
 while a part is selected gets no edits and a suggestion to clear the selection. Browser test:
 `scripts/test-click-to-edit.cjs <email.html>...` (pass real templates, e.g. Alderbrook + the Scoop).
 
+Ready to send? (2026-10-07): `src/lib/emailChecks.ts` checks the builder's current email on
+every change (pure, in the browser) and `ReadyToSendPanel` shows the count in the preview toolbar.
+Errors: missing unsubscribe tag, no mailing address (the tag or a typed US postal address both
+pass, e.g. the Scoop footer), no subject, links to `#`/empty/`javascript:`/non-URL/placeholder
+domains/non-URL merge tags, images with no or relative src, unfilled `{{PLACEHOLDER}}`s (link
+targets are reported per link instead), filler text. Warnings: no preview text, http links, no alt,
+no width, WebP, `font-size:0` on an image cell, flex/grid, over Gmail's ~102 KB clip. Repeats are
+grouped. "Fix it" sends the issue's `fixPrompt` scoped to its element via click-to-edit; "Fix it…"
+selects the element and pre-fills the chat (e.g. "Change this link to: "). The header CAN-SPAM
+warning reads from the same checks. Browser test: `scripts/test-ready-to-send.cjs <email.html>`.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`
