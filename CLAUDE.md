@@ -130,6 +130,17 @@ uploads (`api/builder-media.js`) to the first user message as 320px thumbnails l
 URL and full size, cached in memory by key + ETag; the model picks images by what it sees and never
 invents URLs. Verified against the real model on Alderbrook before shipping.
 
+Click-to-edit (2026-10-07): the preview (`src/components/builder/SelectablePreview.tsx`) lets
+the user click part of the email. `src/lib/emailSections.ts` scans the HTML source for selectable
+elements and their exact source spans; only the preview copy gets `data-sr` markers, never the saved
+HTML. First click selects the section (outermost block under the ~600px body that's under 60% of
+its height), each further click drills into a smaller piece. The request sends `selection: {start,
+end, label}`; the server adds a `<selected_part>` after `<current_email>`, requires every FIND to
+lie inside the span (uniqueness is checked within it), retries once with corrected edits rather
+than a full rewrite, and returns the shifted span so the selection persists. A global request
+while a part is selected gets no edits and a suggestion to clear the selection. Browser test:
+`scripts/test-click-to-edit.cjs <email.html>...` (pass real templates, e.g. Alderbrook + the Scoop).
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

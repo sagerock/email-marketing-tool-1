@@ -30,7 +30,7 @@ const { BrandStoryError, normalizeBrandStoryInput, brandStoryPrompt, runBrandInt
 const { optimizeImage, withExtension } = require('./image-optimize')
 const {
   OUTPUT_FORMAT_PROMPT, currentEmailBlock, normalizeCurrentEmail, resolveDesign, retryAsFullPrompt,
-  conversationalText,
+  conversationalText, normalizeSelection, retrySelectedPrompt,
 } = require('./email-builder-edits')
 const { builderParams, replyText, BuilderRefusal } = require('./email-builder-model')
 const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
@@ -2563,6 +2563,8 @@ app.post('/api/email-builder/chat', authenticateUser, async (req, res) => {
     const { clientId, messages, referenceTemplateIds } = req.body
     // The design currently in the preview; edits are applied to it.
     const currentEmail = normalizeCurrentEmail(req.body.currentEmail)
+    // The part clicked in the preview, if any; edits must stay inside it.
+    const selection = normalizeSelection(req.body.selection, currentEmail)
 
     if (!clientId || !messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'clientId and messages are required' })
@@ -2757,7 +2759,7 @@ DESIGN BEST PRACTICES:
     const last = claudeMessages[claudeMessages.length - 1]
     if (currentEmail && last?.role === 'user') {
       const blocks = typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content
-      last.content = [...blocks, { type: 'text', text: currentEmailBlock(currentEmail) }]
+      last.content = [...blocks, { type: 'text', text: currentEmailBlock(currentEmail, selection) }]
     }
 
     // Set up SSE streaming
@@ -2795,11 +2797,23 @@ DESIGN BEST PRACTICES:
 
     try {
       const reply = await runStream(claudeMessages)
-      let resolved = resolveDesign(reply, currentEmail)
+      let resolved = resolveDesign(reply, currentEmail, selection)
       if (resolved.kind === 'edits') {
         console.log(`[email-builder] applied ${resolved.count} targeted edit(s)`)
       }
-      if (resolved.kind === 'failed') {
+      if (resolved.kind === 'failed' && selection) {
+        // A selected part must stay the only thing that changes, so the retry
+        // asks for corrected edits rather than a full rewrite.
+        console.warn(`[email-builder] selected-part edit failed (${resolved.reason}); retrying edits`)
+        send({ type: 'status', text: 'That edit didn’t line up with the selected part, so I’m trying again…' })
+        const retry = await runStream([
+          ...claudeMessages,
+          { role: 'assistant', content: reply },
+          { role: 'user', content: retrySelectedPrompt(resolved.reason) },
+        ])
+        const again = resolveDesign(retry, currentEmail, selection)
+        resolved = again.kind === 'edits' ? again : { kind: 'failed', reason: resolved.reason }
+      } else if (resolved.kind === 'failed') {
         // Never guess at a bad edit: ask for the complete email instead.
         console.warn(`[email-builder] targeted edit failed (${resolved.reason}); retrying as full HTML`)
         send({ type: 'status', text: 'That quick edit didn’t line up, so I’m rebuilding the full email…' })
@@ -2814,7 +2828,7 @@ DESIGN BEST PRACTICES:
       if (resolved.kind === 'edits' || resolved.kind === 'full') {
         send({
           type: 'result', mode: resolved.kind, edit_count: resolved.count || 0, design: resolved.design,
-          note: conversationalText(reply),
+          note: conversationalText(reply), selection: resolved.selection,
         })
       } else if (resolved.kind === 'failed') {
         send({ type: 'result', mode: 'failed', reason: resolved.reason, note: conversationalText(reply) })

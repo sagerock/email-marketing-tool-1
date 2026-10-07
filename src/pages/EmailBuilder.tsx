@@ -4,9 +4,10 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
 import ChatMarkdown from '../components/ui/ChatMarkdown'
+import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
 import { cn } from '../lib/utils'
 
 interface ChatMessage {
@@ -24,6 +25,7 @@ interface DesignResult {
   edit_count?: number
   reason?: string
   note?: string
+  selection?: { start: number; end: number }
   design?: { html_content: string; subject?: string; preview_text?: string }
 }
 
@@ -67,6 +69,8 @@ export default function EmailBuilder() {
   const [currentSubject, setCurrentSubject] = useState('')
   const [currentPreviewText, setCurrentPreviewText] = useState('')
   const [previewMode, setPreviewMode] = useState<'desktop' | 'mobile'>('desktop')
+  // The part of the email clicked in the preview; edits are kept inside it.
+  const [selection, setSelection] = useState<PreviewSelection | null>(null)
 
   // Template reference state
   const [templateIndex, setTemplateIndex] = useState<TemplateIndexItem[]>([])
@@ -148,6 +152,7 @@ export default function EmailBuilder() {
     setTemplateLoading(true)
     setTemplateLoadError('')
     setCurrentHtml('')
+    setSelection(null)
     setEditTemplateName(null)
     const load = async () => {
       try {
@@ -165,6 +170,7 @@ export default function EmailBuilder() {
         if (selectedClient?.id !== owner.id) setSelectedClient(owner)
         setSavedSnapshot(JSON.stringify([data.html_content, data.subject || '', data.preview_text || '']))
         setCurrentHtml(data.html_content)
+        setSelection(null)
         setCurrentSubject(data.subject || '')
         setCurrentPreviewText(data.preview_text || '')
         setEditTemplateName(data.name)
@@ -258,6 +264,7 @@ export default function EmailBuilder() {
         .single()
       if (error || !data) return
       setCurrentHtml(data.html_content || '')
+      setSelection(null)
       setCurrentSubject(data.subject || '')
       setCurrentPreviewText(data.preview_text || '')
       if (!referenceTemplateIds.includes(data.id)) {
@@ -328,6 +335,7 @@ export default function EmailBuilder() {
           currentEmail: currentHtml
             ? { html_content: currentHtml, subject: currentSubject, preview_text: currentPreviewText }
             : undefined,
+          selection: currentHtml && selection ? selection : undefined,
         }),
       })
 
@@ -403,6 +411,9 @@ export default function EmailBuilder() {
         setCurrentHtml(design.html_content)
         setCurrentSubject(design.subject || '')
         setCurrentPreviewText(design.preview_text || '')
+        // Keep the same part selected (the server returns its new span) so
+        // follow-ups like "a bit more" still apply to it.
+        setSelection(prev => (prev && result?.selection ? { ...prev, ...result.selection } : null))
       }
     } catch (err: any) {
       const errorMessage: ChatMessage = {
@@ -696,6 +707,7 @@ export default function EmailBuilder() {
                       {msg.editCount ? <span className="mr-2 text-gray-500">Quick edit · {msg.editCount} change{msg.editCount === 1 ? '' : 's'}</span> : null}
                       {msg.htmlContent === currentHtml ? 'Current preview' : <button disabled={isStreaming || saving} onClick={() => {
                         setCurrentHtml(msg.htmlContent!)
+                        setSelection(null)
                         setCurrentSubject(msg.subject || '')
                         setCurrentPreviewText(msg.previewText || '')
                         setMessages(prev => [...prev, { ...msg, id: crypto.randomUUID(), content: 'Restored this earlier preview. Save it to keep these changes.' }])
@@ -784,6 +796,15 @@ export default function EmailBuilder() {
               </div>
             )}
 
+            {selection && (
+              <div className="mb-2 flex items-center gap-2 rounded-md border border-purple-200 bg-purple-50 px-2 py-1 text-xs text-purple-800">
+                <MousePointerClick className="h-3.5 w-3.5 flex-shrink-0" />
+                <span className="truncate">Editing: <span className="font-medium">{selection.label}</span></span>
+                <button onClick={() => setSelection(null)} className="ml-auto text-purple-500 hover:text-purple-800" aria-label="Clear selection" title="Edit the whole email instead">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={() => setShowReferencePicker(!showReferencePicker)}
@@ -803,7 +824,7 @@ export default function EmailBuilder() {
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 aria-label="Newsletter instructions"
-                placeholder="Describe what you want to build or change..."
+                placeholder={selection ? 'What should change in this part?' : 'Describe what you want to build or change...'}
                 className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 rows={2}
                 disabled={isStreaming || saving}
@@ -822,7 +843,7 @@ export default function EmailBuilder() {
                 <Send className="h-4 w-4" />
               </button>
             </div>
-            <p className="mt-1 text-xs text-gray-400">Enter to send, Shift+Enter for new line</p>
+            <p className="mt-1 text-xs text-gray-400">Enter to send, Shift+Enter for new line{currentHtml && !selection ? ' · Click part of the preview to edit just that part' : ''}</p>
           </div>
         </div>
 
@@ -893,12 +914,11 @@ export default function EmailBuilder() {
                   previewMode === 'desktop' ? 'w-[620px]' : 'w-[395px]'
                 )}
               >
-                <iframe
-                  srcDoc={currentHtml}
-                  className="w-full border-0"
-                  style={{ height: '800px' }}
-                  title="Email preview"
-                  sandbox="allow-same-origin"
+                <SelectablePreview
+                  html={currentHtml}
+                  selection={selection}
+                  onSelect={setSelection}
+                  layoutKey={previewMode}
                 />
               </div>
             ) : (

@@ -132,3 +132,47 @@ test('current email block and input normalization', () => {
   assert.equal(block, '<current_email subject="Say &quot;hi&quot;" preview_text="">\n<html></html>\n</current_email>')
   assert.match(OUTPUT_FORMAT_PROMPT, /<<<<<<< FIND/)
 })
+
+test('a selected part: edits must land inside it, and the span tracks the change', () => {
+  const { normalizeSelection } = require('./email-builder-edits')
+  const html = '<table><tr><td>Hello</td></tr><tr><td><a style="background:#3A6B35">Visit</a></td></tr><tr><td>Hello</td></tr></table>'
+  const email = { html_content: html, subject: 'S', preview_text: '' }
+  const start = html.indexOf('<tr><td><a')
+  const end = html.indexOf('</tr>', start) + 5
+  const selection = normalizeSelection({ start, end, label: 'Button: "Visit"' }, email)
+  assert.deepEqual(selection, { start, end, label: 'Button: "Visit"' })
+
+  // "Hello" appears twice in the email, but the FIND only has to be unique inside the selection.
+  const inside = resolveDesign('```edits\n<<<<<<< FIND\n#3A6B35\n=======\n#D4A853\n>>>>>>> REPLACE\n<<<<<<< FIND\nVisit\n=======\nCome visit us\n>>>>>>> REPLACE\n```', email, selection)
+  assert.equal(inside.kind, 'edits')
+  assert.equal(inside.design.html_content, html.replace('#3A6B35', '#D4A853').replace('Visit', 'Come visit us'))
+  assert.deepEqual(inside.selection, { start, end: end + 'Come visit us'.length - 'Visit'.length })
+  assert.equal(inside.design.html_content.slice(inside.selection.start, inside.selection.end),
+    '<tr><td><a style="background:#D4A853">Come visit us</a></td></tr>')
+
+  const outside = resolveDesign('```edits\n<<<<<<< FIND\nHello\n=======\nHi\n>>>>>>> REPLACE\n```', email, selection)
+  assert.equal(outside.kind, 'failed')
+  assert.match(outside.reason, /was not found in the selected part/)
+})
+
+test('a full rewrite with a selection is accepted only if the rest is untouched', () => {
+  const html = '<p>Top</p><div>Middle</div><p>Bottom</p>'
+  const email = { html_content: html, subject: 'S', preview_text: '' }
+  const selection = { start: html.indexOf('<div>'), end: html.indexOf('</div>') + 6, label: 'Block' }
+  const json = h => '```json\n' + JSON.stringify({ subject: 'S', preview_text: '', html_content: h }) + '\n```'
+  const ok = resolveDesign(json('<p>Top</p><div>New middle</div><p>Bottom</p>'), email, selection)
+  assert.equal(ok.kind, 'full')
+  assert.deepEqual(ok.selection, { start: selection.start, end: selection.start + '<div>New middle</div>'.length })
+  assert.equal(resolveDesign(json('<p>TOP</p><div>New</div><p>Bottom</p>'), email, selection).kind, 'failed')
+})
+
+test('selection input is validated and the prompt block includes the part', () => {
+  const { normalizeSelection } = require('./email-builder-edits')
+  const email = { html_content: '<p>abc</p>', subject: '', preview_text: '' }
+  assert.equal(normalizeSelection({ start: 0, end: 99 }, email), null)
+  assert.equal(normalizeSelection({ start: 3, end: 3 }, email), null)
+  assert.equal(normalizeSelection({ start: '0', end: 5 }, email), null)
+  assert.equal(normalizeSelection({ start: 0, end: 5 }, null), null)
+  const block = currentEmailBlock(email, { start: 0, end: 10, label: 'Text: "abc"' })
+  assert.match(block, /<\/current_email>\n<selected_part label="Text: &quot;abc&quot;">\n<p>abc<\/p>\n<\/selected_part>$/)
+})

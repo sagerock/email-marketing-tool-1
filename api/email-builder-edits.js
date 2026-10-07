@@ -41,12 +41,31 @@ B) FULL EMAIL — for a brand-new email, when no <current_email> is provided, or
 }
 \`\`\`
 - html_content is always the complete document from <!DOCTYPE> to </html>.
+SELECTED PART:
+- When a <selected_part> follows the <current_email>, the user clicked that part of the preview. "This", "it" and "here" mean that part.
+- Change only what is inside it: use targeted edits whose FIND text is copied from inside <selected_part>. Never return the full email while a part is selected.
+- If the request clearly needs changes outside the selected part (for example the whole email's font), make no edits; say so briefly and suggest clearing the selection.
 - Earlier assistant turns may show "[email design output omitted]". That's expected: the latest version is always the <current_email> attached to the newest message, and your edits apply to it.`
 
-function currentEmailBlock(email) {
+const attr = v => String(v || '').replace(/"/g, '&quot;')
+
+function currentEmailBlock(email, selection = null) {
   if (!email?.html_content) return ''
-  const attr = v => String(v || '').replace(/"/g, '&quot;')
-  return `<current_email subject="${attr(email.subject)}" preview_text="${attr(email.preview_text)}">\n${email.html_content}\n</current_email>`
+  const block = `<current_email subject="${attr(email.subject)}" preview_text="${attr(email.preview_text)}">\n${email.html_content}\n</current_email>`
+  if (!selection) return block
+  const part = email.html_content.slice(selection.start, selection.end)
+  return `${block}\n<selected_part label="${attr(selection.label)}">\n${part}\n</selected_part>`
+}
+
+// A clicked span of the current email: { start, end, label } with integer
+// offsets inside the HTML. Anything else is ignored rather than trusted.
+function normalizeSelection(input, email) {
+  if (!input || !email) return null
+  const { start, end } = input
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return null
+  if (start < 0 || end <= start || end > email.html_content.length) return null
+  const label = typeof input.label === 'string' ? input.label.slice(0, 120) : 'Selected part'
+  return { start, end, label }
 }
 
 function normalizeCurrentEmail(input) {
@@ -113,7 +132,15 @@ function escapeRegExp(s) {
 // Locate `find` in `html` exactly once. Exact match first; then a match that
 // ignores differences in whitespace (indentation, CRLF, wrapped lines), which
 // is the most common way a correct FIND fails to match verbatim.
-function locate(html, find) {
+function locate(fullHtml, find, range = null) {
+  // With a range, search only inside it; offsets stay relative to fullHtml.
+  const offset = range ? range.start : 0
+  const html = range ? fullHtml.slice(range.start, range.end) : fullHtml
+  const found = locateIn(html, find)
+  return found.error ? found : { start: found.start + offset, end: found.end + offset }
+}
+
+function locateIn(html, find) {
   const first = html.indexOf(find)
   if (first !== -1) {
     if (html.indexOf(find, first + 1) !== -1) return { error: 'appears more than once' }
@@ -128,17 +155,22 @@ function locate(html, find) {
   return { start: matches[0].index, end: matches[0].index + matches[0][0].length }
 }
 
-function applyEdits(html, edits) {
+// With a range, every FIND must lie inside it, and the range grows or shrinks
+// with each replacement so the caller can keep the same part selected.
+function applyEdits(html, edits, range = null) {
   let out = html
+  const r = range ? { start: range.start, end: range.end } : null
+  const where = r ? 'the selected part' : 'the current email'
   for (let i = 0; i < edits.length; i++) {
     const { find, replace } = edits[i]
-    const spot = locate(out, find)
+    const spot = locate(out, find, r)
     if (spot.error) {
-      return { ok: false, failedIndex: i, reason: `Edit ${i + 1}'s FIND text ${spot.error} in the current email` }
+      return { ok: false, failedIndex: i, reason: `Edit ${i + 1}'s FIND text ${spot.error} in ${where}` }
     }
     out = out.slice(0, spot.start) + replace + out.slice(spot.end)
+    if (r) r.end += replace.length - (spot.end - spot.start)
   }
-  return { ok: true, html: out }
+  return { ok: true, html: out, range: r }
 }
 
 // The model's visible note, without any design block.
@@ -154,14 +186,15 @@ function conversationalText(text) {
 // Resolve a finished model reply into a design update, if it contains one.
 // Returns { kind: 'none' } | { kind: 'full', design } | { kind: 'edits', design, count }
 // | { kind: 'failed', reason }.
-function resolveDesign(text, currentEmail) {
+function resolveDesign(text, currentEmail, selection = null) {
   const edits = currentEmail ? parseEditBlock(text) : null
   if (edits) {
-    const applied = applyEdits(currentEmail.html_content, edits.edits)
+    const applied = applyEdits(currentEmail.html_content, edits.edits, selection)
     if (!applied.ok) return { kind: 'failed', reason: applied.reason }
     return {
       kind: 'edits',
       count: edits.edits.length,
+      selection: applied.range ? { start: applied.range.start, end: applied.range.end } : undefined,
       design: {
         html_content: applied.html,
         subject: edits.subject ?? currentEmail.subject,
@@ -170,8 +203,23 @@ function resolveDesign(text, currentEmail) {
     }
   }
   const full = extractJsonDesign(text)
+  if (full && selection) {
+    // A full rewrite is only acceptable if everything outside the selection survived.
+    const html = currentEmail.html_content
+    const before = html.slice(0, selection.start)
+    const after = html.slice(selection.end)
+    const out = full.html_content
+    if (out.length < before.length + after.length || !out.startsWith(before) || !out.endsWith(after)) {
+      return { kind: 'failed', reason: 'The reply rewrote parts of the email outside the selected part' }
+    }
+    return { kind: 'full', design: full, selection: { start: selection.start, end: out.length - after.length } }
+  }
   if (full) return { kind: 'full', design: full }
   return { kind: 'none' }
+}
+
+function retrySelectedPrompt(reason) {
+  return `${reason}, so nothing was changed. Reply with ONLY a corrected \`\`\`edits block whose FIND text is copied exactly from inside <selected_part>. No other text.`
 }
 
 function retryAsFullPrompt(reason) {
@@ -179,6 +227,8 @@ function retryAsFullPrompt(reason) {
 }
 
 module.exports = {
+  normalizeSelection,
+  retrySelectedPrompt,
   OUTPUT_FORMAT_PROMPT,
   MAX_CURRENT_HTML_CHARS,
   currentEmailBlock,
