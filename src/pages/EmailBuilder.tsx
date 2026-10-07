@@ -457,7 +457,11 @@ export default function EmailBuilder() {
         html_content: currentHtml, updated_at: new Date().toISOString() }
       const query = editTemplateId && !saveAsCopy
         ? supabase.from('templates').update(values).eq('id', editTemplateId).eq('client_id', selectedClient.id)
-        : supabase.from('templates').insert({ ...values, folder_id: saveFolderId, client_id: selectedClient.id })
+        : supabase.from('templates').insert({
+            ...values, folder_id: saveFolderId, client_id: selectedClient.id,
+            // A new version remembers its source so Polaris revises the newest one.
+            source_template_id: editTemplateId && saveAsCopy ? editTemplateId : null,
+          })
       const { data, error } = await query.select('id').single()
       if (error || !data) throw error || new Error('No saved draft returned')
       setCurrentSubject(saveSubject)

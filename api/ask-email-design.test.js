@@ -94,7 +94,7 @@ function fakeClaude(respond) {
 }
 const userText = request => request.messages[0].content.map(b => b.text || '').join('\n')
 
-function designStore({ sourceMissing = false, existing = null } = {}) {
+function designStore({ sourceMissing = false, existing = null, children = {}, versions = {} } = {}) {
   const calls = []
   return {
     calls,
@@ -106,11 +106,17 @@ function designStore({ sourceMissing = false, existing = null } = {}) {
         eq(k, v) { call.filters.push([k, v]); return query },
         like() { call.lookup = true; return query },
         order() { return query },
-        limit() { return Promise.resolve({ data: call.lookup && existing ? [existing] : [], error: null }) },
+        limit() {
+          const parent = call.filters.find(([k]) => k === 'source_template_id')?.[1]
+          if (parent) return Promise.resolve({ data: children[parent] ? [{ id: children[parent] }] : [], error: null })
+          return Promise.resolve({ data: call.lookup && existing ? [existing] : [], error: null })
+        },
         insert(value) { call.insert = value; return query },
         single() {
           if (table === 'clients') return Promise.resolve({ data: { id: 'sagerock' } })
           if (call.insert) return Promise.resolve({ data: { id: 'new-version', name: call.insert.name } })
+          const id = call.filters.find(([k]) => k === 'id')?.[1]
+          if (versions[id]) return Promise.resolve({ data: versions[id] })
           return Promise.resolve({ data: sourceMissing ? null : { id: SOURCE_ID, name: 'Prior draft', subject: 'Original subject', preview_text: 'Original preheader', html_content: SOURCE_HTML } })
         },
       }
@@ -144,6 +150,33 @@ test('revision applies targeted edits to a tenant-scoped source and inserts a se
   assert.equal(result.id, 'new-version')
   assert.equal(result.source_template_id, SOURCE_ID)
   assert.match(result.preview_html, /Revised intro/)
+})
+
+test('a revision from an old review link follows saved versions to the newest one', async () => {
+  const V2 = 'b1234567-1234-4234-8234-123456789012'
+  const V3 = 'c1234567-1234-4234-8234-123456789012'
+  const v3Html = SOURCE_HTML.replace('Old intro', 'Rocky edited this in the builder')
+  const supabase = designStore({
+    children: { [SOURCE_ID]: V2, [V2]: V3 },
+    versions: { [V3]: { id: V3, name: 'Prior draft — new version', subject: 'Builder subject', preview_text: '', html_content: v3Html } },
+  })
+  const anthropic = fakeClaude(() => '```edits\n<<<<<<< FIND\nRocky edited this in the builder\n=======\nAnd then by email\n>>>>>>> REPLACE\n```')
+  const result = await createEmailDesignDraft({
+    supabase, clientId: 'sagerock', baseUrl: 'https://mail.sagerock.com',
+    brief: 'Change the intro', referenceTemplateIds: [], sourceTemplateId: SOURCE_ID, requestKey: 'revision-newest',
+    anthropic, media: async () => [],
+  })
+  assert.match(userText(anthropic.requests[0]), /Rocky edited this in the builder/)
+  const insert = supabase.calls.find(c => c.insert).insert
+  assert.match(insert.html_content, /And then by email/)
+  assert.equal(insert.source_template_id, V3)
+  assert.equal(insert.subject, 'Builder subject')
+  assert.equal(result.source_template_id, V3)
+  assert.equal(result.requested_source_template_id, SOURCE_ID)
+  // Every lookup stays inside the configured client.
+  for (const c of supabase.calls.filter(c => c.table === 'templates' && !c.insert)) {
+    if (c.filters.length) assert.ok(c.filters.some(([k, v]) => k === 'client_id' && v === 'sagerock'))
+  }
 })
 
 test('a revision whose edits do not apply is regenerated in full', async () => {

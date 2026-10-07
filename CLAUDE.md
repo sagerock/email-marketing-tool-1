@@ -75,7 +75,11 @@ as a hidden template marker so inbound retries reuse the first draft.
 
 `sourceTemplateId` requests a revision of an existing SageRock template. The
 builder loads that tenant-scoped source and saves the result as a new template;
-the source stays intact. Responses include `preview_html`, with personalization
+the source stays intact. Since 2026-10-07 (migration 110) every new version records
+`templates.source_template_id` (builder "Save a new version" and Polaris revisions), and a
+revision follows that chain to the most recently updated descendant before editing, so an older
+review link still revises the newest version (`requested_source_template_id` in the response is
+the one asked for). Responses include `preview_html`, with personalization
 shown as placeholders and the unsubscribe action disabled. Ask carries this
 HTML outside the model context into its normal threaded reply to the requester.
 Rocky can request a newsletter from `rocky@sagerock.com` by emailing

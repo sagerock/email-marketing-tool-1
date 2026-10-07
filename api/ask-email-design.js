@@ -170,6 +170,26 @@ async function getTemplateById(supabase, clientId, templateId) {
   return data
 }
 
+// A review link can be older than the draft Rocky is working on: she may have
+// saved a new version in the builder, or Polaris may have made one since. Walk
+// source_template_id forward to the most recently updated descendant.
+async function newestVersionId(supabase, clientId, templateId) {
+  let current = templateId
+  for (let hops = 0; hops < 25; hops++) {
+    const { data, error } = await supabase
+      .from('templates')
+      .select('id')
+      .eq('client_id', clientId)
+      .eq('source_template_id', current)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+    if (error) throw error
+    if (!data?.[0]?.id || data[0].id === current) return current
+    current = data[0].id
+  }
+  return current
+}
+
 async function getBrandReference(supabase, clientId, client) {
   if (client.brand_reference_template_id) {
     return getTemplateById(supabase, clientId, client.brand_reference_template_id)
@@ -241,9 +261,11 @@ async function createEmailDesignDraft({
   }
 
   const client = await getSingleClient(supabase, clientId)
-  const sourceTemplate = sourceTemplateId
-    ? await getTemplateById(supabase, clientId, sourceTemplateId)
-    : null
+  const revisedId = sourceTemplateId ? await newestVersionId(supabase, clientId, sourceTemplateId) : null
+  if (revisedId && revisedId !== sourceTemplateId) {
+    console.log(`[ask-email-design] revising newer version ${revisedId} instead of ${sourceTemplateId}`)
+  }
+  const sourceTemplate = revisedId ? await getTemplateById(supabase, clientId, revisedId) : null
   const brandTemplate = await getBrandReference(supabase, clientId, client)
   const referenceTemplates = await Promise.all(
     referenceTemplateIds.map(id => getTemplateById(supabase, clientId, id))
@@ -308,6 +330,7 @@ async function createEmailDesignDraft({
       preview_text: design.preview_text,
       html_content: htmlWithMarker,
       client_id: clientId,
+      source_template_id: revisedId,
     })
     .select('id, name, subject, preview_text')
     .single()
@@ -318,7 +341,8 @@ async function createEmailDesignDraft({
     duplicate_prevented: false,
     status: 'design_draft',
     ...created,
-    source_template_id: sourceTemplateId,
+    source_template_id: revisedId,
+    requested_source_template_id: sourceTemplateId,
     preview_html: previewHtml(design.html_content),
     review_url: `${baseUrl}/email-builder?templateId=${created.id}`,
   }

@@ -113,6 +113,7 @@ const token = [Buffer.from('{}').toString('base64url'),Buffer.from(JSON.stringif
     await page.waitForFunction(()=>location.search.includes('new-version-id'))
     assert.equal(writes[1].method,'POST')
     assert.equal(writes[1].body.client_id,owner.id)
+    assert.equal(writes[1].body.source_template_id,draftId,'a new version records the draft it came from')
     await clickText('Restore this preview')
     await page.waitForFunction(()=>document.body.innerText.includes('Unsaved changes'))
     const restored=await (await page.$('iframe[title="Email preview"]')).contentFrame()
