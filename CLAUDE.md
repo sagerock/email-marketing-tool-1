@@ -458,6 +458,23 @@ Regular campaigns can filter recipients by:
 
 Both filters can be combined (AND logic) - e.g., "contacts in Tradeshow X who also have tag Y"
 
+### Describe who should get it (2026-10-08)
+
+The campaign form's Target Recipients box starts with "Describe who should get this"
+(`src/components/AudienceFromText.tsx`). `POST /api/campaigns/audience-from-text` (`api/audience-from-text.js`)
+loads the client's tags (paged, with contact counts; empty tags aren't offered) and Salesforce campaigns, takes
+WooCommerce products from the form, and asks the builder model (low effort, structured output, so it needs
+Sonnet 5.5) for the existing filters. Every tag, campaign id and SKU is checked against the real lists. The form
+fills in, the live count re-runs, and the user sees a plain explanation, an amber "Not included" line for
+anything the filters can't do (opens, clicks, location, NOT, OR across groups), and an undo. It never saves or
+sends. The model is told to include every matching tag rather than silently widening the audience, and that
+"Campaign: <name>" tags mirror Salesforce campaigns (that's how to reach several Pittcon years at once).
+Real-model checks on Alconox (1,465 tags, 156 campaigns, 2-4s each): handbook downloaders → the
+"Downloaded: Aqueous Cleaning Handbook" tag (5); Pittcon customers → all six "Campaign: Pittcon" tags +
+customers (47); Pittcon 2026 dealers → that SF campaign + dealers; "leads who opened lately" → leads plus a
+"can't filter opens" warning. The form's tag list is now paged too (it stopped at 1,000, hiding 465 Alconox
+tags). Tests: `api/audience-from-text.test.js`, `scripts/test-audience-from-text.cjs`.
+
 ### Click Heatmap Report
 
 Analytics → Click Heatmap → Download PNG / PDF calls `GET /api/campaigns/:id/heatmap-report?clientId=&format=png|pdf`

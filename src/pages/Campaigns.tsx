@@ -50,6 +50,7 @@ import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import Badge from '../components/ui/Badge'
 import CampaignWorkflowField from '../components/CampaignWorkflowField'
+import AudienceFromText from '../components/AudienceFromText'
 import { Plus, Send, X, Mail, Edit2, FolderOpen, Pencil, Trash2, FolderPlus, Download, Copy } from 'lucide-react'
 
 export default function Campaigns() {
@@ -961,16 +962,20 @@ function CreateCampaignModal({
 
     setTotalContactCount(count || 0)
 
-    // Get unique tags from the tags table
-    const { data: tagsData } = await supabase
-      .from('tags')
-      .select('name')
-      .eq('client_id', clientId)
-      .order('name')
-
-    if (tagsData) {
-      setAllTags(tagsData.map(t => t.name))
+    // Get unique tags from the tags table, paged: one query returns at most 1,000 rows.
+    const names: string[] = []
+    for (let from = 0; from <= 20000; from += 1000) {
+      const { data: tagsData, error } = await supabase
+        .from('tags')
+        .select('name')
+        .eq('client_id', clientId)
+        .order('name')
+        .range(from, from + 999)
+      if (error || !tagsData) break
+      names.push(...tagsData.map(t => t.name))
+      if (tagsData.length < 1000) break
     }
+    setAllTags(names)
   }
 
   const handleTemplateChange = (templateId: string) => {
@@ -1302,6 +1307,18 @@ function CreateCampaignModal({
               Target Recipients
             </h3>
 
+            <AudienceFromText
+              clientId={clientId}
+              products={wooProducts}
+              current={{
+                filter_tags: formData.filter_tags,
+                audience_filter: formData.audience_filter,
+                salesforce_campaign_id: formData.salesforce_campaign_id,
+                purchase_filter: formData.purchase_filter,
+              }}
+              onApply={filters => setFormData(prev => ({ ...prev, ...filters }))}
+            />
+
             {/* Audience Filter (Leads / Customers / Dealers) */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1357,6 +1374,12 @@ function CreateCampaignModal({
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Filter by Tags (optional)
                 </label>
+                {formData.filter_tags.length > 0 && (
+                  <p className="mb-2 text-xs text-gray-700">
+                    <span className="font-medium">Selected ({formData.filter_tags.length}):</span> {formData.filter_tags.join(', ')}
+                    <span className="text-gray-500"> · contacts with any of these</span>
+                  </p>
+                )}
                 <div className="flex flex-wrap gap-2 p-3 border border-gray-300 rounded-md bg-gray-50">
                   {allTags.map((tag) => (
                     <Badge

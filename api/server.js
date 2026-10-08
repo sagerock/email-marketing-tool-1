@@ -34,6 +34,7 @@ const {
 const { builderParams, replyText, BuilderRefusal } = require('./email-builder-model')
 const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
 const { normalizeAttachments, attachmentBlocks } = require('./builder-attachments')
+const { interpretAudience, AudienceError } = require('./audience-from-text')
 const { checkLinks } = require('./link-check')
 const { renderSlices, reviewDesign } = require('./visual-check')
 const { buildHeatmapReport } = require('./heatmap-report')
@@ -2584,6 +2585,50 @@ app.post('/api/email-builder/visual-check', authenticateUser, async (req, res) =
     res.status(502).json({ error: 'Visual check unavailable' })
   } finally {
     visualChecksRunning--
+  }
+})
+
+const audienceRateLimit = { timestamps: [] }
+
+// "Describe who should get this" on the campaign form: plain words in, the
+// form's recipient filters out. Fills the form only; never saves or sends.
+app.post('/api/campaigns/audience-from-text', authenticateUser, async (req, res) => {
+  const now = Date.now()
+  audienceRateLimit.timestamps = audienceRateLimit.timestamps.filter(t => now - t < 60000)
+  if (audienceRateLimit.timestamps.length >= 20) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a minute.' })
+  }
+  const { clientId, text, products } = req.body
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  audienceRateLimit.timestamps.push(now)
+  try {
+    // Tags are paged: a client can have more than the 1,000 rows one query returns.
+    const tagRows = []
+    for (let from = 0; ; from += 1000) {
+      const { data, error } = await supabase.from('tags').select('name, contact_count')
+        .eq('client_id', clientId).order('name').range(from, from + 999)
+      if (error) throw error
+      tagRows.push(...(data || []))
+      if (!data || data.length < 1000 || from >= 20000) break
+    }
+    const { data: campaignRows, error: campaignError } = await supabase.from('salesforce_campaigns')
+      .select('id, name, type, status').eq('client_id', clientId).order('name')
+    if (campaignError) throw campaignError
+    const Anthropic = require('@anthropic-ai/sdk')
+    const result = await interpretAudience({
+      anthropic: new Anthropic(),
+      text,
+      tags: tagRows.filter(t => t.name).map(t => ({ name: t.name, count: t.contact_count ?? null })),
+      campaigns: campaignRows || [],
+      products,
+    })
+    console.log(`[audience] ${result.filters.filter_tags.length} tag(s), audience=${result.filters.audience_filter.join('+') || 'all'}, sf=${result.filters.salesforce_campaign_id ? 'yes' : 'no'}${result.not_possible ? ', partial' : ''}`)
+    res.json(result)
+  } catch (error) {
+    if (error instanceof AudienceError) return res.status(error.status).json({ error: error.message })
+    console.warn('[audience] could not interpret:', error.message)
+    res.status(502).json({ error: 'That didn’t work this time. Try again, or set the filters below by hand.' })
   }
 })
 
