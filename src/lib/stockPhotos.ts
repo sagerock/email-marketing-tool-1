@@ -53,3 +53,24 @@ export function adobeStockUrl(search: string, orientation?: Orientation): string
   if (orientation) params.set('filters[orientation]', orientation)
   return `https://stock.adobe.com/search/images?${params.toString()}`
 }
+
+function escapeAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+}
+
+function setAttr(tag: string, name: string, value: string): string {
+  const re = new RegExp(`(\\s${name}\\s*=\\s*)("[^"]*"|'[^']*'|[^\\s>]+)`, 'i')
+  if (re.test(tag)) return tag.replace(re, (_m, lead: string) => `${lead}"${value}"`)
+  return tag.replace(/^<img\b/i, `<img ${name}="${value}"`)
+}
+
+/** Points one <img> (its exact source span) at a new photo. Keeps every other
+ *  attribute; fills alt only when it was empty. Null if the span isn't an <img>. */
+export function setImageSource(html: string, span: { start: number; end: number }, photo: { src: string; alt?: string }): string | null {
+  const tag = html.slice(span.start, span.end)
+  if (!/^<img\b/i.test(tag)) return null
+  let next = setAttr(tag, 'src', escapeAttr(photo.src))
+  const hasAlt = /\salt\s*=\s*("[^"]*\S[^"]*"|'[^']*\S[^']*')/i.test(tag)
+  if (photo.alt && !hasAlt) next = setAttr(next, 'alt', escapeAttr(photo.alt))
+  return html.slice(0, span.start) + next + html.slice(span.end)
+}

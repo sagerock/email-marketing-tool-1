@@ -10,6 +10,7 @@ import ChatMarkdown from '../components/ui/ChatMarkdown'
 import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
 import ReadyToSendPanel from '../components/builder/ReadyToSendPanel'
 import StockPhotosPanel from '../components/builder/StockPhotosPanel'
+import { setImageSource } from '../lib/stockPhotos'
 import { scanElements } from '../lib/emailSections'
 import { checkEmail, collectLinkUrls, linkHealthIssues, sortIssues, type EmailIssue, type LinkResult } from '../lib/emailChecks'
 import { cn } from '../lib/utils'
@@ -1311,6 +1312,29 @@ export default function EmailBuilder() {
             setSelection({ start: img.start, end: img.end, label })
             setChatHidden(false)
             setInput('Replace this image with the attached photo.')
+            requestAnimationFrame(() => inputRef.current?.focus())
+          }}
+          onUsePhoto={(target, photo) => {
+            setStockOpen(false)
+            if (target.type === 'image') {
+              // Swap the photo straight into that <img>; no AI needed.
+              const img = scanElements(currentHtml).filter(e => e.tag === 'img')[target.index]
+              const next = img && setImageSource(currentHtml, img, { src: photo.url, alt: photo.alt })
+              if (!next) return
+              setCurrentHtml(next)
+              setSelection(null)
+              setMessages(prev => [...prev, {
+                id: crypto.randomUUID(), role: 'assistant',
+                content: `Swapped in a photo by ${photo.photographer} from ${photo.source === 'pixabay' ? 'Pixabay' : 'Unsplash'}.`,
+                htmlContent: next, subject: currentSubject, previewText: currentPreviewText,
+              }])
+              return
+            }
+            // A new spot or a free search: the AI places it.
+            setChatHidden(false)
+            setInput(target.type === 'idea'
+              ? `Add this photo (${target.idea.replace(/\.$/, '')}): ${photo.url}`
+              : `Use this photo: ${photo.url}`)
             requestAnimationFrame(() => inputRef.current?.focus())
           }}
         />

@@ -226,6 +226,23 @@ image. Real-model check: October newsletter and August Scoop, 4-5s, sensible sea
 the book cover, the 80th-anniversary badge and social icons. Tests: `api/stock-ideas.test.js`,
 `scripts/test-stock-photos.cjs <email.html> <photo>`.
 
+Free photos in the same panel (2026-10-08): a "Free photos from: Unsplash | Pixabay" switch, and each suggested
+search loads 12 results inline (`POST /api/stock/:source/search`, `/use`). Clicking one on an image row swaps it
+straight into that `<img>` (`setImageSource` in `src/lib/stockPhotos.ts`: only `src` changes, `alt` filled only if
+empty; no AI call), adds a "Swapped in a photo by …" chat message (so earlier previews can be restored) and
+autosaves; on a new-photo idea or the free search box, the URL goes into the chat for the AI to place.
+- Unsplash (`api/unsplash.js`, `UNSPLASH_ACCESS_KEY`, app 1096628, demo tier 50 requests/hour until Unsplash
+  approves production): their rules require hotlinking, so the email uses `images.unsplash.com` with `fm=jpg`
+  and, when the slot has both sizes, `fit=crop` to its shape at 2x. Choosing a photo pings its
+  `download_location`; Unsplash+ photos are filtered out; credits link with `utm_source=sagerock_email_tool`.
+- Pixabay (`api/pixabay.js`, `PIXABAY_API_KEY`, 100 requests/min): their rules forbid permanent hotlinking and
+  require 24-hour caching of searches, so a chosen photo is downloaded (1280px), cropped to the slot with
+  sharp (`position: attention`, 2x, JPEG) and stored under the client's `s3_prefix` as
+  `<ts>-pixabay-<id>-<tag>.jpg`; the email uses our S3 URL.
+Both keys live in `/mnt/d/dev/.env` and on the Railway backend. Real check: a Pixabay pick was cropped to a
+510x293 slot as a 1020x586, 56 KB JPEG in 0.3s; an Unsplash pick came back as a 1020x586 JPEG.
+Tests: `api/unsplash.test.js`, `api/pixabay.test.js`, same browser test.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

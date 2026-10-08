@@ -36,6 +36,8 @@ const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
 const { normalizeAttachments, attachmentBlocks } = require('./builder-attachments')
 const { interpretAudience, AudienceError } = require('./audience-from-text')
 const { stockIdeas } = require('./stock-ideas')
+const unsplash = require('./unsplash')
+const pixabay = require('./pixabay')
 const { checkLinks } = require('./link-check')
 const { renderSlices, reviewDesign } = require('./visual-check')
 const { buildHeatmapReport } = require('./heatmap-report')
@@ -2613,6 +2615,43 @@ app.post('/api/email-builder/stock-ideas', authenticateUser, async (req, res) =>
   } catch (error) {
     console.warn('[stock-ideas] unavailable:', error.message)
     res.status(502).json({ error: 'Photo ideas aren’t available right now. You can still search Adobe Stock below.' })
+  }
+})
+
+// Free photos for the Stock photos panel, from Unsplash (hotlinked, per their
+// rules) or Pixabay (downloaded into the client's media library, per theirs).
+const FREE_PHOTO_SOURCES = { unsplash, pixabay }
+const freePhotoError = error => (error instanceof unsplash.UnsplashError || error instanceof pixabay.PixabayError)
+
+app.post('/api/stock/:source/search', authenticateUser, async (req, res) => {
+  const source = FREE_PHOTO_SOURCES[req.params.source]
+  if (!source) return res.status(404).json({ error: 'Unknown photo source' })
+  try {
+    res.json(await source.searchPhotos(req.body || {}))
+  } catch (error) {
+    if (!freePhotoError(error) || error.status === 502) console.warn(`[${req.params.source}] search failed:`, error.message)
+    res.status(error.status || 502).json({ error: freePhotoError(error) && error.status !== 502 ? error.message : 'Free photo search isn’t working right now.' })
+  }
+})
+
+app.post('/api/stock/:source/use', authenticateUser, async (req, res) => {
+  const name = req.params.source
+  if (!FREE_PHOTO_SOURCES[name]) return res.status(404).json({ error: 'Unknown photo source' })
+  try {
+    let photo
+    if (name === 'pixabay') {
+      const { clientId } = req.body || {}
+      if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+      const { data: client } = await supabase.from('clients').select('s3_prefix').eq('id', clientId).single()
+      photo = await pixabay.usePhoto({ ...req.body, s3Prefix: client?.s3_prefix, s3, bucket: BUCKET, publicUrlForKey })
+    } else {
+      photo = await unsplash.usePhoto(req.body || {})
+    }
+    console.log(`[${name}] used ${photo.id} by ${photo.photographer}`)
+    res.json(photo)
+  } catch (error) {
+    if (!freePhotoError(error) || error.status === 502) console.warn(`[${name}] use failed:`, error.message)
+    res.status(error.status || 502).json({ error: freePhotoError(error) && error.status !== 502 ? error.message : 'That photo couldn’t be added right now.' })
   }
 })
 

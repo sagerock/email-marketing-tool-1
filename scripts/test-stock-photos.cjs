@@ -1,7 +1,10 @@
 // Browser regression for the builder's "Stock photos" panel: it sends the
 // email's images to /api/email-builder/stock-ideas, shows Adobe Stock search
-// links (photo filter + orientation) for photos only, and "Use a new photo
-// here" selects that exact <img> so a dropped file replaces just that image.
+// links (photo filter + orientation) for photos only, shows free Unsplash
+// photos for a search and swaps a clicked one straight into that <img> (only
+// its src changes, then autosave), hands a free-search photo to the chat, and
+// "Use a new photo here" selects that exact <img> so a dropped file replaces
+// just that image.
 // Build with dummy Supabase values:
 // VITE_SUPABASE_URL=https://newsletter-test.supabase.co VITE_SUPABASE_ANON_KEY=test-only-key npx vite build --outDir /tmp/sagerock-newsletter-ui-build
 // node scripts/test-stock-photos.cjs email.html photo.png
@@ -24,6 +27,8 @@ const sse = events => events.map(e => 'data: ' + JSON.stringify(e) + '\n\n').joi
 const html = fs.readFileSync(file, 'utf8')
 const ideaCalls = []
 const chats = []
+const unsplashCalls = []
+const writes = []
 
 ;(async()=>{
   const server = app.listen(0,'127.0.0.1')
@@ -44,7 +49,7 @@ const chats = []
         if(u.pathname==='/auth/v1/user')return reply(user)
         if(u.pathname==='/rest/v1/admin_users')return reply({id:'admin',user_id:user.id,email:user.email,role:'super_admin',client_id:null})
         if(u.pathname==='/rest/v1/clients')return reply([owner])
-        if(u.pathname==='/rest/v1/templates'&&req.method()==='PATCH')return reply({id:draftId})
+        if(u.pathname==='/rest/v1/templates'&&req.method()==='PATCH'){ writes.push(JSON.parse(req.postData()).html_content); return reply({id:draftId}) }
         if(u.pathname==='/rest/v1/templates'&&u.searchParams.has('id'))return reply({id:draftId,client_id:owner.id,name:'Newsletter',subject:'October',preview_text:'News',html_content:html})
         return reply([])
       }
@@ -56,6 +61,27 @@ const chats = []
             ? { index: 1, skip: false, searches: ['educators at conference', 'autumn campus'], orientation: 'horizontal' }
             : { index: i, skip: true, searches: [], orientation: 'horizontal' }),
             extra: [{ idea: 'Beside the podcast blurb', searches: ['podcast microphone'], orientation: 'square' }] })
+        }
+        if(u.pathname==='/api/stock/pixabay/search'){
+          unsplashCalls.push(['pixabay-search', JSON.parse(req.postData())])
+          return reply({ page: 1, total_pages: 1, photos: [7].map(n => ({ id: `${n}77`, alt: 'school, garden', thumb: `${base}/media/px.png`, color: null,
+            photographer: 'Carola68', photographer_url: 'https://pixabay.com/users/Carola68-42/', source_url: 'https://pixabay.com/photos/x-777/' })) })
+        }
+        if(u.pathname==='/api/stock/pixabay/use'){
+          const body = JSON.parse(req.postData())
+          unsplashCalls.push(['pixabay-use', body])
+          return reply({ id: body.id, url: 'https://sagerock-email-images.s3.us-east-2.amazonaws.com/sagerock/1-pixabay-777-school.jpg', alt: 'school, garden', photographer: 'Carola68', height: 293 })
+        }
+        if(u.pathname==='/api/stock/unsplash/search'){
+          const body = JSON.parse(req.postData())
+          unsplashCalls.push(['search', body])
+          return reply({ page: 1, total_pages: 1, photos: [1, 2, 3].map(n => ({ id: `photo${n}x`, alt: `campus photo ${n}`, thumb: `${base}/media/thumb${n}.png`, color: '#888888',
+            photographer: `Ana ${n}`, photographer_url: 'https://unsplash.com/@ana?utm_source=sagerock_email_tool&utm_medium=referral', unsplash_url: 'https://unsplash.com/photos/x?utm_source=sagerock_email_tool&utm_medium=referral' })) })
+        }
+        if(u.pathname==='/api/stock/unsplash/use'){
+          const body = JSON.parse(req.postData())
+          unsplashCalls.push(['use', body])
+          return reply({ id: body.id, url: `https://images.unsplash.com/photo-${body.id}?ixid=abc&fm=jpg&q=80&w=1200&fit=max`, alt: 'campus photo 2', photographer: 'Ana 2', height: 300 })
         }
         if(u.pathname==='/api/media/upload'){
           return reply({key:'guids/CABINET_sr/images/1-photo.png',url:`${base}/media/photo.png`,width:40,height:30,bytes:100,original_bytes:100,optimized:false})
@@ -86,7 +112,7 @@ const chats = []
     assert.equal(sent.clientId, owner.id)
     assert.equal(sent.images.length, imgCount, 'every image is described')
     assert.ok(sent.text.length > 100 && !/<\w/.test(sent.text), 'plain email text, no tags')
-    const links = await page.$$eval('[role=dialog] a', as => as.map(a => a.href))
+    const links = await page.$$eval('[role=dialog] a[href*="stock.adobe.com"]', as => as.map(a => a.href))
     const first = new URL(links[0])
     assert.equal(first.origin + first.pathname, 'https://stock.adobe.com/search/images')
     assert.equal(first.searchParams.get('k'), 'educators at conference')
@@ -96,7 +122,59 @@ const chats = []
     assert.match(dialog, /Skipped \d+ logos/)
     assert.match(dialog, /Beside the podcast blurb/)
     console.log('Panel: ideas for photos only, Adobe links with photo + orientation filters')
+
+    // Free photos: click a search, then a photo → swapped straight into image 2.
+    const [chip] = await page.$$('xpath/.//button[normalize-space()="educators at conference"]')
+    await chip.click()
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Free photos for educators at conference"] figure').length === 3)
+    assert.deepEqual(unsplashCalls[0], ['search', { query: 'educators at conference', orientation: 'horizontal', page: 1 }])
+    assert.match(await page.$eval('[role=dialog]', d => d.innerText), /Ana 1 · Unsplash/, 'photographer credited')
     await page.screenshot({ path: '/tmp/stock-photos-panel.png' })
+    const before = (await page.$$('[aria-label="Free photos for educators at conference"] figure button'))[1]
+    await before.click()
+    await page.waitForFunction(() => !document.querySelector('[role=dialog]'))
+    const imgSize = await page.evaluate(h => { const i = new DOMParser().parseFromString(h, 'text/html').querySelectorAll('img')[1]; return { w: i.getAttribute('width'), h: i.getAttribute('height') } }, html)
+    assert.equal(unsplashCalls[1][0], 'use')
+    assert.equal(unsplashCalls[1][1].id, 'photo2x')
+    assert.equal(String(unsplashCalls[1][1].width), String(parseInt(imgSize.w) || null), 'the slot width is sent so the photo is sized for it')
+    await page.waitForFunction(() => document.body.innerText.includes('Swapped in a photo by Ana 2 from Unsplash.'))
+    for (let t = Date.now(); !writes.length && Date.now() - t < 8000;) await new Promise(r => setTimeout(r, 100))
+    const oldTag = [...html.matchAll(/<img\b[^>]*>/gi)][1][0]
+    const newSrc = 'https://images.unsplash.com/photo-photo2x?ixid=abc&amp;fm=jpg&amp;q=80&amp;w=1200&amp;fit=max'
+    const expectedTag = oldTag.replace(/(\ssrc\s*=\s*)("[^"]*"|'[^']*')/i, `$1"${newSrc}"`)
+    assert.equal(writes[0], html.replace(oldTag, expectedTag), 'only that image’s src changed, then autosaved')
+    console.log('Free photo: swapped into that image (only its src changed), credited, autosaved')
+
+    // Pixabay: switch source, pick → saved-to-Media URL swapped into image 2.
+    await (await page.$$('xpath/.//button[contains(., "Stock photos")]'))[0].click()
+    await page.waitForFunction(() => document.querySelector('[role=dialog]')?.innerText.includes('educators at conference'))
+    await (await page.$$('xpath/.//button[normalize-space()="Pixabay"]'))[0].click()
+    await (await page.$$('xpath/.//button[normalize-space()="educators at conference"]'))[0].click()
+    await page.waitForFunction(() => document.querySelector('[aria-label="Free photos for educators at conference"]')?.innerText.includes('Carola68 · Pixabay'))
+    await (await page.$$('[aria-label="Free photos for educators at conference"] figure button'))[0].click()
+    await page.waitForFunction(() => document.body.innerText.includes('Swapped in a photo by Carola68 from Pixabay.'))
+    const pxUse = unsplashCalls.find(c => c[0] === 'pixabay-use')[1]
+    assert.equal(pxUse.clientId, owner.id, 'Pixabay saves into this client’s media library')
+    assert.equal(pxUse.id, '777')
+    for (let t = Date.now(); writes.length < 2 && Date.now() - t < 8000;) await new Promise(r => setTimeout(r, 100))
+    assert.match([...writes[1].matchAll(/<img\b[^>]*>/gi)][1][0], /src="https:\/\/sagerock-email-images\.s3\.us-east-2\.amazonaws\.com\/sagerock\/1-pixabay-777-school\.jpg"/)
+    console.log('Pixabay: switch source, photo saved to Media and swapped in, credited')
+
+    // Free search: a picked photo goes to the chat for the AI to place.
+    await (await page.$$('xpath/.//button[contains(., "Stock photos")]'))[0].click()
+    await page.waitForSelector('[aria-label="Search for a photo"]')
+    await (await page.$$('xpath/.//button[normalize-space()="Unsplash"]'))[0].click()
+    await page.type('[aria-label="Search for a photo"]', 'autumn leaves')
+    await page.keyboard.press('Enter')
+    await page.waitForFunction(() => document.querySelectorAll('[aria-label="Free photos for autumn leaves"] figure').length === 3)
+    await (await page.$$('[aria-label="Free photos for autumn leaves"] figure button'))[0].click()
+    await page.waitForFunction(() => !document.querySelector('[role=dialog]'))
+    assert.match(await page.$eval('textarea', t => t.value), /^Use this photo: https:\/\/images\.unsplash\.com\/photo-photo1x/)
+    await page.$eval('textarea', t => { t.value = '' })
+    await page.evaluate(() => { const t = document.querySelector('textarea'); const set = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set; set.call(t, ''); t.dispatchEvent(new Event('input', { bubbles: true })) })
+    console.log('Free search: picked photo handed to the chat')
+    await (await page.$$('xpath/.//button[contains(., "Stock photos")]'))[0].click()
+    await page.waitForFunction(() => document.querySelector('[role=dialog]')?.innerText.includes('educators at conference'))
 
     // Use a new photo here → selects image 2, chat ready, file dropped, sent scoped.
     const [use] = await page.$$('xpath/.//button[contains(., "Use a new photo here")]')
@@ -111,7 +189,7 @@ const chats = []
     await page.waitForFunction(() => document.body.innerText.includes('Swapped.'))
     const chat = chats[0]
     const part = chat.currentEmail.html_content.slice(chat.selection.start, chat.selection.end)
-    const secondImg = [...html.matchAll(/<img\b[^>]*>/gi)][1][0]
+    const secondImg = [...chat.currentEmail.html_content.matchAll(/<img\b[^>]*>/gi)][1][0]
     assert.equal(part, secondImg, 'the selection is exactly the second <img>')
     assert.equal(chat.messages.at(-1).attachments[0].key, 'guids/CABINET_sr/images/1-photo.png')
     console.log('Use a new photo here: selects that image; the dropped photo is sent scoped to it')
