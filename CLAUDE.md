@@ -186,6 +186,12 @@ brand-new design's Save opens the name/folder form. Rocky found the old "Save ch
 version" pair, with a second "Save draft" inside the form, confusing. Browser test:
 `scripts/test-save-button.cjs <email.html>` (and `test-newsletter-review.cjs`).
 
+Autosave (2026-10-08): two seconds after the email settles, the builder saves in the background
+(chat stays usable; status reads "Saving…" then "All changes saved"). An existing design is updated
+in place, so "Save as a new version…" is how to branch a copy; a new email is created under its
+subject once the user has sent a message (opening a starter alone doesn't create a draft). A failed
+autosave shows an error and isn't retried until the email changes again. Same browser test.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

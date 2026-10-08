@@ -147,6 +147,9 @@ export default function EmailBuilder() {
   const [saveFolderId, setSaveFolderId] = useState<string | null>(null)
   const [folders, setFolders] = useState<Folder[]>([])
   const [saving, setSaving] = useState(false)
+  // Autosave runs in the background so the chat box stays usable while it saves.
+  const [autoSaving, setAutoSaving] = useState(false)
+  const saveInFlight = useRef(false)
 
 
   // Edit mode state
@@ -538,9 +541,11 @@ export default function EmailBuilder() {
     setReferenceTemplateIds(prev => prev.filter(id => id !== templateId))
   }
 
-  const handleSave = async ({ name = saveName, subject = saveSubject, previewText = savePreviewText, asCopy = saveAsCopy } = {}) => {
-    if (!name.trim() || !currentHtml || !selectedClient || isStreaming) return
-    setSaving(true)
+  const handleSave = async ({ name = saveName, subject = saveSubject, previewText = savePreviewText, asCopy = saveAsCopy, background = false } = {}) => {
+    if (!name.trim() || !currentHtml || !selectedClient || isStreaming || saveInFlight.current) return
+    saveInFlight.current = true
+    const setBusy = background ? setAutoSaving : setSaving
+    setBusy(true)
     setSaveError('')
     try {
       const values = { name: name.trim(), subject, preview_text: previewText,
@@ -560,14 +565,37 @@ export default function EmailBuilder() {
       setEditTemplateName(name.trim())
       justSavedId.current = { id: data.id, clientId: selectedClient.id }
       setSearchParams({ templateId: data.id }, { replace: true })
-      setShowSaveForm(false)
+      if (!background) setShowSaveForm(false)
     } catch (err) {
       console.error('Failed to save template:', err)
-      setSaveError('Your changes haven’t been saved. Please try again; your preview is still here.')
+      setSaveError(background
+        ? 'Your latest changes couldn’t be saved automatically. Click Save to try again; your preview is still here.'
+        : 'Your changes haven’t been saved. Please try again; your preview is still here.')
     } finally {
-      setSaving(false)
+      saveInFlight.current = false
+      setBusy(false)
     }
   }
+
+  // Autosave a couple of seconds after the email settles. An existing design is
+  // updated in place; a new one is saved under its subject once the user has
+  // asked for something (just opening a starter doesn't create a draft). A
+  // failed attempt isn't retried until something changes again.
+  const lastAutoSaveAttempt = useRef('')
+  const hasAsked = messages.some(m => m.role === 'user')
+  useEffect(() => {
+    if (!hasUnsavedChanges || isStreaming || saving || autoSaving || showSaveForm || templateLoading) return
+    if (!editTemplateId && !hasAsked) return
+    if (lastAutoSaveAttempt.current === snapshot) return
+    const timer = setTimeout(() => {
+      lastAutoSaveAttempt.current = snapshot
+      const name = editTemplateId && editTemplateName ? editTemplateName : (currentSubject.trim() || 'Untitled email')
+      void handleSave({ name, subject: currentSubject, previewText: currentPreviewText, asCopy: false, background: true })
+    }, 2000)
+    return () => clearTimeout(timer)
+    // handleSave reads the latest state when the timer fires; snapshot covers the content.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot, hasUnsavedChanges, isStreaming, saving, autoSaving, showSaveForm, templateLoading, editTemplateId, editTemplateName, hasAsked])
 
   // An existing design saves in one click; a brand-new one needs a name first.
   const quickSave = () => {
@@ -648,7 +676,7 @@ export default function EmailBuilder() {
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <span role="status" className={cn('text-xs font-medium', hasUnsavedChanges ? 'text-amber-700' : 'text-green-700')}>
-            {saving ? 'Saving…' : isStreaming ? 'Updating preview…' : !currentHtml ? 'No draft yet' : hasUnsavedChanges ? 'Unsaved changes' : 'Draft saved'}
+            {saving || autoSaving ? 'Saving…' : isStreaming ? 'Updating preview…' : !currentHtml ? 'No draft yet' : hasUnsavedChanges ? 'Unsaved changes' : 'All changes saved'}
           </span>
           {complianceWarnings.length > 0 && (
             <div className="flex items-center gap-1 text-amber-600 text-xs">
@@ -661,7 +689,7 @@ export default function EmailBuilder() {
               variant="primary"
               size="sm"
               onClick={quickSave}
-              disabled={!currentHtml || isStreaming || saving || (Boolean(editTemplateId) && !hasUnsavedChanges)}
+              disabled={!currentHtml || isStreaming || saving || autoSaving || (Boolean(editTemplateId) && !hasUnsavedChanges)}
               className={editTemplateId ? 'rounded-r-none' : undefined}
             >
               {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
@@ -684,7 +712,7 @@ export default function EmailBuilder() {
               <div role="menu" className="absolute right-0 top-full mt-1 z-20 w-64 rounded-md border border-gray-200 bg-white py-1 shadow-lg">
                 <button type="button" role="menuitem" onClick={() => openSaveForm(true)} className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50">
                   <span className="font-medium text-gray-900">Save as a new version…</span>
-                  <span className="block text-xs text-gray-500">Keeps this one as it is</span>
+                  <span className="block text-xs text-gray-500">Changes save to this design automatically. This makes a separate copy.</span>
                 </button>
                 <button type="button" role="menuitem" onClick={() => openSaveForm()} className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50">
                   <span className="font-medium text-gray-900">Rename or edit subject…</span>

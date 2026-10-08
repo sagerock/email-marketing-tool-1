@@ -1,6 +1,7 @@
-// Browser regression for the builder's single Save button: an existing design
-// saves in one click (PATCH, no form), Save is off when nothing changed, and
-// the menu's "Save as a new version…" inserts a copy that records its source.
+// Browser regression for saving in the builder: changes autosave (an existing
+// design is updated in place, a new one is created under its subject), Save
+// saves in one click (PATCH, no form) and is off when nothing changed, and the
+// menu's "Save as a new version…" inserts a copy that records its source.
 // Build with dummy Supabase values:
 // VITE_SUPABASE_URL=https://newsletter-test.supabase.co VITE_SUPABASE_ANON_KEY=test-only-key npx vite build --outDir /tmp/sagerock-newsletter-ui-build
 // node scripts/test-save-button.cjs email.html
@@ -52,7 +53,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
       }
       if(u.origin===base){
         if(u.pathname==='/api/email-builder/chat'){
-          const next = JSON.parse(req.postData()).currentEmail.html_content.replace('</body>','<p>Added line</p></body>')
+          const current = JSON.parse(req.postData()).currentEmail?.html_content || html
+          const next = current.replace('</body>','<p>Added line</p></body>')
           return req.respond({status:200,contentType:'text/event-stream',body:sse([
             {type:'text',text:'Done.'},
             {type:'result',mode:'edits',edit_count:1,note:'Done.',design:{html_content:next,subject:'October',preview_text:'News'}},
@@ -75,17 +77,29 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
     let buttons = await saveButtons()
     assert.deepEqual(buttons, [{text:'Save',disabled:true}], 'one Save button, off when nothing changed')
 
-    await page.type('textarea','Add a line at the bottom')
-    await page.keyboard.press('Enter')
-    await page.waitForFunction(() => document.body.innerText.includes('Unsaved changes'))
-    const [save] = await page.$$('xpath/.//button[normalize-space()="Save"]')
-    await save.click()
-    await page.waitForFunction(() => document.body.innerText.includes('Draft saved'))
+    const ask = async text => {
+      await page.type('textarea',text)
+      await page.keyboard.press('Enter')
+      await page.waitForFunction(() => document.body.innerText.includes('Unsaved changes'))
+    }
+    // Autosave: no click, the change is saved in place a couple of seconds later.
+    await ask('Add a line at the bottom')
+    assert.ok(await page.$eval('textarea', t => !t.disabled), 'chat stays usable while autosaving')
+    await page.waitForFunction(() => document.body.innerText.includes('All changes saved'), {timeout: 8000})
     assert.equal(writes.length, 1)
-    assert.equal(writes[0].method, 'PATCH', 'Save updates the design in place')
+    assert.equal(writes[0].method, 'PATCH', 'autosave updates the design in place')
     assert.match(writes[0].query, new RegExp(draftId))
     assert.equal(writes[0].body.name, 'October Newsletter')
     assert.match(writes[0].body.html_content, /Added line/)
+    console.log('Autosave: PATCH in place, chat stays usable')
+
+    await ask('Add another line')
+    const [save] = await page.$$('xpath/.//button[normalize-space()="Save"]')
+    await save.click()
+    await page.waitForFunction(() => document.body.innerText.includes('All changes saved'))
+    await sleep(2500)
+    assert.equal(writes.length, 2, 'Save now, and autosave doesn\'t save the same thing again')
+    assert.equal(writes[1].method, 'PATCH')
     assert.equal(await page.$('input[type=text][value*="October"]'), null, 'no form opened')
     console.log('Save: one click, PATCH in place, no form')
 
@@ -95,8 +109,21 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
     const [confirm] = await page.$$('xpath/.//button[normalize-space()="Save new version"]')
     await confirm.click()
     await page.waitForFunction(n => document.body.innerText.includes(n), {}, 'October Newsletter — new version')
-    assert.equal(writes[1].method, 'POST', 'new version inserts a copy')
-    assert.equal(writes[1].body.source_template_id, draftId)
+    assert.equal(writes[2].method, 'POST', 'new version inserts a copy')
+    assert.equal(writes[2].body.source_template_id, draftId)
     console.log('Save as a new version: POST copy with source_template_id')
+
+    // A brand-new email is created under its subject once something is asked for.
+    await page.goto(`${base}/email-builder`)
+    await page.waitForSelector('textarea')
+    await sleep(2500)
+    const before = writes.length
+    await ask('Make a newsletter')
+    await page.waitForFunction(() => document.body.innerText.includes('All changes saved'), {timeout: 8000})
+    assert.equal(writes.length, before + 1)
+    assert.equal(writes.at(-1).method, 'POST')
+    assert.equal(writes.at(-1).body.name, 'October')
+    assert.equal(writes.at(-1).body.source_template_id, null)
+    console.log('Autosave: a new email is created under its subject')
   } finally { await browser.close(); server.close() }
 })().catch(e=>{console.error(e);process.exit(1)})

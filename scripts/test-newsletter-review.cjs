@@ -101,7 +101,7 @@ const token = [Buffer.from('{}').toString('base64url'),Buffer.from(JSON.stringif
     assert.ok((await page.$eval('textarea',el=>el.value))==='')
     failSave=false
     await clickText('Save')
-    await page.waitForFunction(()=>document.body.innerText.includes('Draft saved')&&!document.body.innerText.includes('Your changes haven’t been saved'))
+    await page.waitForFunction(()=>document.body.innerText.includes('All changes saved')&&!document.body.innerText.includes('Your changes haven’t been saved'))
     assert.equal(writes[0].method,'PATCH')
     assert.equal(writes[0].client,`eq.${owner.id}`)
     assert.equal(writes[0].body.subject,'Revised subject')
