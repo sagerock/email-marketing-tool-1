@@ -179,6 +179,13 @@ Preview width (2026-10-07): the desktop preview frame is a fixed 620px and never
 and Rocky's newsletter columns stacked). The chat pane is 38% (340-520px) and "Hide chat" in the
 preview toolbar gives the preview the whole width. Browser test: `scripts/test-preview-width.cjs <email.html>`.
 
+One Save button (2026-10-07): for an existing design, Save updates it in one click with its current
+name, subject and preview text (no form) and is off when nothing changed. Its ▾ menu holds "Save as a
+new version…" (keeps the original, records `source_template_id`) and "Rename or edit subject…". A
+brand-new design's Save opens the name/folder form. Rocky found the old "Save changes" + "Save a new
+version" pair, with a second "Save draft" inside the form, confusing. Browser test:
+`scripts/test-save-button.cjs <email.html>` (and `test-newsletter-review.cjs`).
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

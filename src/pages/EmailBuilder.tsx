@@ -4,7 +4,7 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2, PanelLeftClose, PanelLeftOpen, ChevronDown } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
 import ChatMarkdown from '../components/ui/ChatMarkdown'
 import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
@@ -109,6 +109,8 @@ export default function EmailBuilder() {
   const [savedSnapshot, setSavedSnapshot] = useState('')
   const [saveError, setSaveError] = useState('')
   const [saveAsCopy, setSaveAsCopy] = useState(false)
+  const [saveMenuOpen, setSaveMenuOpen] = useState(false)
+  const saveMenuRef = useRef<HTMLDivElement>(null)
   const justSavedId = useRef<{ id: string; clientId: string } | null>(null)
   const snapshot = JSON.stringify([currentHtml, currentSubject, currentPreviewText])
   const hasUnsavedChanges = Boolean(currentHtml) && snapshot !== savedSnapshot
@@ -120,6 +122,15 @@ export default function EmailBuilder() {
       needsSource: !/^(https:\/\/|data:image\/)/i.test(img.getAttribute('src') || ''),
     }))
   }, [currentHtml])
+
+  useEffect(() => {
+    if (!saveMenuOpen) return
+    const close = (event: MouseEvent) => {
+      if (!saveMenuRef.current?.contains(event.target as Node)) setSaveMenuOpen(false)
+    }
+    document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [saveMenuOpen])
 
   useEffect(() => {
     if (!hasUnsavedChanges) return
@@ -527,26 +538,26 @@ export default function EmailBuilder() {
     setReferenceTemplateIds(prev => prev.filter(id => id !== templateId))
   }
 
-  const handleSave = async () => {
-    if (!saveName.trim() || !currentHtml || !selectedClient || isStreaming) return
+  const handleSave = async ({ name = saveName, subject = saveSubject, previewText = savePreviewText, asCopy = saveAsCopy } = {}) => {
+    if (!name.trim() || !currentHtml || !selectedClient || isStreaming) return
     setSaving(true)
     setSaveError('')
     try {
-      const values = { name: saveName.trim(), subject: saveSubject, preview_text: savePreviewText,
+      const values = { name: name.trim(), subject, preview_text: previewText,
         html_content: currentHtml, updated_at: new Date().toISOString() }
-      const query = editTemplateId && !saveAsCopy
+      const query = editTemplateId && !asCopy
         ? supabase.from('templates').update(values).eq('id', editTemplateId).eq('client_id', selectedClient.id)
         : supabase.from('templates').insert({
             ...values, folder_id: saveFolderId, client_id: selectedClient.id,
             // A new version remembers its source so Polaris revises the newest one.
-            source_template_id: editTemplateId && saveAsCopy ? editTemplateId : null,
+            source_template_id: editTemplateId && asCopy ? editTemplateId : null,
           })
       const { data, error } = await query.select('id').single()
       if (error || !data) throw error || new Error('No saved draft returned')
-      setCurrentSubject(saveSubject)
-      setCurrentPreviewText(savePreviewText)
-      setSavedSnapshot(JSON.stringify([currentHtml, saveSubject, savePreviewText]))
-      setEditTemplateName(saveName.trim())
+      setCurrentSubject(subject)
+      setCurrentPreviewText(previewText)
+      setSavedSnapshot(JSON.stringify([currentHtml, subject, previewText]))
+      setEditTemplateName(name.trim())
       justSavedId.current = { id: data.id, clientId: selectedClient.id }
       setSearchParams({ templateId: data.id }, { replace: true })
       setShowSaveForm(false)
@@ -558,7 +569,18 @@ export default function EmailBuilder() {
     }
   }
 
+  // An existing design saves in one click; a brand-new one needs a name first.
+  const quickSave = () => {
+    if (editTemplateId && editTemplateName) {
+      setShowSaveForm(false)
+      handleSave({ name: editTemplateName, subject: currentSubject, previewText: currentPreviewText, asCopy: false })
+    } else {
+      openSaveForm()
+    }
+  }
+
   const openSaveForm = (asCopy = false) => {
+    setSaveMenuOpen(false)
     setSaveAsCopy(asCopy)
     setSaveName((editTemplateName || currentSubject || 'Untitled Email') + (asCopy ? ' — new version' : ''))
     setSaveSubject(currentSubject)
@@ -628,22 +650,49 @@ export default function EmailBuilder() {
           <span role="status" className={cn('text-xs font-medium', hasUnsavedChanges ? 'text-amber-700' : 'text-green-700')}>
             {saving ? 'Saving…' : isStreaming ? 'Updating preview…' : !currentHtml ? 'No draft yet' : hasUnsavedChanges ? 'Unsaved changes' : 'Draft saved'}
           </span>
-          {editTemplateId && <Button variant="secondary" size="sm" disabled={isStreaming || saving || !currentHtml} onClick={() => openSaveForm(true)}>Save a new version</Button>}
           {complianceWarnings.length > 0 && (
             <div className="flex items-center gap-1 text-amber-600 text-xs">
               <AlertTriangle className="h-3.5 w-3.5" />
               {complianceWarnings.join(', ')}
             </div>
           )}
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => openSaveForm()}
-            disabled={!currentHtml || isStreaming || saving}
-          >
-            <Save className="h-4 w-4 mr-1" />
-            {editTemplateId ? 'Save changes' : 'Save draft'}
-          </Button>
+          <div ref={saveMenuRef} className="relative flex">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={quickSave}
+              disabled={!currentHtml || isStreaming || saving || (Boolean(editTemplateId) && !hasUnsavedChanges)}
+              className={editTemplateId ? 'rounded-r-none' : undefined}
+            >
+              {saving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+              Save
+            </Button>
+            {editTemplateId && (
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => setSaveMenuOpen(o => !o)}
+                disabled={!currentHtml || isStreaming || saving}
+                className="rounded-l-none border-l border-blue-400 px-2"
+                aria-label="More save options"
+                aria-expanded={saveMenuOpen}
+              >
+                <ChevronDown className="h-4 w-4" />
+              </Button>
+            )}
+            {saveMenuOpen && (
+              <div role="menu" className="absolute right-0 top-full mt-1 z-20 w-64 rounded-md border border-gray-200 bg-white py-1 shadow-lg">
+                <button type="button" role="menuitem" onClick={() => openSaveForm(true)} className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50">
+                  <span className="font-medium text-gray-900">Save as a new version…</span>
+                  <span className="block text-xs text-gray-500">Keeps this one as it is</span>
+                </button>
+                <button type="button" role="menuitem" onClick={() => openSaveForm()} className="block w-full px-3 py-2 text-left text-sm hover:bg-gray-50">
+                  <span className="font-medium text-gray-900">Rename or edit subject…</span>
+                  <span className="block text-xs text-gray-500">Name, subject and preview text</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -694,8 +743,8 @@ export default function EmailBuilder() {
                 </select>
               </div>
             )}
-            <Button size="sm" onClick={handleSave} disabled={saving || isStreaming || !saveName.trim()}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : saveAsCopy ? 'Save new version' : 'Save draft'}
+            <Button size="sm" onClick={() => handleSave()} disabled={saving || isStreaming || !saveName.trim()}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : saveAsCopy ? 'Save new version' : 'Save'}
             </Button>
             <button onClick={() => setShowSaveForm(false)} className="text-gray-400 hover:text-gray-600 pb-1">
               <X className="h-4 w-4" />
