@@ -231,8 +231,8 @@ search loads 12 results inline (`POST /api/stock/:source/search`, `/use`). Click
 straight into that `<img>` (`setImageSource` in `src/lib/stockPhotos.ts`: only `src` changes, `alt` filled only if
 empty; no AI call), adds a "Swapped in a photo by …" chat message (so earlier previews can be restored) and
 autosaves; on a new-photo idea or the free search box, the URL goes into the chat for the AI to place.
-- Unsplash (`api/unsplash.js`, `UNSPLASH_ACCESS_KEY`, app 1096628, demo tier 50 requests/hour until Unsplash
-  approves production): their rules require hotlinking, so the email uses `images.unsplash.com` with `fm=jpg`
+- Unsplash (`api/unsplash.js`, `UNSPLASH_ACCESS_KEY`, app 1096628 "SageRock Email Tool", demo tier 50 requests/hour;
+  production (1,000/hour) applied for 2026-10-08, see `docs/unsplash-production-application/`): their rules require hotlinking, so the email uses `images.unsplash.com` with `fm=jpg`
   and, when the slot has both sizes, `fit=crop` to its shape at 2x. Choosing a photo pings its
   `download_location`; Unsplash+ photos are filtered out; credits link with `utm_source=sagerock_email_tool`.
 - Pixabay (`api/pixabay.js`, `PIXABAY_API_KEY`, 100 requests/min): their rules forbid permanent hotlinking and

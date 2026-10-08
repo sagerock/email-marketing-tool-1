@@ -1,15 +1,16 @@
 # Unsplash production application (app 1096628)
 
-Prepared 2026-10-08. The app runs on the demo tier (50 requests/hour) until Unsplash approves it.
-Sage submits this: sign in at https://unsplash.com/oauth/applications/1096628, choose
-"Apply for production", paste the answers below, and upload the two screenshots.
+**Submitted 2026-10-08 (status: In Review; Unsplash quotes 5-10 business days).** Until approval the app
+runs on the demo tier (50 requests/hour); production is 1,000/hour. The app was renamed from "Email creation
+tool" to "SageRock Email Tool" and given the description below. Unsplash's form has no separate questions,
+only the name, description, a requirements checklist and screenshots.
 
 The screenshots show Sage's account email and the October SageRock newsletter. Both are fine to
 share, but crop them first if you'd rather not.
 
 ## Application name
 
-SageRock Email
+SageRock Email Tool
 
 ## Description (what the app does)
 
