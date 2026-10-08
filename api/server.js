@@ -35,6 +35,7 @@ const { builderParams, replyText, BuilderRefusal } = require('./email-builder-mo
 const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
 const { normalizeAttachments, attachmentBlocks } = require('./builder-attachments')
 const { interpretAudience, AudienceError } = require('./audience-from-text')
+const { stockIdeas } = require('./stock-ideas')
 const { checkLinks } = require('./link-check')
 const { renderSlices, reviewDesign } = require('./visual-check')
 const { buildHeatmapReport } = require('./heatmap-report')
@@ -2585,6 +2586,33 @@ app.post('/api/email-builder/visual-check', authenticateUser, async (req, res) =
     res.status(502).json({ error: 'Visual check unavailable' })
   } finally {
     visualChecksRunning--
+  }
+})
+
+const stockIdeasRateLimit = { timestamps: [] }
+
+// Adobe Stock search ideas for each image in the builder's email. Only
+// suggestions: the user searches and licenses on stock.adobe.com themselves.
+app.post('/api/email-builder/stock-ideas', authenticateUser, async (req, res) => {
+  const now = Date.now()
+  stockIdeasRateLimit.timestamps = stockIdeasRateLimit.timestamps.filter(t => now - t < 60000)
+  if (stockIdeasRateLimit.timestamps.length >= 20) {
+    return res.status(429).json({ error: 'Too many requests. Please wait a minute.' })
+  }
+  const { clientId } = req.body
+  if (!clientId) return res.status(400).json({ error: 'clientId is required' })
+  if (!process.env.ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' })
+  stockIdeasRateLimit.timestamps.push(now)
+  try {
+    const { data: clientRow } = await supabase.from('clients')
+      .select('name, brand_story, brand_look').eq('id', clientId).single()
+    const Anthropic = require('@anthropic-ai/sdk')
+    const ideas = await stockIdeas({ anthropic: new Anthropic(), body: req.body, brandStory: brandStoryPrompt(clientRow) })
+    console.log(`[stock-ideas] ${ideas.images.filter(i => !i.skip).length} image(s) with ideas, ${ideas.extra.length} new spot(s)`)
+    res.json(ideas)
+  } catch (error) {
+    console.warn('[stock-ideas] unavailable:', error.message)
+    res.status(502).json({ error: 'Photo ideas aren’t available right now. You can still search Adobe Stock below.' })
   }
 })
 

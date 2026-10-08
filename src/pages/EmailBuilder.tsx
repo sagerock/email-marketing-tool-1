@@ -4,11 +4,13 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2, PanelLeftClose, PanelLeftOpen, ChevronDown, History, FileText } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2, PanelLeftClose, PanelLeftOpen, ChevronDown, History, FileText, Camera } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
 import ChatMarkdown from '../components/ui/ChatMarkdown'
 import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
 import ReadyToSendPanel from '../components/builder/ReadyToSendPanel'
+import StockPhotosPanel from '../components/builder/StockPhotosPanel'
+import { scanElements } from '../lib/emailSections'
 import { checkEmail, collectLinkUrls, linkHealthIssues, sortIssues, type EmailIssue, type LinkResult } from '../lib/emailChecks'
 import { cn } from '../lib/utils'
 
@@ -188,6 +190,7 @@ export default function EmailBuilder() {
 
   // Media picker state
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [stockOpen, setStockOpen] = useState(false)
 
   // Whether this client has a Brand Story; null until known
   const [hasBrandStory, setHasBrandStory] = useState<boolean | null>(null)
@@ -1198,6 +1201,17 @@ export default function EmailBuilder() {
               {currentHtml && (
                 <ReadyToSendPanel issues={issues} busy={isStreaming || saving} checkingLinks={checkingLinks} onShow={showIssue} onFix={fixIssue} />
               )}
+              {currentHtml && (
+                <button
+                  type="button"
+                  onClick={() => setStockOpen(true)}
+                  className="px-2 py-1 hover:bg-gray-100 rounded flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+                  title="Adobe Stock photo ideas for this email"
+                >
+                  <Camera className="w-4 h-4" />
+                  Stock photos
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setPickerOpen(true)}
@@ -1283,6 +1297,24 @@ export default function EmailBuilder() {
         </div>
       </div>
 
+      {selectedClient && (
+        <StockPhotosPanel
+          open={stockOpen}
+          onClose={() => setStockOpen(false)}
+          clientId={selectedClient.id}
+          html={currentHtml}
+          subject={currentSubject}
+          onReplace={(index, label) => {
+            const img = scanElements(currentHtml).filter(e => e.tag === 'img')[index]
+            setStockOpen(false)
+            if (!img) return
+            setSelection({ start: img.start, end: img.end, label })
+            setChatHidden(false)
+            setInput('Replace this image with the attached photo.')
+            requestAnimationFrame(() => inputRef.current?.focus())
+          }}
+        />
+      )}
       {selectedClient && (
         <MediaPicker
           open={pickerOpen}

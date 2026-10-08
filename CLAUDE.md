@@ -213,6 +213,19 @@ ask in the chat. Edits go into the current email, so autosave and the AI's next 
 Browser test: `scripts/test-inline-edit.cjs <email.html> "<headline>" "<paragraph start>"` (passes on
 the October SageRock newsletter and the August Scoop).
 
+Stock photos (2026-10-08): Adobe's Stock API has been Enterprise-only since Nov 2024 (Sage's plan isn't), so
+the tool can't search or license for him. "Stock photos" in the preview toolbar (`StockPhotosPanel.tsx`)
+sends the email's images (alt, src, size, nearby text; `src/lib/stockPhotos.ts`) and plain text to
+`POST /api/email-builder/stock-ideas` (`api/stock-ideas.js`, low effort, structured output, brand story
+included). The model suggests up to three Adobe Stock searches per photo, skips logos, icons and other
+graphics, and may suggest up to three places for new photos. Each search is a link to
+`stock.adobe.com/search/images?k=…&filters[content_type:photo]=1&filters[orientation]=…` (Adobe's bot
+protection blocks automated checks, so the filter format comes from public examples). "Use a new photo
+here" selects that exact `<img>` and pre-fills the chat, so the licensed file dropped in replaces only that
+image. Real-model check: October newsletter and August Scoop, 4-5s, sensible searches, skipped the logos,
+the book cover, the 80th-anniversary badge and social icons. Tests: `api/stock-ideas.test.js`,
+`scripts/test-stock-photos.cjs <email.html> <photo>`.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`
