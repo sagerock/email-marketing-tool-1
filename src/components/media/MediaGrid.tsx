@@ -1,5 +1,6 @@
 // src/components/media/MediaGrid.tsx
 import { useState } from 'react'
+import { FileText } from 'lucide-react'
 import type { MediaItem } from '../../hooks/useMediaAssets'
 
 type Props = {
@@ -42,7 +43,12 @@ export default function MediaGrid({ items, loading, onSelect, onCopyUrl, onDelet
               title={item.filename}
             >
               <div className="aspect-square bg-gray-50 flex items-center justify-center">
-                <img
+                {/\.pdf$/i.test(item.filename) ? (
+                  <div className="flex flex-col items-center gap-1 text-red-700">
+                    <FileText className="h-10 w-10" />
+                    <span className="text-xs font-medium">PDF</span>
+                  </div>
+                ) : <img
                   src={item.url}
                   alt={item.filename}
                   className="max-h-full max-w-full object-contain"
@@ -55,7 +61,7 @@ export default function MediaGrid({ items, loading, onSelect, onCopyUrl, onDelet
                       )
                     }
                   }}
-                />
+                />}
               </div>
               <div className="p-2 text-xs">
                 <div className="truncate font-medium">{item.filename}</div>

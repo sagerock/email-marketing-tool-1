@@ -192,6 +192,16 @@ in place, so "Save as a new version…" is how to branch a copy; a new email is 
 subject once the user has sent a message (opening a starter alone doesn't create a draft). A failed
 autosave shows an error and isn't retried until the email changes again. Same browser test.
 
+Attachments in the chat (2026-10-08): the paperclip (or drag-and-drop / paste on the chat panel)
+attaches up to six images or PDFs per message; the clock icon is the old "reference a previous
+email". Each file uploads to the client's media library right away (`POST /api/media/upload`, which
+now also takes PDFs, stored as-is after a `%PDF-` check); Send waits for uploads. A message carries
+only `{key, name}`; `api/builder-attachments.js` keeps keys under the client's `s3_prefix`, reads them
+back from S3, and adds them to that message: images as a 1000px view, PDFs as a `document` block,
+each labeled with its exact public URL to show or link. Media lists PDFs as tiles. Real-model check:
+read a flyer PDF's date, address and RSVP date, used both exact URLs, invented none, 5.5s. Tests:
+`api/builder-attachments.test.js`, `scripts/test-chat-attachments.cjs <image> <pdf> <other file>`.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

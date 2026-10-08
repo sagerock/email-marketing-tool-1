@@ -4,7 +4,7 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2, PanelLeftClose, PanelLeftOpen, ChevronDown } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2, PanelLeftClose, PanelLeftOpen, ChevronDown, History, FileText } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
 import ChatMarkdown from '../components/ui/ChatMarkdown'
 import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
@@ -12,10 +12,34 @@ import ReadyToSendPanel from '../components/builder/ReadyToSendPanel'
 import { checkEmail, collectLinkUrls, linkHealthIssues, sortIssues, type EmailIssue, type LinkResult } from '../lib/emailChecks'
 import { cn } from '../lib/utils'
 
+interface ChatAttachment {
+  key: string
+  url: string
+  name: string
+  kind: 'image' | 'pdf'
+}
+
+// A file in the composer: uploading to the media library, ready, or failed.
+interface PendingAttachment {
+  id: string
+  name: string
+  kind: 'image' | 'pdf'
+  status: 'uploading' | 'ready' | 'error'
+  error?: string
+  key?: string
+  url?: string
+}
+
+const ATTACH_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf']
+const MAX_ATTACHMENTS = 6
+const MAX_ATTACH_BYTES = 25 * 1024 * 1024
+
 interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
   content: string
+  /** Files attached to a user message (in the media library). */
+  attachments?: ChatAttachment[]
   htmlContent?: string
   subject?: string
   previewText?: string
@@ -70,6 +94,9 @@ export default function EmailBuilder() {
   // Chat state
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
+  const [attachments, setAttachments] = useState<PendingAttachment[]>([])
+  const [dragging, setDragging] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamingText, setStreamingText] = useState('')
   const [streamStatus, setStreamStatus] = useState('')
@@ -323,18 +350,24 @@ export default function EmailBuilder() {
   // `opts` lets the ready-to-send panel send a fix with its own selection,
   // without waiting for state updates to land.
   const handleSend = async (opts?: { text?: string; selection?: PreviewSelection | null }) => {
-    const trimmed = (opts?.text ?? input).trim()
+    // Files ride along with typed messages, not with one-click fixes.
+    const sending = opts?.text === undefined ? attachments.filter(a => a.status === 'ready') : []
+    const trimmed = (opts?.text ?? input).trim() || (sending.length ? 'Use the attached file' + (sending.length > 1 ? 's.' : '.') : '')
     const activeSelection = opts && 'selection' in opts ? opts.selection ?? null : selection
-    if (!trimmed || isStreaming || saving || !selectedClient) return
+    if (!trimmed || isStreaming || saving || !selectedClient || (opts?.text === undefined && attachmentsUploading)) return
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content: trimmed,
+      attachments: sending.length
+        ? sending.map(a => ({ key: a.key!, url: a.url!, name: a.name, kind: a.kind }))
+        : undefined,
     }
 
     setMessages(prev => [...prev, userMessage])
     setInput('')
+    if (opts?.text === undefined) setAttachments(prev => prev.filter(a => a.status === 'error'))
     setIsStreaming(true)
     setStreamingText('')
 
@@ -347,6 +380,7 @@ export default function EmailBuilder() {
       content: m.role === 'assistant' && m.htmlContent
         ? `${m.content}\n\n[email design output omitted]`
         : m.content,
+      ...(m.attachments ? { attachments: m.attachments.map(a => ({ key: a.key, name: a.name })) } : {}),
     }))
 
     try {
@@ -520,6 +554,46 @@ export default function EmailBuilder() {
         box.setSelectionRange(box.value.length, box.value.length)
       })
     }
+  }
+
+  const attachmentsUploading = attachments.some(a => a.status === 'uploading')
+
+  // Uploads to the media library right away (images are resized there), so
+  // the file is ready to place or link by the time the message is sent.
+  const attachFiles = (files: File[]) => {
+    if (!selectedClient || !files.length) return
+    const room = MAX_ATTACHMENTS - attachments.filter(a => a.status !== 'error').length
+    for (const [i, file] of files.entries()) {
+      const id = crypto.randomUUID()
+      const kind = file.type === 'application/pdf' ? 'pdf' as const : 'image' as const
+      const error = !ATTACH_TYPES.includes(file.type) ? 'Only images and PDFs can be attached'
+        : file.size > MAX_ATTACH_BYTES ? 'Files can be up to 25 MB'
+        : i >= room ? `Up to ${MAX_ATTACHMENTS} files at a time` : ''
+      setAttachments(prev => [...prev, { id, name: file.name || (kind === 'pdf' ? 'document.pdf' : 'pasted-image.png'), kind,
+        status: error ? 'error' : 'uploading', error: error || undefined }])
+      if (error) continue
+      const fd = new FormData()
+      fd.append('clientId', selectedClient.id)
+      fd.append('file', file, file.name || (kind === 'pdf' ? 'document.pdf' : 'pasted-image.png'))
+      void apiFetch('/api/media/upload', { method: 'POST', body: fd })
+        .then(async res => {
+          const body = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(body.error || 'Upload failed')
+          setAttachments(prev => prev.map(a => (a.id === id ? { ...a, status: 'ready', key: body.key, url: body.url } : a)))
+        })
+        .catch(err => {
+          setAttachments(prev => prev.map(a => (a.id === id ? { ...a, status: 'error', error: err instanceof Error ? err.message : 'Upload failed' } : a)))
+        })
+    }
+  }
+
+  const removeAttachment = (id: string) => setAttachments(prev => prev.filter(a => a.id !== id))
+
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const files = Array.from(e.clipboardData.files)
+    if (!files.length) return
+    e.preventDefault()
+    attachFiles(files)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -784,7 +858,17 @@ export default function EmailBuilder() {
       {/* Main Content: Chat + Preview */}
       <div className="flex flex-1 min-h-0">
         {/* Chat Panel */}
-        <div className={cn('w-[38%] min-w-[340px] max-w-[520px] flex-shrink-0 flex flex-col border-r border-gray-200 bg-white', chatHidden && 'hidden')}>
+        <div
+          className={cn('relative w-[38%] min-w-[340px] max-w-[520px] flex-shrink-0 flex flex-col border-r border-gray-200 bg-white', chatHidden && 'hidden')}
+          onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }}
+          onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false) }}
+          onDrop={e => { if (!e.dataTransfer.files.length) return; e.preventDefault(); setDragging(false); attachFiles(Array.from(e.dataTransfer.files)) }}
+        >
+          {dragging && (
+            <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-blue-400 bg-blue-50/90 text-sm font-medium text-blue-700">
+              Drop images or PDFs to attach them
+            </div>
+          )}
           <details className="px-4 py-3 border-b border-gray-200 text-sm">
             <summary className="cursor-pointer font-medium text-gray-800">In this preview · {previewImages.length} image{previewImages.length === 1 ? '' : 's'}</summary>
             <div className="mt-2 max-h-40 overflow-auto space-y-1 text-xs text-gray-600">
@@ -862,6 +946,19 @@ export default function EmailBuilder() {
                   {msg.role === 'assistant'
                     ? <ChatMarkdown content={msg.content} />
                     : <div className="whitespace-pre-wrap">{msg.content}</div>}
+                  {msg.attachments?.length ? (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {msg.attachments.map(a => (
+                        <a key={a.key} href={a.url} target="_blank" rel="noreferrer" title={a.name}
+                          className="inline-flex max-w-[180px] items-center gap-1.5 rounded border border-blue-200 bg-white px-1.5 py-1 text-xs text-blue-800 hover:border-blue-400">
+                          {a.kind === 'image'
+                            ? <img src={a.url} alt="" className="h-6 w-6 rounded object-cover" />
+                            : <FileText className="h-4 w-4 flex-shrink-0" />}
+                          <span className="truncate">{a.name}</span>
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
                   {msg.htmlContent && (
                     <div className="mt-2 text-xs text-green-600 font-medium">
                       {msg.editCount ? <span className="mr-2 text-gray-500">Quick edit · {msg.editCount} change{msg.editCount === 1 ? '' : 's'}</span> : null}
@@ -993,6 +1090,25 @@ export default function EmailBuilder() {
                 </button>
               </div>
             )}
+            {attachments.length > 0 && (
+              <div className="mb-2 flex flex-wrap gap-2" aria-label="Attached files">
+                {attachments.map(a => (
+                  <span key={a.id} title={a.error || a.name} className={cn(
+                    'inline-flex max-w-[220px] items-center gap-1.5 rounded-full border px-2 py-1 text-xs',
+                    a.status === 'error' ? 'border-red-200 bg-red-50 text-red-700' : 'border-gray-200 bg-gray-50 text-gray-700'
+                  )}>
+                    {a.status === 'uploading' ? <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin" />
+                      : a.status === 'error' ? <AlertTriangle className="h-3 w-3 flex-shrink-0" />
+                      : a.kind === 'image' && a.url ? <img src={a.url} alt="" className="h-4 w-4 flex-shrink-0 rounded object-cover" />
+                      : <FileText className="h-3 w-3 flex-shrink-0" />}
+                    <span className="truncate">{a.status === 'error' ? `${a.name}: ${a.error}` : a.name}</span>
+                    <button type="button" onClick={() => removeAttachment(a.id)} aria-label={`Remove ${a.name}`} className="flex-shrink-0 hover:text-gray-900">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={() => setShowReferencePicker(!showReferencePicker)}
@@ -1002,15 +1118,36 @@ export default function EmailBuilder() {
                     ? 'border-purple-300 bg-purple-50 text-purple-600'
                     : 'border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-300'
                 )}
-                title="Reference a previous email"
+                title="Use a previous email as a reference"
+                aria-label="Use a previous email as a reference"
+              >
+                <History className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isStreaming || saving}
+                className="flex-shrink-0 p-2 rounded-md border border-gray-200 text-gray-400 hover:text-gray-600 hover:border-gray-300 transition-colors disabled:opacity-50"
+                title="Attach images or PDFs (you can also drop or paste them)"
+                aria-label="Attach images or PDFs"
               >
                 <Paperclip className="h-4 w-4" />
               </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept={ATTACH_TYPES.join(',')}
+                className="hidden"
+                data-testid="attach-input"
+                onChange={e => { attachFiles(Array.from(e.target.files || [])); e.target.value = '' }}
+              />
               <textarea
                 ref={inputRef}
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
                 aria-label="Newsletter instructions"
                 placeholder={selection ? 'What should change in this part?' : 'Describe what you want to build or change...'}
                 className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -1020,10 +1157,11 @@ export default function EmailBuilder() {
               <button
                 aria-label="Send instructions"
                 onClick={() => handleSend()}
-                disabled={!input.trim() || isStreaming || saving}
+                disabled={(!input.trim() && !attachments.some(a => a.status === 'ready')) || attachmentsUploading || isStreaming || saving}
+                title={attachmentsUploading ? 'Waiting for files to finish uploading' : undefined}
                 className={cn(
                   'flex-shrink-0 p-2 rounded-md transition-colors',
-                  input.trim() && !isStreaming
+                  (input.trim() || attachments.some(a => a.status === 'ready')) && !attachmentsUploading && !isStreaming
                     ? 'bg-blue-600 text-white hover:bg-blue-700'
                     : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                 )}
@@ -1031,7 +1169,7 @@ export default function EmailBuilder() {
                 <Send className="h-4 w-4" />
               </button>
             </div>
-            <p className="mt-1 text-xs text-gray-400">Enter to send, Shift+Enter for new line{currentHtml && !selection ? ' · Click part of the preview to edit just that part' : ''}</p>
+            <p className="mt-1 text-xs text-gray-400">Enter to send, Shift+Enter for new line · Drop or paste images and PDFs{currentHtml && !selection ? ' · Click part of the preview to edit just that part' : ''}</p>
           </div>
         </div>
 

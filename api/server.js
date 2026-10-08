@@ -33,6 +33,7 @@ const {
 } = require('./email-builder-edits')
 const { builderParams, replyText, BuilderRefusal } = require('./email-builder-model')
 const { mediaLibraryBlocks, MEDIA_PROMPT } = require('./builder-media')
+const { normalizeAttachments, attachmentBlocks } = require('./builder-attachments')
 const { checkLinks } = require('./link-check')
 const { renderSlices, reviewDesign } = require('./visual-check')
 const { buildHeatmapReport } = require('./heatmap-report')
@@ -2753,6 +2754,11 @@ DESIGN BEST PRACTICES:
 
     // Build message array for Claude
     const recent = messages.slice(-10)
+    // Files the user attached in the chat (already in the media library),
+    // shown on the message they came with.
+    const attachedByIdx = await Promise.all(recent.map(msg => (msg.role === 'user'
+      ? attachmentBlocks({ s3, bucket: BUCKET, publicUrlForKey, attachments: normalizeAttachments(msg.attachments, clientRow?.s3_prefix) })
+      : [])))
     // A loaded template starts the chat with an assistant greeting, so the
     // shared context goes on the first USER message, wherever it is.
     const firstUserIdx = recent.findIndex(m => m.role === 'user')
@@ -2763,10 +2769,14 @@ DESIGN BEST PRACTICES:
       if (Array.isArray(content)) {
         content = content.map(({ cache_control: _stray, ...block }) => block)
       }
+      if (attachedByIdx[idx].length) {
+        const own = typeof content === 'string' ? [{ type: 'text', text: content }] : content
+        content = [...attachedByIdx[idx], ...own]
+      }
       // Inject brand reference + paperclipped references + media library into the first user message
       if (idx === firstUserIdx) {
         const prefix = [brandReferenceContext, referenceContext].filter(Boolean).join('\n\n')
-        if (prefix) content = `${prefix}\n\n${content}`
+        if (prefix) content = typeof content === 'string' ? `${prefix}\n\n${content}` : [{ type: 'text', text: prefix }, ...content]
         if (mediaBlocks.length) {
           const own = typeof content === 'string' ? [{ type: 'text', text: content }] : content
           content = [...mediaBlocks, ...own]
@@ -8785,8 +8795,9 @@ const mediaUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: MAX_UPLOAD_BYTES },
   fileFilter: (req, file, cb) => {
-    if (ALLOWED_IMAGE_MIMES.has(file.mimetype)) cb(null, true)
-    else cb(new Error('Unsupported image type'))
+    // PDFs are stored as-is so emails can link to them and the builder can read them.
+    if (ALLOWED_IMAGE_MIMES.has(file.mimetype) || file.mimetype === 'application/pdf') cb(null, true)
+    else cb(new Error('Unsupported file type (images and PDFs only)'))
   },
 })
 
@@ -8814,11 +8825,20 @@ app.post('/api/media/upload', mediaUpload.single('file'), async (req, res) => {
   }
 
   let image
-  try {
-    image = await optimizeImage(req.file.buffer, req.file.mimetype)
-  } catch (err) {
-    console.error('[media] could not read image', err.message)
-    return res.status(400).json({ error: 'That file could not be read as an image' })
+  if (req.file.mimetype === 'application/pdf') {
+    if (!req.file.buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
+      return res.status(400).json({ error: 'That file could not be read as a PDF' })
+    }
+    const bytes = req.file.buffer.length
+    image = { buffer: req.file.buffer, mimetype: 'application/pdf', ext: 'pdf', width: null, height: null,
+      originalBytes: bytes, bytes, changed: false }
+  } else {
+    try {
+      image = await optimizeImage(req.file.buffer, req.file.mimetype)
+    } catch (err) {
+      console.error('[media] could not read image', err.message)
+      return res.status(400).json({ error: 'That file could not be read as an image' })
+    }
   }
 
   const filename = safeFilename(withExtension(req.file.originalname, image.ext))

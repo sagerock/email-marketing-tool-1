@@ -58,7 +58,9 @@ export default function Media() {
     try {
       const r = await upload.mutateAsync(file)
       const size = r.width && r.height ? `, ${r.width}×${r.height}` : ''
-      setUploadNote(r.optimized
+      setUploadNote(file.type === 'application/pdf'
+        ? `${file.name} uploaded (${formatBytes(r.bytes)}).`
+        : r.optimized
         ? `${file.name} resized for email: ${formatBytes(r.original_bytes)} → ${formatBytes(r.bytes)}${size}.`
         : `${file.name} uploaded (${formatBytes(r.bytes)}${size}). It was already email-ready.`)
     }
@@ -80,10 +82,10 @@ export default function Media() {
         <div>
           <h1 className="text-2xl font-bold">Media Library</h1>
           <p className="text-sm text-gray-600">
-            Images for {selectedClient.name}. Click "Copy URL" to paste into your email HTML.
+            Images and PDFs for {selectedClient.name}. Click "Copy URL" to paste into your email HTML or link to a PDF.
           </p>
           <p className="text-xs text-gray-500">
-            Uploads up to 25 MB are resized to 1200px and compressed automatically. Animated GIFs are kept as-is.
+            Uploads up to 25 MB. Images are resized to 1200px and compressed automatically; animated GIFs and PDFs are kept as-is.
           </p>
           {uploadNote && <p className="mt-1 text-sm text-green-700">{uploadNote}</p>}
         </div>
@@ -91,7 +93,7 @@ export default function Media() {
           <input
             ref={fileInputRef}
             type="file"
-            accept="image/png,image/jpeg,image/gif,image/webp"
+            accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
             onChange={handleFileChosen}
             className="hidden"
           />
