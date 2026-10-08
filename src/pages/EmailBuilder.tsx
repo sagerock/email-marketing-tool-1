@@ -4,7 +4,7 @@ import { useClient } from '../context/ClientContext'
 import { apiFetch } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import Button from '../components/ui/Button'
-import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2 } from 'lucide-react'
+import { ArrowLeft, Send, Monitor, Smartphone, Save, Paperclip, X, AlertTriangle, Loader2, Image as ImageIcon, LayoutTemplate, MousePointerClick, Eye, CheckCircle2, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import MediaPicker from '../components/media/MediaPicker'
 import ChatMarkdown from '../components/ui/ChatMarkdown'
 import SelectablePreview, { type PreviewSelection } from '../components/builder/SelectablePreview'
@@ -79,6 +79,8 @@ export default function EmailBuilder() {
   const [currentSubject, setCurrentSubject] = useState('')
   const [currentPreviewText, setCurrentPreviewText] = useState('')
   const [previewMode, setPreviewMode] = useState<'desktop' | 'mobile'>('desktop')
+  // Hides the chat so the preview gets the whole width (the chat stays mounted).
+  const [chatHidden, setChatHidden] = useState(false)
   // The part of the email clicked in the preview; edits are kept inside it.
   const [selection, setSelection] = useState<PreviewSelection | null>(null)
   // Link health comes from the server (it fetches each link); results are
@@ -705,7 +707,7 @@ export default function EmailBuilder() {
       {/* Main Content: Chat + Preview */}
       <div className="flex flex-1 min-h-0">
         {/* Chat Panel */}
-        <div className="w-[45%] flex flex-col border-r border-gray-200 bg-white">
+        <div className={cn('w-[38%] min-w-[340px] max-w-[520px] flex-shrink-0 flex flex-col border-r border-gray-200 bg-white', chatHidden && 'hidden')}>
           <details className="px-4 py-3 border-b border-gray-200 text-sm">
             <summary className="cursor-pointer font-medium text-gray-800">In this preview · {previewImages.length} image{previewImages.length === 1 ? '' : 's'}</summary>
             <div className="mt-2 max-h-40 overflow-auto space-y-1 text-xs text-gray-600">
@@ -957,7 +959,7 @@ export default function EmailBuilder() {
         </div>
 
         {/* Preview Panel */}
-        <div className="w-[55%] flex flex-col bg-gray-100">
+        <div className="flex-1 min-w-0 flex flex-col bg-gray-100">
           {/* Preview Header */}
           <div className="px-4 py-3 bg-white border-b border-gray-200 flex items-center justify-between flex-shrink-0">
             <div className="min-w-0 flex-1">
@@ -991,6 +993,15 @@ export default function EmailBuilder() {
               </button>
               <div className="w-px h-5 bg-gray-200 mx-1" />
               <button
+                type="button"
+                onClick={() => setChatHidden(h => !h)}
+                className="px-2 py-1 hover:bg-gray-100 rounded flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"
+                title={chatHidden ? 'Show the chat' : 'Hide the chat to give the preview more room'}
+              >
+                {chatHidden ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
+                {chatHidden ? 'Show chat' : 'Hide chat'}
+              </button>
+              <button
                 onClick={() => setPreviewMode('desktop')}
                 className={cn(
                   'p-1.5 rounded transition-colors',
@@ -1018,11 +1029,11 @@ export default function EmailBuilder() {
           </div>
 
           {/* Preview Content */}
-          <div className="flex-1 overflow-auto p-4 flex justify-center">
+          <div className="flex-1 overflow-auto p-4">
             {currentHtml ? (
               <div
                 className={cn(
-                  'bg-white shadow-sm rounded-lg overflow-hidden transition-all duration-300',
+                  'mx-auto bg-white shadow-sm rounded-lg overflow-hidden transition-all duration-300',
                   previewMode === 'desktop' ? 'w-[620px]' : 'w-[395px]'
                 )}
               >

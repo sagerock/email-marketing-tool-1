@@ -174,6 +174,11 @@ Rate limit 20/min, 2 at a time. Real-model check: it confirmed a correct change,
 claimed-but-missing change and a broken image, in 4-7s. Structured output needs Sonnet 5.5, so with
 the 4.6 rollback the check reports unavailable and the UI shows nothing.
 
+Preview width (2026-10-07): the desktop preview frame is a fixed 620px and never shrinks, so a
+600px mobile breakpoint can't fire on a laptop (at 1280px the old 45/55 split squeezed it to 496px
+and Rocky's newsletter columns stacked). The chat pane is 38% (340-520px) and "Hide chat" in the
+preview toolbar gives the preview the whole width. Browser test: `scripts/test-preview-width.cjs <email.html>`.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`
