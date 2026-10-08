@@ -110,6 +110,7 @@ export default function EmailBuilder() {
   const [chatHidden, setChatHidden] = useState(false)
   // The part of the email clicked in the preview; edits are kept inside it.
   const [selection, setSelection] = useState<PreviewSelection | null>(null)
+  const [textEditNote, setTextEditNote] = useState('')
   // Link health comes from the server (it fetches each link); results are
   // kept per URL so an edit only checks links it hasn't seen.
   const [linkResults, setLinkResults] = useState<Record<string, LinkResult>>({})
@@ -1169,7 +1170,7 @@ export default function EmailBuilder() {
                 <Send className="h-4 w-4" />
               </button>
             </div>
-            <p className="mt-1 text-xs text-gray-400">Enter to send, Shift+Enter for new line · Drop or paste images and PDFs{currentHtml && !selection ? ' · Click part of the preview to edit just that part' : ''}</p>
+            <p className="mt-1 text-xs text-gray-400">Enter to send, Shift+Enter for new line · Drop or paste images and PDFs{currentHtml && !selection ? ' · Click part of the preview to edit just that part, or double-click text to type over it' : ''}</p>
           </div>
         </div>
 
@@ -1245,6 +1246,9 @@ export default function EmailBuilder() {
 
           {/* Preview Content */}
           <div className="flex-1 overflow-auto p-4">
+            {textEditNote && (
+              <p role="status" className="mx-auto mb-2 w-fit rounded bg-amber-50 px-3 py-1.5 text-xs text-amber-800">{textEditNote}</p>
+            )}
             {currentHtml ? (
               <div
                 className={cn(
@@ -1257,6 +1261,15 @@ export default function EmailBuilder() {
                   selection={selection}
                   onSelect={setSelection}
                   layoutKey={previewMode}
+                  onTextEdit={next => {
+                    if (isStreaming || saving) return
+                    if (next === null) {
+                      setTextEditNote('That text couldn’t be changed here. Ask in the chat instead.')
+                      return
+                    }
+                    setTextEditNote('')
+                    setCurrentHtml(next)
+                  }}
                 />
               </div>
             ) : (

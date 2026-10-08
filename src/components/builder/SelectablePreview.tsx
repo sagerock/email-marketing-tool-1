@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import { annotateHtml, describeElement, scanElements, type ScannedElement, type SourceSpan } from '../../lib/emailSections'
+import { annotateHtml, applyTextEdit, describeElement, isTextEditable, scanElements, snapshotText, type ScannedElement, type SourceSpan } from '../../lib/emailSections'
 
 export interface PreviewSelection extends SourceSpan {
   label: string
@@ -11,6 +11,9 @@ interface Props {
   onSelect: (selection: PreviewSelection | null) => void
   /** Changes when the preview width changes, so overlays are redrawn. */
   layoutKey: string
+  /** Called after the user types over text in the preview: the updated email,
+   *  or null when that text couldn't be written back safely. */
+  onTextEdit?: (html: string | null) => void
 }
 
 const OVERLAY_CSS = `
@@ -21,6 +24,7 @@ const OVERLAY_CSS = `
   color: #fff; background: #7c3aed; padding: 0 6px; border-radius: 3px; white-space: nowrap; max-width: 520px; overflow: hidden; text-overflow: ellipsis; }
 #sr-hover span { background: rgba(124, 58, 237, .75); }
 #sr-hover.below span, #sr-selected.below span { top: auto; bottom: -20px; }
+[contenteditable] { outline: 2px solid #2563eb !important; outline-offset: 2px; cursor: text; caret-color: #2563eb; }
 `
 
 // The email's main body: the widest element no wider than a typical email,
@@ -71,7 +75,7 @@ function drillDown(chain: Element[], current: Element): Element | undefined {
   return undefined
 }
 
-export default function SelectablePreview({ html, selection, onSelect, layoutKey }: Props) {
+export default function SelectablePreview({ html, selection, onSelect, layoutKey, onTextEdit }: Props) {
   const iframeRef = useRef<HTMLIFrameElement>(null)
   const { annotated, elements } = useMemo(() => {
     const els = scanElements(html)
@@ -81,9 +85,13 @@ export default function SelectablePreview({ html, selection, onSelect, layoutKey
   // Listeners attached to the preview document read the latest props here.
   const selectionRef = useRef(selection)
   const onSelectRef = useRef(onSelect)
+  const onTextEditRef = useRef(onTextEdit)
+  const htmlRef = useRef(html)
   useLayoutEffect(() => {
     selectionRef.current = selection
     onSelectRef.current = onSelect
+    onTextEditRef.current = onTextEdit
+    htmlRef.current = html
   })
 
   const spanOf = useCallback((el: Element): ScannedElement | undefined =>
@@ -142,14 +150,49 @@ export default function SelectablePreview({ html, selection, onSelect, layoutKey
       return match ? doc.querySelector(`[data-sr="${match.id}"]`) : null
     }
 
+    // Typing over text: double-click starts, Enter or clicking away keeps it, Esc cancels.
+    let editing: { el: HTMLElement; scanned: ScannedElement; before: string[]; original: string } | null = null
+    const stopEditing = (keep: boolean) => {
+      if (!editing) return
+      const { el, scanned, before, original } = editing
+      editing = null
+      if (!keep) { el.innerHTML = original; el.removeAttribute('contenteditable'); return }
+      const next = applyTextEdit(htmlRef.current, scanned, before, el)
+      el.removeAttribute('contenteditable')
+      if (next === null) { el.innerHTML = original; onTextEditRef.current?.(null); return }
+      if (next !== htmlRef.current) onTextEditRef.current?.(next)
+    }
+    doc.addEventListener('dblclick', e => {
+      if (!onTextEditRef.current || editing) return
+      let target: Element | null = e.target as Element
+      for (; target && target !== doc.body; target = target.parentElement) {
+        if (target.hasAttribute('data-sr') && isTextEditable(target)) break
+      }
+      const scanned = target && target !== doc.body ? spanOf(target) : undefined
+      if (!target || !scanned) return
+      const el = target as HTMLElement
+      editing = { el, scanned, before: snapshotText(el), original: el.innerHTML }
+      place(doc, 'sr-hover', null)
+      el.setAttribute('contenteditable', 'plaintext-only')
+      el.focus()
+      el.addEventListener('blur', () => stopEditing(true), { once: true })
+    })
+    doc.addEventListener('keydown', e => {
+      if (!editing) return
+      if (e.key === 'Enter') { e.preventDefault(); editing.el.blur() }
+      else if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); const el = editing.el; stopEditing(false); el.blur() }
+    })
+
     doc.addEventListener('mousemove', e => {
       const target = e.target as Element
+      if (editing) return
       const el = pick(target, currentEl())
       place(doc, 'sr-hover', el && el !== currentEl() ? el : null, el ? labelFor(el) : '')
     })
     doc.addEventListener('mouseleave', () => place(doc, 'sr-hover', null))
     doc.addEventListener('click', e => {
       e.preventDefault() // links in the preview never navigate
+      if (editing?.el.contains(e.target as Node)) return
       const el = pick(e.target as Element, currentEl())
       place(doc, 'sr-hover', null)
       if (!el) { onSelectRef.current(null); return }

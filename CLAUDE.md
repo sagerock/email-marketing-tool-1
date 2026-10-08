@@ -202,6 +202,17 @@ each labeled with its exact public URL to show or link. Media lists PDFs as tile
 read a flyer PDF's date, address and RSVP date, used both exact URLs, invented none, 5.5s. Tests:
 `api/builder-attachments.test.js`, `scripts/test-chat-attachments.cjs <image> <pdf> <other file>`.
 
+Typing in the preview (2026-10-08): double-click text in the preview to type over it; Enter or
+clicking away keeps it, Esc cancels. Only elements whose content is text plus inline formatting
+(`isTextEditable` in `src/lib/emailSections.ts`) are editable, as `contenteditable="plaintext-only"`.
+`applyTextEdit` writes back into that element's source span: if the text nodes still line up with the
+source text runs (entities decoded), only the changed runs are rewritten, so formatting, links,
+entities and merge tags stay byte-for-byte; otherwise the element's inner HTML is rebuilt from the
+edited preview (markers stripped). If no closing tag is found, nothing changes and the preview says to
+ask in the chat. Edits go into the current email, so autosave and the AI's next turn both see them.
+Browser test: `scripts/test-inline-edit.cjs <email.html> "<headline>" "<paragraph start>"` (passes on
+the October SageRock newsletter and the August Scoop).
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

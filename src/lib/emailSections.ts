@@ -145,3 +145,96 @@ export function describeElement(el: Element, isSection: boolean): string {
   }
   return text.trim() ? `${label}: "${shorten(text)}"` : label
 }
+
+// ---- Typing over text in the preview ----
+// Only elements whose content is text plus inline formatting can be edited in
+// place; the change is written back into just that element's span of the source.
+
+const INLINE = new Set(['a', 'b', 'strong', 'em', 'i', 'u', 'span', 'br', 'font', 'sup', 'sub', 'small',
+  's', 'strike', 'big', 'mark', 'code', 'abbr', 'del', 'ins'])
+const TEXT_BLOCKS = new Set(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'td', 'th', 'div', 'li', 'blockquote', 'center'])
+
+export function isTextEditable(el: Element): boolean {
+  if (!TEXT_BLOCKS.has(el.tagName.toLowerCase())) return false
+  if (!(el.textContent || '').trim()) return false
+  return Array.from(el.querySelectorAll('*')).every(child => INLINE.has(child.tagName.toLowerCase()))
+}
+
+// The source range between an element's opening and closing tags, or null
+// when the closing tag can't be found (e.g. an implicitly closed <p>).
+function innerRange(html: string, el: ScannedElement): SourceSpan | null {
+  const closeStart = html.lastIndexOf('</', el.end - 1)
+  if (closeStart < el.openEnd) return null
+  if (!new RegExp(`^</${el.tag}\\s*>$`, 'i').test(html.slice(closeStart, el.end))) return null
+  return { start: el.openEnd, end: closeStart }
+}
+
+// Text runs between tags inside [start, end), skipping comments; empty runs
+// are dropped because the browser makes no text node for them.
+function textRuns(html: string, start: number, end: number): SourceSpan[] {
+  const runs: SourceSpan[] = []
+  let i = start
+  while (i < end) {
+    const lt = html.indexOf('<', i)
+    const stop = lt === -1 || lt > end ? end : lt
+    if (stop > i) runs.push({ start: i, end: stop })
+    if (stop === end) break
+    if (html.startsWith('<!--', stop)) {
+      const c = html.indexOf('-->', stop + 4)
+      i = c === -1 ? end : c + 3
+    } else {
+      i = tagEnd(html, stop)
+    }
+  }
+  return runs
+}
+
+function decodeEntities(text: string): string {
+  const box = document.createElement('textarea')
+  box.innerHTML = text
+  return box.value
+}
+
+function encodeText(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/ /g, '&nbsp;')
+}
+
+function textNodesOf(el: Element): Text[] {
+  const walker = el.ownerDocument.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+  const nodes: Text[] = []
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) nodes.push(n as Text)
+  return nodes
+}
+
+/** Text of each text node, taken before editing starts. */
+export function snapshotText(el: Element): string[] {
+  return textNodesOf(el).map(n => n.data)
+}
+
+// Returns the email with the edited element's text written back, or null if
+// the edit can't be mapped safely (the caller then leaves the email as it was).
+// When the text nodes still line up with the source, only changed runs are
+// rewritten, so entities, merge tags and formatting stay byte-for-byte. If the
+// user deleted across formatting (a bold word removed entirely), the element's
+// inner HTML is rebuilt from the edited preview instead.
+export function applyTextEdit(html: string, scanned: ScannedElement, before: string[], edited: Element): string | null {
+  const inner = innerRange(html, scanned)
+  if (!inner) return null
+  const after = textNodesOf(edited).map(n => n.data)
+  if (after.length === before.length && after.every((t, i) => t === before[i])) return html
+  const runs = textRuns(html, inner.start, inner.end)
+  const aligned = runs.length === before.length && after.length === before.length &&
+    runs.every((r, i) => decodeEntities(html.slice(r.start, r.end)) === before[i])
+  if (aligned) {
+    let out = html
+    for (let i = runs.length - 1; i >= 0; i--) {
+      if (after[i] === before[i]) continue
+      out = out.slice(0, runs[i].start) + encodeText(after[i]) + out.slice(runs[i].end)
+    }
+    return out
+  }
+  const clone = edited.cloneNode(true) as Element
+  clone.removeAttribute('contenteditable')
+  clone.querySelectorAll('[data-sr]').forEach(n => n.removeAttribute('data-sr'))
+  return html.slice(0, inner.start) + clone.innerHTML + html.slice(inner.end)
+}
