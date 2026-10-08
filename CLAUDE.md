@@ -239,7 +239,9 @@ autosaves; on a new-photo idea or the free search box, the URL goes into the cha
   require 24-hour caching of searches, so a chosen photo is downloaded (1280px), cropped to the slot with
   sharp (`position: attention`, 2x, JPEG) and stored under the client's `s3_prefix` as
   `<ts>-pixabay-<id>-<tag>.jpg`; the email uses our S3 URL.
-Both keys live in `/mnt/d/dev/.env` and on the Railway backend. Real check: a Pixabay pick was cropped to a
+Both keys live in `/mnt/d/dev/.env` and on BOTH Railway services: "frontend" serves mail.sagerock.com and its
+same-origin `/api` (what users hit), "backend" serves api.mail.sagerock.com. A key on only one service fails silently
+for the other (on 2026-10-08 the panel said "Free photo search isn't set up yet" until frontend got the keys). Real check: a Pixabay pick was cropped to a
 510x293 slot as a 1020x586, 56 KB JPEG in 0.3s; an Unsplash pick came back as a 1020x586 JPEG.
 Tests: `api/unsplash.test.js`, `api/pixabay.test.js`, same browser test.
 
