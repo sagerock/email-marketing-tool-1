@@ -15,6 +15,11 @@ const PUBLIC_LISTS = {
   'law-firm-workspace': {
     tags: ['law-firm-workspace', 'legal-lead'],
   },
+  // sagerock.com/solo "AI and the Solo Practitioner" notes. Its own welcome sequence is
+  // triggered by the first tag. The RSS watcher for law posts mails both tags.
+  'solo': {
+    tags: ['solo-notes', 'legal-lead'],
+  },
 }
 
 // The server doesn't set 'trust proxy', so req.ip behind Railway's edge is the

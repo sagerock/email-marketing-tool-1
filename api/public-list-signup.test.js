@@ -56,3 +56,9 @@ test('merges tags on an existing contact and never touches unsubscribe status', 
   assert.deepEqual(update.row.tags.sort(), ['awsna-2026', 'law-firm-workspace', 'legal-lead'])
   assert.ok(!('unsubscribed' in update.row))
 })
+
+test('accepts the solo list and tags it separately from the workspace list', () => {
+  const ok = validateListSignup({ email: 'Pat@Firm.com', list: 'solo' })
+  assert.deepEqual(ok.value, { email: 'pat@firm.com', firstName: null, list: 'solo' })
+  assert.deepEqual(PUBLIC_LISTS.solo.tags, ['solo-notes', 'legal-lead'])
+})
