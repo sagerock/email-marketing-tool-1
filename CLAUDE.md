@@ -263,8 +263,8 @@ public page add someone to a named list on the `PUBLIC_SIGNUP_CLIENT_ID` client
 (SageRock). Lists are allowlisted in `api/public-list-signup.js`; each maps to contact
 tags. The endpoint only tags the contact. Welcome mail comes from an `email_sequences`
 row with `trigger_type = 'tag_added'` on the list's first tag, created in the UI. Existing
-contacts keep their name and unsubscribe status. Current list: `law-firm-workspace`
-(sagerock.com/law-firm-workspace). To add one, add an entry to `PUBLIC_LISTS`.
+contacts keep their name and unsubscribe status. Current lists: `law-firm-workspace`
+(sagerock.com/law-firm-workspace) and `solo` (sagerock.com/solo, tag `solo-notes`). To add one, add an entry to `PUBLIC_LISTS`.
 
 ### RSS "new post" notifications (migrations 094, 111)
 
