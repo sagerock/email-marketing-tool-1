@@ -266,6 +266,27 @@ row with `trigger_type = 'tag_added'` on the list's first tag, created in the UI
 contacts keep their name and unsubscribe status. Current list: `law-firm-workspace`
 (sagerock.com/law-firm-workspace). To add one, add an entry to `PUBLIC_LISTS`.
 
+### RSS "new post" notifications (migrations 094, 111)
+
+An hourly job (`:45`, in `api/server.js`, `checkRssFeedForClient`) watches `clients.rss_feed_url`
+and mails each new item through the normal campaign pipeline. Set per client, in SQL:
+
+- `rss_feed_url`: the feed to watch. The first check only records the newest item as a
+  baseline and sends nothing. **If the feed is empty at that first check, nothing is
+  baselined, and the first post that later appears is baselined too, not sent.** Point a
+  client at a feed only once it has at least one item, and send that first post by hand.
+- `rss_filter_tags` (migration 111): only contacts with ANY of these tags receive it.
+  Null/empty = every active contact of the client. Use this on any client whose contact list
+  is mixed; without it a post goes to everyone.
+- `rss_mode` (111): `send` (default, emails automatically) or `draft` (creates the campaign as
+  a draft in Campaigns for a person to review and send; `rss_sync_message` says "Drafted ...").
+- `rss_style` (111): `card` (default, boxed layout with a button) or `plain` (short note
+  signed with the sender's first name).
+
+Sage Lewis uses the defaults (send, all contacts, card). SageRock's law audience is meant to use
+`rss_filter_tags = {law-firm-workspace}`, `rss_mode = draft`, `rss_style = plain`, fed by
+`sagerock.com/feed/law.xml` (posts in the "Law Firms" blog category only).
+
 ### Salesforce Integration
 Uses **OAuth 2.0 Client Credentials Flow** - no user interaction or callback URLs needed.
 
