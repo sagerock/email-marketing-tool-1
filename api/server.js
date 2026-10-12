@@ -4801,10 +4801,28 @@ function escapeHtml(str) {
   }[ch]))
 }
 
-function buildRssNotificationHtml({ title, excerpt, link }) {
+// Plain notes read better when the excerpt ends on a word, not mid-way through one.
+function rssPlainExcerpt(excerpt, style) {
+  if (style !== 'plain' || excerpt.length < 600) return excerpt
+  const cut = excerpt.slice(0, 600)
+  return cut.slice(0, Math.max(cut.lastIndexOf(' '), 0)).trimEnd() + '…'
+}
+
+function buildRssNotificationHtml({ title, excerpt, link, style = 'card', signoff = '' }) {
   const safeTitle = escapeHtml(title)
   const safeExcerpt = escapeHtml(excerpt)
   const safeLink = escapeHtml(link)
+  if (style === 'plain') {
+    // A short note that reads like a person wrote it: no card, no button.
+    return `
+  <div style="font-family:Georgia,'Times New Roman',serif;font-size:16px;line-height:1.6;color:#222;max-width:560px;">
+    <p>Hi {{first_name}},</p>
+    <p>${safeExcerpt}</p>
+    <p><a href="${safeLink}" style="color:#222;">${safeTitle}</a></p>
+    <p>${escapeHtml(signoff)}</p>
+    <p style="font-size:12px;color:#999;margin-top:28px;">{{mailing_address}}<br><a href="{{unsubscribe_url}}" style="color:#999;">Unsubscribe</a></p>
+  </div>`
+  }
   return `
   <div style="background:#f7f7f5;padding:28px 0;font-family:Arial,sans-serif;">
     <div style="max-width:560px;margin:0 auto;background:#ffffff;border:1px solid #e5e5e0;border-radius:10px;padding:32px;">
@@ -4889,12 +4907,23 @@ async function checkRssFeedForClient(client) {
     throw new Error('No verified sender configured for this client')
   }
 
+  const filterTags = Array.isArray(client.rss_filter_tags) && client.rss_filter_tags.length > 0
+    ? client.rss_filter_tags
+    : null
+  const draftOnly = client.rss_mode === 'draft'
+
   let sentCount = 0
   for (const item of newItems) {
     const title = item.title || 'New post'
     const excerpt = (item.contentSnippet || item.content || item.summary || '').trim().slice(0, 600)
     const link = item.link || client.rss_feed_url
-    const html = buildRssNotificationHtml({ title, excerpt, link })
+    const html = buildRssNotificationHtml({
+      title,
+      excerpt: rssPlainExcerpt(excerpt, client.rss_style),
+      link,
+      style: client.rss_style === 'plain' ? 'plain' : 'card',
+      signoff: (sender.name || client.name || '').trim().split(/\s+/)[0],
+    })
 
     const { data: template, error: templateError } = await supabase
       .from('templates')
@@ -4918,12 +4947,15 @@ async function checkRssFeedForClient(client) {
         from_name: sender.name || client.name,
         status: 'draft',
         client_id: client.id,
+        // Scope to one tagged list when the client has set one; null keeps "all contacts".
+        filter_tags: filterTags,
       })
       .select('id')
       .single()
     if (campaignError) throw campaignError
 
-    await sendCampaignById(campaign.id)
+    // Draft mode stops here: the campaign waits in the Campaigns screen for a person.
+    if (!draftOnly) await sendCampaignById(campaign.id)
     sentCount += 1
 
     // Persist progress after each send so a later item failing in this same
@@ -4932,7 +4964,7 @@ async function checkRssFeedForClient(client) {
       last_rss_item_link: rssItemKey(item),
       last_rss_checked_at: new Date().toISOString(),
       rss_sync_status: 'success',
-      rss_sync_message: `Sent "${title}"`,
+      rss_sync_message: draftOnly ? `Drafted "${title}" for approval` : `Sent "${title}"`,
     }).eq('id', client.id)
   }
 
@@ -10367,7 +10399,7 @@ app.listen(PORT, () => {
     try {
       const { data: clients, error } = await supabase
         .from('clients')
-        .select('id, name, rss_feed_url, last_rss_item_link, verified_senders')
+        .select('id, name, rss_feed_url, last_rss_item_link, verified_senders, rss_filter_tags, rss_mode, rss_style')
         .not('rss_feed_url', 'is', null)
 
       if (error) {
