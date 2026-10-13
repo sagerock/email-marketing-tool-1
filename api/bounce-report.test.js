@@ -45,7 +45,7 @@ test('the report groups typos, missing domains, gone mailboxes, and false bounce
   assert.match(out.text, /Domain doesn't exist \(1\)/)
   assert.match(out.text, /Mailbox no longer works \(1\)/)
   assert.match(out.text, /Possible false bounces, don't delete \(1\)/)
-  assert.match(out.text, /Jax, Sage’s AI assistant\n$/)
+  assert.match(out.text, /\n- Jax\n$/)
   assert.equal(out.csv.trim().split('\n').length, 5)
 })
 

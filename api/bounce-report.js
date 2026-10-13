@@ -225,7 +225,7 @@ function buildBounceReport(r, conf = {}) {
       <p style="${T.sub}">These people opened or clicked after the bounce, so please don't delete them.</p>
       ${table(['Address', 'Person', 'Last activity'], falseRows)}${more(r.maybeFalse)}` : ''}
     <p style="${T.p};margin-top:24px">Questions? Just reply.</p>
-    <p style="${T.p}">Jax, Sage’s AI assistant</p></div>`
+    <p style="${T.p}">- Jax</p></div>`
 
   const line = c => `- ${c.email}${c.suggested ? ` -> ${c.suggested}${c.twin ? ' (already on file)' : ''}` : ''}${name(c) || c.company ? ` (${[name(c), c.company].filter(Boolean).join(', ')})` : ''}`
   const text = `Hi,\n\n${intro} The full list is attached as an Excel file, one tab per group.\n`
@@ -234,7 +234,7 @@ function buildBounceReport(r, conf = {}) {
     + (r.noDomain.length ? `\nDomain doesn't exist (${r.noDomain.length}):\n${r.noDomain.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
     + (r.gone.length ? `\nMailbox no longer works (${r.gone.length}):\n${r.gone.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
     + (r.maybeFalse.length ? `\nPossible false bounces, don't delete (${r.maybeFalse.length}):\n${r.maybeFalse.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
-    + `\nQuestions? Just reply.\n\nJax, Sage’s AI assistant\n`
+    + `\nQuestions? Just reply.\n\n- Jax\n`
   return { subject, html, text, csv: toCsv(r), count: n }
 }
 
@@ -260,7 +260,7 @@ module.exports = function mountBounceReport(app, { supabase, decryptClient, cron
       to: recipients,
       cc: !to && conf.cc?.length ? conf.cc : undefined,
       from: { email: fromEmail, name: `${client.name} Data Cleanup` },
-      replyTo: { email: 'jax@sagerock.com', name: 'Jax, Sage’s AI assistant' },
+      replyTo: { email: 'jax@sagerock.com', name: 'Jax' },
       subject: report.subject, text: report.text, html: report.html,
       attachments: [{ content: (await toXlsx(r)).toString('base64'), filename: `bounces-${new Date().toISOString().slice(0, 10)}.xlsx`, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', disposition: 'attachment' }],
       trackingSettings: { clickTracking: { enable: false }, openTracking: { enable: false } },
