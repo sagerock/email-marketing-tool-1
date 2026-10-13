@@ -111,6 +111,19 @@ me" (`POST /api/brand-story/interview`) asks a few questions and returns a draft
 before saving; the model may suggest colors and fonts but never a logo URL. Browser test:
 `scripts/test-brand-story.cjs`. Alderbrook (sample) was seeded from Sage's first builder chat.
 
+### Bubble-up (Alconox, phase 1, 2026-10-13)
+
+`api/bubble-up.js` (migration 112) keeps a list of people who showed a buying or help-me signal
+and haven't heard from a human: sample-survey "expert"/"plan to buy", unanswered Ask Alconox,
+customer wrote last, unanswered inbound email, engaged trade-show leads, replies to our emails.
+Weekdays 11:30 UTC it refreshes `salesforce_tasks` / `salesforce_email_messages`
+(`api/salesforce-activity.js`) and recent Opportunities, reconciles `bubble_items`, and emails
+`bubble_config.recipients`. **Phase 1 recipients are Sage only**; owner emails and replies are
+phase 3 (spec: `sagerock/clients/alconox/specs/2026-10-13-bubble-up-spec.md`). It never contacts
+customers or writes to Salesforce. Staff-named automation ("Survey sent", "Assigned: Action
+Required", shipping notices) doesn't count as a follow-up. CLI:
+`node api/scripts/run-bubble-up.js <clientId> [--dry] [--no-sync] [--no-send] [--to=addr]`.
+
 ### Builder edits are targeted, not full rewrites
 
 Since 2026-10-07 the interactive builder (`/api/email-builder/chat`) sends the design in the

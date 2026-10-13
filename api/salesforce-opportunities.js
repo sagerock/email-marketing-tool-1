@@ -16,6 +16,10 @@ const STANDARD_FIELDS = [
 const CUSTOM_FIELDS = [
   'Source_Code__c', 'Email__c', 'Sample_Shipped_Timestamp__c', 'Email_Reply_Date__c',
   'Email_Total_Sent__c', 'Email_Total_Opens__c', 'Survey_Completed__c',
+  // Sample survey answers, for bubble-up (migration 112)
+  'RecordType.Name', 'Sample_Request_Contact__c', 'Survey_Completed_Date__c', 'Survey_Met_Cleaning_Needs__c',
+  'Survey_Speak_With_Expert__c', 'Survey_Planning_Purchase__c', 'Survey_Purchase_From__c', 'Survey_Why_Not__c',
+  'Survey_Additional_Questions__c', 'Total_Survey_Sends__c', 'Total_Survey_Opens__c',
 ]
 
 function mapOpp(o, clientId) {
@@ -42,6 +46,18 @@ function mapOpp(o, clientId) {
     email_total_sent: o.Email_Total_Sent__c != null ? Math.round(o.Email_Total_Sent__c) : null,
     email_total_opens: o.Email_Total_Opens__c != null ? Math.round(o.Email_Total_Opens__c) : null,
     survey_completed: o.Survey_Completed__c ?? null,
+    owner_id: o.OwnerId || null,
+    record_type: o.RecordType?.Name || null,
+    sample_request_contact_id: o.Sample_Request_Contact__c || null,
+    survey_completed_date: o.Survey_Completed_Date__c || null,
+    survey_met_needs: o.Survey_Met_Cleaning_Needs__c ?? null,
+    survey_speak_with_expert: o.Survey_Speak_With_Expert__c ?? null,
+    survey_planning_purchase: o.Survey_Planning_Purchase__c ?? null,
+    survey_purchase_from: o.Survey_Purchase_From__c ?? null,
+    survey_why_not: o.Survey_Why_Not__c ?? null,
+    survey_additional: o.Survey_Additional_Questions__c ?? null,
+    survey_sends: o.Total_Survey_Sends__c != null ? Math.round(o.Total_Survey_Sends__c) : null,
+    survey_opens: o.Total_Survey_Opens__c != null ? Math.round(o.Total_Survey_Opens__c) : null,
     synced_at: new Date().toISOString(),
   }
 }
@@ -71,6 +87,13 @@ async function syncSalesforceOpportunities({ supabase, getSalesforceConnection }
       break
     } catch (err) {
       const msg = err?.message || ''
+      const rel = msg.match(/Didn't understand relationship '([^']+)'/i)
+      if (rel && fields.some(f => f.toLowerCase().startsWith(`${rel[1].toLowerCase()}.`))) {
+        console.warn(`⚠️ Opportunity sync: relationship ${rel[1]} not available, dropping it`)
+        droppedFields.push(rel[1])
+        fields = fields.filter(f => !f.toLowerCase().startsWith(`${rel[1].toLowerCase()}.`))
+        continue
+      }
       const m = msg.match(/No such column '([^']+)'/i)
       if (m && fields.some(f => f.toLowerCase() === m[1].toLowerCase())) {
         console.warn(`⚠️ Opportunity sync: field ${m[1]} not available, dropping it`)

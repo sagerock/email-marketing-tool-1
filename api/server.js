@@ -45,6 +45,7 @@ const { syncSalesforceOpportunities } = require('./salesforce-opportunities')
 const { syncSalesforceProspectActivities } = require('./salesforce-prospect-activities')
 const { syncSalesforceAskQuestions } = require('./salesforce-ask-questions')
 const { syncAskThreads, SCHEDULED_DAYS: ASK_THREADS_DAYS } = require('./salesforce-ask-threads')
+const { syncSalesforceActivity } = require('./salesforce-activity')
 const { enrollDownloadFollowups } = require('./ai-followup-downloads')
 const aiChat = require('./ai-chat-followups')
 const { mountEngagementReporting } = require('./engagement-reporting')
@@ -9207,6 +9208,13 @@ require('./engagement-digest')(app, {
 })
 // Monday bounce report (new hard bounces with suggested typo fixes), per-client config
 require('./bounce-report')(app, { supabase, decryptClient, cron, schedulerEnabled: isSchedulerEnabled() })
+// Bubble-up: people with a buying or help-me signal nobody has answered (migration 112).
+// Weekday list to bubble_config.recipients (phase 1: Sage only). Never contacts customers.
+require('./bubble-up')(app, {
+  supabase, decryptClient, cron, schedulerEnabled: isSchedulerEnabled(),
+  syncActivity: clientId => syncSalesforceActivity({ supabase, getSalesforceConnection }, clientId),
+  syncOpportunities: (clientId, since) => syncSalesforceOpportunities({ supabase, getSalesforceConnection }, clientId, since),
+})
 
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing
