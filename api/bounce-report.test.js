@@ -1,7 +1,7 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const mount = require('./bounce-report')
-const { suggestDomain, domainExists, buildBounceReport, toXlsx } = mount
+const { suggestDomain, domainExists, buildBounceReport, toXlsx, jaxFor } = mount
 
 test('suggestDomain fixes obvious top-level typos first', () => {
   assert.equal(suggestDomain('usdoj.gob'), 'usdoj.gov')
@@ -47,6 +47,14 @@ test('the report groups typos, missing domains, gone mailboxes, and false bounce
   assert.match(out.text, /Possible false bounces, don't delete \(1\)/)
   assert.match(out.text, /\n- Jax\n$/)
   assert.equal(out.csv.trim().split('\n').length, 5)
+
+  // Alconox's report speaks as Alconox's Jax (one Alconox address, Sage 2026-10-15)
+  const ax = jaxFor('Alconox')
+  assert.deepEqual(ax, { replyTo: 'jax@ask.alconox.com', signature: 'Jax, Alconox’s AI Assistant' })
+  const signed = buildBounceReport(r, { subject_suffix: 'Alconox, LLC', signature: ax.signature })
+  assert.match(signed.text, /\nJax, Alconox’s AI Assistant\n$/)
+  assert.match(signed.html, /Jax, Alconox’s AI Assistant<\/p><\/div>$/)
+  assert.equal(jaxFor('SageRock').replyTo, 'jax@sagerock.com')
 })
 
 test('the Excel attachment has an All tab and one tab per non-empty group', async () => {

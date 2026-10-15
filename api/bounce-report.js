@@ -182,8 +182,17 @@ async function toXlsx(r) {
   return Buffer.from(await wb.xlsx.writeBuffer())
 }
 
+// Who the report speaks as. Alconox's Jax lives at jax@ask.alconox.com and signs Alconox's line
+// (Sage 2026-10-15: one Alconox address); everyone else gets SageRock's Jax.
+function jaxFor(clientName) {
+  return /alconox/i.test(clientName || '')
+    ? { replyTo: 'jax@ask.alconox.com', signature: 'Jax, Alconox’s AI Assistant' }
+    : { replyTo: 'jax@sagerock.com', signature: '- Jax' }
+}
+
 function buildBounceReport(r, conf = {}) {
   const company = conf.subject_suffix || r.client.name
+  const signature = conf.signature || '- Jax'
   const moved = r.moved || []
   const n = r.typos.length + moved.length + r.noDomain.length + r.gone.length
   const subject = `${n} bad email${n === 1 ? '' : 's'} to clean up — ${company}`
@@ -225,7 +234,7 @@ function buildBounceReport(r, conf = {}) {
       <p style="${T.sub}">These people opened or clicked after the bounce, so please don't delete them.</p>
       ${table(['Address', 'Person', 'Last activity'], falseRows)}${more(r.maybeFalse)}` : ''}
     <p style="${T.p};margin-top:24px">Questions? Just reply.</p>
-    <p style="${T.p}">- Jax</p></div>`
+    <p style="${T.p}">${esc(signature)}</p></div>`
 
   const line = c => `- ${c.email}${c.suggested ? ` -> ${c.suggested}${c.twin ? ' (already on file)' : ''}` : ''}${name(c) || c.company ? ` (${[name(c), c.company].filter(Boolean).join(', ')})` : ''}`
   const text = `Hi,\n\n${intro} The full list is attached as an Excel file, one tab per group.\n`
@@ -234,7 +243,7 @@ function buildBounceReport(r, conf = {}) {
     + (r.noDomain.length ? `\nDomain doesn't exist (${r.noDomain.length}):\n${r.noDomain.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
     + (r.gone.length ? `\nMailbox no longer works (${r.gone.length}):\n${r.gone.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
     + (r.maybeFalse.length ? `\nPossible false bounces, don't delete (${r.maybeFalse.length}):\n${r.maybeFalse.slice(0, LIST_CAP).map(line).join('\n')}\n` : '')
-    + `\nQuestions? Just reply.\n\n- Jax\n`
+    + `\nQuestions? Just reply.\n\n${signature}\n`
   return { subject, html, text, csv: toCsv(r), count: n }
 }
 
@@ -245,7 +254,8 @@ module.exports = function mountBounceReport(app, { supabase, decryptClient, cron
     const recipients = to ? [].concat(to) : conf.recipients
     if (!recipients.length) throw new Error('no recipients configured')
     const r = await loadReport(supabase, clientId, days || conf.days)
-    const report = buildBounceReport(r, { subject_suffix: /alconox/i.test(r.client.name) ? 'Alconox, LLC' : null })
+    const jax = jaxFor(r.client.name)
+    const report = buildBounceReport(r, { subject_suffix: /alconox/i.test(r.client.name) ? 'Alconox, LLC' : null, signature: jax.signature })
     if (dryRun) return { ...report, recipients, typos: r.typos.length, moved: r.moved.length, noDomain: r.noDomain.length, gone: r.gone.length, maybeFalse: r.maybeFalse.length }
     if (!r.total) return { skipped: 'no bounces', recipients }
 
@@ -260,7 +270,7 @@ module.exports = function mountBounceReport(app, { supabase, decryptClient, cron
       to: recipients,
       cc: !to && conf.cc?.length ? conf.cc : undefined,
       from: { email: fromEmail, name: `${client.name} Data Cleanup` },
-      replyTo: { email: 'jax@sagerock.com', name: 'Jax' },
+      replyTo: { email: jax.replyTo, name: 'Jax' },
       subject: report.subject, text: report.text, html: report.html,
       attachments: [{ content: (await toXlsx(r)).toString('base64'), filename: `bounces-${new Date().toISOString().slice(0, 10)}.xlsx`, type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', disposition: 'attachment' }],
       trackingSettings: { clickTracking: { enable: false }, openTracking: { enable: false } },
@@ -288,5 +298,6 @@ module.exports = function mountBounceReport(app, { supabase, decryptClient, cron
 module.exports.suggestDomain = suggestDomain
 module.exports.domainExists = domainExists
 module.exports.buildBounceReport = buildBounceReport
+module.exports.jaxFor = jaxFor
 module.exports.loadReport = loadReport
 module.exports.toXlsx = toXlsx
