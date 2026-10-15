@@ -98,6 +98,19 @@ accessible client, and shows an explicit loading/error state instead of silently
 leaving the preview empty. `scripts/test-newsletter-review.cjs` exercises this
 flow in Chromium with mocked authentication and data (see its build command).
 
+### Ask / Jax campaign test copies (2026-10-15)
+
+`POST /api/ask/campaign-test-sends` sends `[TEST]` copies of a **draft** campaign for Jax on Ask
+(`api/ask-test-send.js`, bearer `ASK_TEST_SEND_API_KEY`, 1Password item of the same name).
+Recipients must be on that client's approver list, which lives in code (`TEST_SEND_CLIENTS`:
+Alconox = Stacy, Michelle, Michael, slewis@, plus Sage and Rocky; SageRock = Sage and Rocky);
+widening it is a reviewed commit. Non-drafts and other tenants are refused. Each copy is a row in
+`ask_test_sends` (migration 113): retry guard on (request_key, recipient), caps of 5 per recipient
+and 20 per campaign per 24h. Copies carry `test_campaign_id`, never `campaign_id`, so stats stay
+clean. `POST /api/ask/campaign-test-sends/drafts {client}` lists the drafts. There is no schedule
+or list-send route; Sage's call (2026-10-15) is that real sends still need a person.
+Tests: `api/ask-test-send.test.js`.
+
 ### Brand Story
 
 Each client can tell its own story at `/brand-story` (since 2026-10-07, migration 109):
@@ -634,6 +647,7 @@ AWS_REGION=us-east-2
 S3_MEDIA_BUCKET=sagerock-email-images
 ASK_EMAIL_DESIGN_API_KEY=  # Shared only with Ask/Polaris
 ASK_EMAIL_DESIGN_CLIENT_ID= # Fixed SageRock clients.id; caller cannot override
+ASK_TEST_SEND_API_KEY=     # Shared only with Ask/Jax; [TEST] copies to named approvers
 ```
 
 Note: SendGrid API keys and Salesforce credentials are stored per-client in the `clients` database table, not in environment variables.

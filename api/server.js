@@ -54,6 +54,7 @@ const { s3, BUCKET, publicUrlForKey } = require('./s3-client')
 const { filenameFromUrl, scanClientHtml } = require('./media-scan')
 const { markConversationTailForCaching } = require('./email-builder-cache')
 const { createAskEmailDesignHandler } = require('./ask-email-design')
+const { createAskTestSendHandlers } = require('./ask-test-send')
 const { runAllSearchConsoleSyncs } = require('./search-console-sync')
 const RSSParser = require('rss-parser')
 const {
@@ -307,6 +308,8 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/contacts/upsert') return next()
   // Private Ask/Polaris integration uses its own fixed-client bearer auth.
   if (req.path === '/ask/email-design-drafts') return next()
+  // Ask/Jax test copies to named approvers only (api/ask-test-send.js), own bearer.
+  if (req.path === '/ask/campaign-test-sends' || req.path === '/ask/campaign-test-sends/drafts') return next()
   // Athena's CRM reporting transport has its own fixed-tenant bearer secret.
   if (req.path === '/internal/engagement/report') return next()
   // Skip auth for public signup (rate-limited, no sensitive data)
@@ -2424,6 +2427,18 @@ app.post('/api/ask/email-design-drafts', createAskEmailDesignHandler({
   clientId: process.env.ASK_EMAIL_DESIGN_CLIENT_ID,
   baseUrl: process.env.FRONTEND_URL || 'https://mail.sagerock.com',
 }))
+
+// Jax on Ask may send [TEST] copies of a draft campaign to that client's named
+// approvers (list in api/ask-test-send.js). No schedule or audience send here.
+const askTestSend = createAskTestSendHandlers({
+  supabase,
+  apiKey: process.env.ASK_TEST_SEND_API_KEY,
+  decryptClient,
+  sendMail: (key, msg) => { sgMail.setApiKey(key); return sgMail.send(msg) },
+  baseUrl: process.env.BASE_URL || 'https://mail.sagerock.com',
+})
+app.post('/api/ask/campaign-test-sends/drafts', askTestSend.drafts)
+app.post('/api/ask/campaign-test-sends', askTestSend.send)
 
 // Get lightweight template index for AI context
 app.get('/api/email-builder/templates', authenticateUser, async (req, res) => {
