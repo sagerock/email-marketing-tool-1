@@ -94,6 +94,10 @@ test('an answered Ask Alconox question counts as follow-up, an open one stays fl
   assert.doesNotMatch(rendered.html, /person-2/)
   assert.match(rendered.html, /Ask Alconox: Reviewed/)
   assert.match(rendered.html, /3 had their Ask Alconox question answered/)
+  // Alconox's digest is signed by Alconox's Jax (Sage 2026-10-15)
+  assert.match(rendered.text, /\nJax, Alconox’s AI Assistant$/)
+  assert.doesNotMatch(rendered.html, /Claude, for Sage/)
+  assert.match(buildDigest(o, { name: 'SageRock' }, {}).text, /— Claude, for Sage$/)
 })
 
 test('only the scheduler service registers the Monday digest cron', () => {

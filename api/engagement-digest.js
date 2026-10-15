@@ -5,8 +5,16 @@
 //
 // Sent from the client's own SendGrid account + from-address (their domain, their IP pool),
 // but it's an autonomous send, so it says so in the footer ("Claude, for Sage").
+// Alconox's digest speaks as Alconox's Jax instead (Sage 2026-10-15: one Alconox address).
 
 const { MailService } = require('@sendgrid/mail')
+const { jaxFor } = require('./bounce-report')
+
+function digestVoice(clientName) {
+  if (!/alconox/i.test(clientName || '')) return { replyTo: 'sage@sagerock.com', replyName: 'Sage Lewis', ask: 'reply to this email and Sage will see it', signature: '— Claude, for Sage' }
+  const jax = jaxFor(clientName)
+  return { replyTo: jax.replyTo, replyName: 'Jax', ask: 'reply to this email', signature: jax.signature }
+}
 
 const SITE = process.env.PUBLIC_APP_URL || 'https://mail.sagerock.com'
 
@@ -43,6 +51,7 @@ function table(head, rows) {
 function buildDigest(o, client, cfg) {
   const t = o.totals
   const days = o.days
+  const voice = digestVoice(client.name)
   const completed = new Set(['verified human follow-up', 'Salesforce activity recorded', 'Ask Alconox answered'])
   const attention = o.form_leads.filter(l => !completed.has(l.status))
   const completedRows = o.form_leads.filter(l => completed.has(l.status))
@@ -103,7 +112,7 @@ function buildDigest(o, client, cfg) {
 
     <p style="font:12px/1.5 Arial,sans-serif;color:#888;margin-top:32px;border-top:1px solid #eee;padding-top:12px">
       Sent automatically every Monday by SageRock's email tool. Data: Salesforce (contacts, activity dates, opportunities) and our email sends, opens, clicks, and replies.
-      Questions or changes: reply to this email and Sage will see it.<br>— Claude, for Sage
+      Questions or changes: ${voice.ask}.<br>${esc(voice.signature)}
     </p>
   </div>`
 
@@ -111,7 +120,7 @@ function buildDigest(o, client, cfg) {
     + attention.map(l => `- ${name(l)}${l.company ? ` (${l.company})` : ''}: ${l.last_form}, ${fmtDate(l.last_form_on)}, ${l.status}, ${l.opens_since_form} opens / ${l.clicks_since_form} clicks`).join('\n')
     + `\n\nStalled opportunities (${t.stalled}):\n` + stalled.map(s => `- ${s.name} [${s.stage}] ${s.owner_name || ''} last touch ${fmtDate(s.last_touch)}`).join('\n')
     + `\n\nReplies (${t.replies}):\n` + replies.map(r => `- ${name(r) || r.email}: ${r.subject || '(no subject)'} (${r.answered_at ? 'verified human response' : 'no verified response'})`).join('\n')
-    + `\n\nFull page: ${pageUrl}\n\n— Claude, for Sage`
+    + `\n\nFull page: ${pageUrl}\n\n${voice.signature}`
 
   // House pattern for this client's subjects: "<short phrase> — <Company>" (subject_prefix holds the company)
   const phrase = `${attentionTotal} form lead${attentionTotal === 1 ? '' : 's'} need review`
@@ -177,7 +186,7 @@ module.exports = function mountEngagementDigest(app, { supabase, decryptClient, 
       to: recipients,
       bcc: to ? undefined : (conf.bcc?.length ? conf.bcc : undefined),
       from: { email: client.from_email, name: `${client.name} Engagement Report` },
-      replyTo: { email: 'sage@sagerock.com', name: 'Sage Lewis' },
+      replyTo: (v => ({ email: v.replyTo, name: v.replyName }))(digestVoice(client.name)),
       subject: digest.subject,
       text: digest.text,
       html: digest.html,
