@@ -66,3 +66,8 @@ test('no ref says the visitor came directly', () => {
   assert.match(m.text, /No personal link/)
   assert.deepEqual(m.replyTo, { email: 'a@b.com' })
 })
+
+test('a link with no person says so instead of "not found"', () => {
+  const m = buildSageNoteEmail({ name: null, email: 'a@b.com', message: 'hi', ref: 'jaxtest' }, { person: null, org: null, campaign: 'test' })
+  assert.match(m.text, /jaxtest \(test, no person attached\)/)
+})

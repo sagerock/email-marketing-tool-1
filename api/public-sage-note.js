@@ -76,7 +76,9 @@ function buildSageNoteEmail({ name, email, message, ref }, link) {
   let via = 'No personal link (came to the page directly).'
   if (ref) {
     const target = link ? [link.person, link.org].filter(Boolean).join(', ') : ''
-    via = target ? `Personal link ${ref}: sent to ${target}.` : `Personal link ${ref} (not found in sr_links).`
+    if (target) via = `Personal link ${ref}: sent to ${target}.`
+    else if (link) via = `Personal link ${ref} (${link.campaign || 'no campaign'}, no person attached).`
+    else via = `Personal link ${ref} (not found in sr_links).`
   }
   const text = `${message}\n\n---\nFrom: ${name ? `${name} <${email}>` : email}\n${via}\nSent from the form on sagerock.com/sage. Reply to answer them directly.`
   return {
