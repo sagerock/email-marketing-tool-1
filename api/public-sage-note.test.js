@@ -71,3 +71,10 @@ test('a link with no person says so instead of "not found"', () => {
   const m = buildSageNoteEmail({ name: null, email: 'a@b.com', message: 'hi', ref: 'jaxtest' }, { person: null, org: null, campaign: 'test' })
   assert.match(m.text, /jaxtest \(test, no person attached\)/)
 })
+
+test('contact page notes are labeled as such; unknown pages fall back to /sage', () => {
+  const v = validateSageNote({ email: 'a@b.com', message: 'hi', page: 'contact' }).value
+  const m = buildSageNoteEmail(v, null)
+  assert.match(m.subject, /sagerock\.com\/contact/)
+  assert.equal(validateSageNote({ email: 'a@b.com', message: 'hi', page: 'evil' }).value.page, 'sage')
+})

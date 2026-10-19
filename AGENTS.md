@@ -299,6 +299,8 @@ contacts keep their name and unsubscribe status. Current lists: `law-firm-worksp
 to sage@sagerock.com through `CONTACT_SENDGRID_API_KEY` on its own SendGrid instance, Reply-To
 the sender, and names whose personal link (`sr_links`) the visitor came in on. It stores nothing
 and sends nothing to the visitor. 5 per IP per 15 minutes. Tests: `api/public-sage-note.test.js`.
+sagerock.com/contact sends `page: 'contact'` to it as well (alongside its CRM write through the
+`sagerock-lead` edge function), so contact-form messages reach Sage too.
 
 ### RSS "new post" notifications (migrations 094, 111)
 

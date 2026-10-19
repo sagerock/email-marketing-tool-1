@@ -7,6 +7,9 @@
 // Reply-To set to the sender, so answering is just Reply. If the visitor came in on a
 // personal link, the note says whose link it was (sr_links -> sr_people/sr_orgs).
 // Nothing is stored and nothing is sent to the visitor.
+//
+// The /contact form uses it too (`page: 'contact'`); that page also saves the lead to the CRM
+// through the sagerock-lead edge function, which never notified anyone on its own.
 
 const rateLimit = require('express-rate-limit')
 const { ipKeyGenerator } = require('express-rate-limit')
@@ -14,6 +17,8 @@ const { ipKeyGenerator } = require('express-rate-limit')
 const SAGE = 'sage@sagerock.com'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const CODE_RE = /^[a-z0-9]{4,10}$/
+// Which form sent it; unknown values fall back to /sage.
+const PAGES = { sage: 'sagerock.com/sage', contact: 'sagerock.com/contact' }
 
 // Same X-Forwarded-For keying as public-list-signup.js (no 'trust proxy' behind Railway).
 function clientIp(req) {
@@ -49,6 +54,7 @@ function validateSageNote(body) {
       email,
       message,
       ref: CODE_RE.test(ref) ? ref : null,
+      page: PAGES[clip(b.page, 20)] ? clip(b.page, 20) : 'sage',
     },
   }
 }
@@ -71,7 +77,8 @@ async function lookupRef(supabase, ref) {
   }
 }
 
-function buildSageNoteEmail({ name, email, message, ref }, link) {
+function buildSageNoteEmail({ name, email, message, ref, page = 'sage' }, link) {
+  const where = PAGES[page] || PAGES.sage
   const who = name || email
   let via = 'No personal link (came to the page directly).'
   if (ref) {
@@ -80,12 +87,12 @@ function buildSageNoteEmail({ name, email, message, ref }, link) {
     else if (link) via = `Personal link ${ref} (${link.campaign || 'no campaign'}, no person attached).`
     else via = `Personal link ${ref} (not found in sr_links).`
   }
-  const text = `${message}\n\n---\nFrom: ${name ? `${name} <${email}>` : email}\n${via}\nSent from the form on sagerock.com/sage. Reply to answer them directly.`
+  const text = `${message}\n\n---\nFrom: ${name ? `${name} <${email}>` : email}\n${via}\nSent from the form on ${where}. Reply to answer them directly.`
   return {
     to: SAGE,
-    from: { email: SAGE, name: 'sagerock.com/sage' },
+    from: { email: SAGE, name: where },
     replyTo: name ? { email, name } : { email },
-    subject: `Note from ${who} (sagerock.com/sage)`,
+    subject: `Note from ${who} (${where})`,
     text,
   }
 }
