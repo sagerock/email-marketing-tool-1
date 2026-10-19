@@ -25,6 +25,7 @@ require('dotenv').config()
 const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils')
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
 const { listSignupLimiter, validateListSignup, upsertListContact } = require('./public-list-signup')
+const { sageNoteLimiter, createSageNoteHandler } = require('./public-sage-note')
 const { BrandStoryError, normalizeBrandStoryInput, brandStoryPrompt, runBrandInterview } = require('./brand-story')
 const { optimizeImage, withExtension } = require('./image-optimize')
 const {
@@ -318,6 +319,8 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/public/awsna-signup') return next()
   // Skip auth for allowlisted public list signups (rate-limited, tags only)
   if (req.path === '/public/list-signup') return next()
+  // sagerock.com/sage note form: emails Sage only (rate-limited, honeypot)
+  if (req.path === '/public/sage-note') return next()
   // Chat follow-up review pages/actions are authorized by signed, reviewer-bound tokens
   if (req.path.startsWith('/ai-followup/review/')) return next()
   // Skip auth for ip-pools (public)
@@ -7522,6 +7525,19 @@ app.post('/api/public/list-signup', listSignupLimiter, async (req, res) => {
     res.status(500).json({ error: 'Something went wrong. Please try again.' })
   }
 })
+
+// sagerock.com/sage "send Sage a note" form (api/public-sage-note.js)
+app.post('/api/public/sage-note', sageNoteLimiter, createSageNoteHandler({
+  supabase,
+  sendMail: async (msg) => {
+    const apiKey = process.env.CONTACT_SENDGRID_API_KEY
+    if (!apiKey) throw new Error('CONTACT_SENDGRID_API_KEY not configured')
+    // Own instance: setApiKey on the shared sgMail could swap keys under a campaign send.
+    const mailer = new (require('@sendgrid/mail').MailService)()
+    mailer.setApiKey(apiKey)
+    await mailer.send(msg)
+  },
+}))
 
 // ==========================================
 // AWSNA 2026 booth resource signup

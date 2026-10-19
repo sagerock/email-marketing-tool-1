@@ -292,6 +292,14 @@ row with `trigger_type = 'tag_added'` on the list's first tag, created in the UI
 contacts keep their name and unsubscribe status. Current lists: `law-firm-workspace`
 (sagerock.com/law-firm-workspace) and `solo` (sagerock.com/solo, tag `solo-notes`). To add one, add an entry to `PUBLIC_LISTS`.
 
+### Sage's note form (2026-10-19)
+
+`POST /api/public/sage-note` (`api/public-sage-note.js`, body `name`, `email`, `message`, optional
+`ref`, honeypot `_gotcha`) backs the form at the bottom of sagerock.com/sage. It emails the note
+to sage@sagerock.com through `CONTACT_SENDGRID_API_KEY` on its own SendGrid instance, Reply-To
+the sender, and names whose personal link (`sr_links`) the visitor came in on. It stores nothing
+and sends nothing to the visitor. 5 per IP per 15 minutes. Tests: `api/public-sage-note.test.js`.
+
 ### RSS "new post" notifications (migrations 094, 111)
 
 An hourly job (`:45`, in `api/server.js`, `checkRssFeedForClient`) watches `clients.rss_feed_url`
