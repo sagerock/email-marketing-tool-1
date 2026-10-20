@@ -64,6 +64,7 @@ function closerText(body) {
   }
   return oneLine(kept.join('\n'), 400)
 }
+const thankYouEvidence = ({ at, body }) => `Customer's last email was a thank-you (${fmt(at)}): "${oneLine(closerText(body), 140)}"`
 function isCloser(body) {
   const t = closerText(body)
   return t.length <= 300 && CLOSER_WORDS.test(t) && !ASKS.test(t.replace(SATISFIED, ' '))
@@ -163,6 +164,8 @@ function detect(data) {
   const { now, instanceUrl } = data
   const follow = buildFollowupIndex(data)
   const out = new Map()
+  // Items that dropped off because the customer's last word was a thank-you; reconcile says so.
+  const thanks = data.thanks = new Map()
   const byPerson = new Set() // emails already on the list from a stronger signal
   const contactByEmail = e => data.contactsByEmail?.get(lower(e)) || null
   const inWindow = (signal, at) => ts(now) - ts(at) <= WINDOW_DAYS[signal] * DAY
@@ -219,7 +222,10 @@ function detect(data) {
         evidence: `${q.name} asked ${fmt(q.sf_created_at)}, no answer recorded (status: ${q.status || 'none'}).` })
     } else if (q.first_answer_at && q.last_message_incoming && q.last_message_at) {
       if (!inWindow('S4', q.last_message_at) || businessDaysBetween(q.last_message_at, now) < 3) continue
-      if (q.last_incoming_body != null && isCloser(q.last_incoming_body)) continue
+      if (q.last_incoming_body != null && isCloser(q.last_incoming_body)) {
+        thanks.set(`S4:${q.salesforce_id}`, { at: q.last_message_at, body: q.last_incoming_body })
+        continue
+      }
       if (follow.after(q.last_message_at, { address: q.email })) continue
       add({ ...base, dedupe_key: `S4:${q.salesforce_id}`, signal: 'S4', signal_at: q.last_message_at,
         evidence: `${q.name} answered ${fmt(q.first_answer_at)}; the customer wrote back ${fmt(q.last_message_at)} and is waiting.` })
@@ -291,8 +297,8 @@ function detect(data) {
   }
   for (const [address, m] of latestBySender) {
     if (byPerson.has(address)) continue
-    if (isCloser(m.body)) continue
     const signal = m.ours || OUR_SUBJECT.test(m.subject || '') ? 'S7' : 'S5'
+    if (isCloser(m.body)) { thanks.set(`${signal}:${address}`, { at: m.message_at, body: m.body }); continue }
     if (signal === 'S5' && (PITCH.test(m.body || '') || !CLEANING_INTENT.test(`${m.subject || ''} ${m.body || ''}`))) continue
     if (!inWindow(signal, m.message_at) || businessDaysBetween(m.message_at, now) < 3) continue
     if (follow.after(m.message_at, { address })) continue
@@ -367,9 +373,12 @@ function reconcile(existing, candidates, data) {
         close_reason: `older than ${window} days with no follow-up seen` }, event: ['expired', null] })
       continue
     }
-    const evidence = touched ? `${touched.by || 'someone'} ${touched.how} ${fmt(touched.at)}` : null
+    const thx = !touched && data.thanks?.get(item.dedupe_key)
+    const evidence = touched ? `${touched.by || 'someone'} ${touched.how} ${fmt(touched.at)}`
+      : thx ? thankYouEvidence(thx) : null
     updates.push({ id: item.id, patch: { status: 'handled', closed_at: nowIso, closed_by: 'auto',
-      close_reason: touched ? 'follow-up seen in Salesforce' : 'signal cleared (answer recorded, task closed, or no longer applies)',
+      close_reason: touched ? 'follow-up seen in Salesforce' : thx ? 'customer’s last email was a thank-you'
+        : 'signal cleared (answer recorded, task closed, or no longer applies)',
       close_evidence: evidence }, event: ['auto_closed', evidence] })
   }
   return { inserts, updates }
@@ -639,4 +648,4 @@ module.exports = function mountBubbleUp(app, { supabase, decryptClient, cron, sc
   }
   return { runBubbleUp }
 }
-Object.assign(module.exports, { isCloser, detect, reconcile, buildReport, businessDaysBetween, buildFollowupIndex, toXlsx, loadData, WINDOW_DAYS })
+Object.assign(module.exports, { isCloser, thankYouEvidence, detect, reconcile, buildReport, businessDaysBetween, buildFollowupIndex, toXlsx, loadData, WINDOW_DAYS })

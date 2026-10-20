@@ -151,3 +151,17 @@ test('S5 needs cleaning intent and skips pitches; automation-user owners are una
   assert.deepEqual(keys(items), ['S5:kim@ess.com'])
   assert.equal(items[0].owner_name, null)
 })
+
+test('an item that drops off because of a thank-you says so and quotes it', () => {
+  const at = '2026-09-25T18:08:30Z'
+  const q = { salesforce_id: 'a0M1', name: 'AA-3612', status: 'Response Emailed', email: 'hao@bsci.com', sf_created_at: '2026-09-23T17:35:01Z',
+    first_answer_at: '2026-09-25T17:10:52Z', last_message_at: at, last_message_incoming: true,
+    last_incoming_body: "Great, this is exactly what I'm looking for. Thank you, Marius!\n\nRegards,\n\nHao\nFrom: Marius Draeger\nSent: Friday" }
+  const data = base({ questions: [q] })
+  const cands = detect(data)
+  assert.equal(cands.length, 0)
+  const existing = [{ id: 'i1', dedupe_key: 'S4:a0M1', status: 'notified', signal: 'S4', signal_at: at, person_email: 'hao@bsci.com' }]
+  const { updates } = reconcile(existing, cands, data)
+  assert.equal(updates[0].patch.close_reason, 'customer’s last email was a thank-you')
+  assert.equal(updates[0].patch.close_evidence, `Customer's last email was a thank-you (9/25): "Great, this is exactly what I'm looking for. Thank you, Marius! Regards,"`)
+})
