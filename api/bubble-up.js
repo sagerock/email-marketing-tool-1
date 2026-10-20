@@ -50,9 +50,23 @@ const CLOSER_WORDS = /\b(thanks?|thank you|received|noted|got it|appreciate|will
 // consultants don't land on the list. (S7 replies to our own emails skip this.)
 const CLEANING_INTENT = /clean|deterg|residue|rinse|wash|validation|sample|quot(e|ation)|\bprice\b|liquinox|alconox powder|alcojet|citranox|tergazyme|solujet|citrajet|luminox|detonox|alcotabs|keteral|citrajet|citrasteel|halojet|tergajet|alcojet|sds\b|\bcoa\b/i
 const PITCH = /suspected as spam|invite you to exhibit|dear (valued )?supplier|media kit|eblasts?|content syndication|specializes in|data erasure|we (help|work with) companies|book a (call|demo)/i
+// Phrases that look like asks but close the loop ("exactly what I'm looking for", "will get in touch
+// if questions come up", "thank you for arranging the samples"). Blanked before the ASKS test.
+const SATISFIED = /\b(exactly |just )?what (i|we)('m| am| was| were|'re| are)? ?(looking for|needed|wanted)\b|\b(will|i'll|we'll) (get in touch|reach out|let you know|contact you)( if [^.!]*)?|\bif (any )?questions? (come|comes) up\b|\bthanks?( you)?( so much| again)? for [^.!?\n]*|\b(i|we) ?(will|'ll) (send|share|set up)[^.!?\n]*|\bno,? but thank(s| you)\b|\bdon'?t have any (\*?new\*? )?news\b/gi
+// Signature and disclaimer: everything after a sign-off line, a legal footer, or a Chinese reply header.
+const SIGN_OFF_LINE = /^\s*((best|kind|warm|warmest)?\s*regards|sincere\w*|best( wishes)?|cheers|respectfully|thanks|thank you|many thanks)\b[^a-z0-9]*([a-z]+[^a-z0-9]*)?$/i
+const FOOTER = /\n\s*(this (e-?mail|message) (and any|is|may)|confidential(ity)? notice|寄件者|已傳送)/i
+function closerText(body) {
+  const kept = []
+  for (const line of String(body || '').split(/\n\s*(From:|On .{0,80}wrote:|-----Original|Sent from my)/)[0].split(FOOTER)[0].split('\n')) {
+    kept.push(line)
+    if (SIGN_OFF_LINE.test(line)) break
+  }
+  return oneLine(kept.join('\n'), 400)
+}
 function isCloser(body) {
-  const t = oneLine(body, 400)
-  return t.length <= 300 && CLOSER_WORDS.test(t) && !ASKS.test(t)
+  const t = closerText(body)
+  return t.length <= 300 && CLOSER_WORDS.test(t) && !ASKS.test(t.replace(SATISFIED, ' '))
 }
 
 // ---------- helpers ----------

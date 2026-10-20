@@ -120,6 +120,15 @@ test('closers and automation do not count, real asks do', () => {
   assert.equal(isCloser('Shayna Sosnowik reacted to your message:'), true)
   assert.equal(isCloser('Pls share the pricing copy Sent from Outlook for Android'), false)
   assert.equal(isCloser('Hi Nick, Thank you for following up. We need a non-enzymatic, I would like to test a sample'), false)
+  // Real thank-yous from the 10/20 list: satisfied phrases, signatures and disclaimers don't make them asks.
+  assert.equal(isCloser("Great, this is exactly what I'm looking for. Thank you, Marius!\n\nRegards,\n\nHao\nFrom: Marius Draeger\nSent: Friday\n\nLet me know if you have any additional questions"), true)
+  assert.equal(isCloser('Thank you so much,\nSincerelly\nKathy Grimm CST\nSurgical Coordinator\n724-626-2283\n"This email and any attached files are confidential and intended solely for the intended recipient(s). If you are not the named recipient, you should not read, distribute or copy this email or send it on."'), true)
+  assert.equal(isCloser('Hi Marius,\nThank you for arranging the two samples! We look forward to testing Tergazyme and will get in touch if any questions come up.\nBest regards,\nDeborah'), true)
+  assert.equal(isCloser("Hello! Thank you so much for following up. I don't have any *new* news at the moment!"), true)
+  assert.equal(isCloser('The 13th will work. I will set up a call via teams and send you the link to the meeting.\nThank you,\nBrenden'), true)
+  // Still asks: an ETA request and a question, even with a thank-you or sign-off.
+  assert.equal(isCloser('Okay but if you could have eta from them for us it should be great, the customer need the shipment urgent.\nBest Regards,\nNan'), false)
+  assert.equal(isCloser("Hi all, I've been buried in price roll. Anything needed from me at this point?\nThank you as always,\nTom Wright"), false)
   // A "Survey sent" task under Stacy's name isn't a follow-up.
   const opp = { salesforce_id: '006A', name: 'MTR - SR-1', contact_email: 'b@mtr.com', sample_request_contact_id: '003A',
     survey_completed_date: '2026-09-16', survey_speak_with_expert: 'Yes' }
