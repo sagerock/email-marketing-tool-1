@@ -17,6 +17,11 @@
 
 begin;
 
+-- sendgrid_api_key is NOT NULL and clients without a key hold ''. The browser can
+-- no longer insert that column, so give it a default; the server's "no key" check
+-- (`if (!client.sendgrid_api_key)`) treats '' and NULL the same.
+alter table public.clients alter column sendgrid_api_key set default '';
+
 revoke all on table public.clients from anon;
 revoke all on table public.clients from authenticated;
 revoke all on table public.clients from romalume_app;
