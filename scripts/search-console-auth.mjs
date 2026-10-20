@@ -43,7 +43,13 @@ function parseCode(value) {
   return new URL(value).searchParams.get('code')
 }
 
+function clientName() {
+  const i = process.argv.indexOf('--client')
+  return i > -1 && process.argv[i + 1] ? process.argv[i + 1] : 'Center for Orthopedics'
+}
+
 async function installCredential(credentials, accountEmail) {
+  const name = clientName()
   if (!process.env.VITE_SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY || !process.env.ENCRYPTION_KEY) {
     throw new Error('VITE_SUPABASE_URL, SUPABASE_SERVICE_KEY, and ENCRYPTION_KEY are required')
   }
@@ -53,9 +59,9 @@ async function installCredential(credentials, accountEmail) {
   const { data: client, error: clientError } = await supabase
     .from('clients')
     .select('id')
-    .eq('name', 'Center for Orthopedics')
+    .eq('name', name)
     .single()
-  if (clientError) throw new Error(`Could not find Center for Orthopedics tenant: ${clientError.message}`)
+  if (clientError) throw new Error(`Could not find ${name} tenant: ${clientError.message}`)
 
   const encrypted = encrypt(JSON.stringify(credentials), process.env.ENCRYPTION_KEY)
   const { error } = await supabase.from('search_console_credentials').upsert({
@@ -65,7 +71,7 @@ async function installCredential(credentials, accountEmail) {
     scopes: SCOPES,
   }, { onConflict: 'client_id' })
   if (error) throw new Error(`Could not install encrypted credential: ${error.message}`)
-  console.log(`Installed an encrypted Search Console credential for Center for Orthopedics (${accountEmail}).`)
+  console.log(`Installed an encrypted Search Console credential for ${name} (${accountEmail}).`)
 }
 
 const command = process.argv[2]
@@ -143,5 +149,5 @@ if (command === 'url') {
 } else {
   console.log('Usage:')
   console.log('  node scripts/search-console-auth.mjs url')
-  console.log('  node scripts/search-console-auth.mjs code <code-or-callback-url> --install')
+  console.log('  node scripts/search-console-auth.mjs code <code-or-callback-url> --install [--client "<client name>"]')
 }
