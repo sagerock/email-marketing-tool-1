@@ -403,3 +403,34 @@ knowledge/media backups and the later knowledge migration remain separate work.
 No mail-service deployment was needed: recovery code is preserved on the email
 tool's review branch, while the Cron Monitor registry was deployed from its own
 canonical `master` branch.
+
+## Retention, local pruning and second production restore drill — October 20, 2026
+
+Retention is now installed (this supersedes "no automatic cleanup/expiration is
+installed" above):
+
+- S3 `production/supabase/` lifecycle rule `supabase-backups-retention`: objects move to
+  Glacier Instant Retrieval after 30 days (restores stay immediate), expire after 400
+  days, noncurrent versions expire after 90 days, incomplete multipart uploads abort after
+  2 days. The pre-existing `cfa-recordings-hygiene` rule is unchanged. No Object Lock:
+  irreversible once enabled and bucket-wide, so it stays a decision for Sage.
+- Local: `scripts/prune-local-backups.py --keep 14 --apply` runs weekly (Sundays 06:00
+  Eastern, `sagerock-backup-prune.timer`, registered as `sagerock-backup-prune` in Cron
+  Monitor, registry only). It only deletes `scheduled-<ts>-<id>` directories beyond the
+  newest 14; named sets such as `20260911-first-production` are never touched. One-time
+  prune the same day: 41 sets / 53 GB to 15 sets / 20 GB, after confirming S3 held all 41.
+- The media bucket `sagerock-email-images` now has versioning on, with noncurrent versions
+  kept 90 days, so an overwritten or deleted image can be recovered.
+
+Second production restore drill, same day, from the 04:30 Eastern backup of October 20
+(`scheduled-20261020T083015Z-6955b6ad`), using the recovery kit that the private local
+copy still holds (`D:\dev\private-recovery-keys`, outside Git) and the isolated PG17 +
+bubblewrap toolchain: `status: database-restore-verified`, **245 tables** (176 in
+September) with row counts matched against the snapshot, 5 sampled content hashes, RLS
+flags and ACLs verified for every table, privileged-RPC boundary and two-client
+isolation verified with fixtures rolled back, network and filesystem isolated, scheduler
+disabled, **88.4 seconds** for the restore and checks. The private proof is under
+`~/.local/state/sagerock-recovery/`; the plaintext scratch directory was removed after
+review. Same limits as the first drill: same desktop, no hosted Supabase Auth/API smoke
+test, no media or runtime backup. Also that day: `scripts/test-recovery-roundtrip.sh`
+(synthetic) passed. Next drill due by January 2027.
