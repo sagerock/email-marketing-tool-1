@@ -37,6 +37,10 @@ const FREEMAIL = /@(gmail|yahoo|hotmail|outlook|aol|icloud|live|msn|comcast|prot
 // shipping traffic that customer service handles anyway.
 const NOISE_SUBJECT = /automatic reply|auto.?reply|automatyczna|automatische|abwesenheit|respuesta autom|r[ée]ponse automatique|out of (the )?office|undeliverable|delivery status|mail delivery|read:|\bunsubscribe\b|\b2\d{6}\b|\bpricing\b|price (list|spreadsheet)|\brma\b|\bedi\b|proforma|pallet|\breturn\b|media kit|exhibit|b\/l\b|vessel|prepay|\bopor|\bpo\b|\b(invoice|remittance|payment|statement|purchase order|p\.?o\.?\s*#?\s*\d|po\d{3,}|order (confirmation|#|no)|tracking|shipment|shipped|freight|bill of lading|\bbol\b|credit card|w-?9|tax exempt|quote #)/i
 const NOISE_SENDER = /mailer-daemon|postmaster|no-?reply|do-?not-?reply|notifications?@|bounce|@alconox\.com$|@tcpanalytical\.com$|@sagerock\.com$|logistics|cargo|freight|salesforce|docusign|quickbooks|intuit|paypal|amazon/i
+// Broadcasts to the whole list: a click on one isn't interest in a trade-show conversation.
+const NEWSLETTER = /scoop|newsletter|main send|most viewed/i
+// Shared Alconox mailboxes: writing to one isn't writing to a person.
+const SHARED_MAILBOX = /cleaning|purchase order|customer service|accounts|sales|info|marketing|orders?\b/i
 // House subject pattern on everything we send for Alconox ("… — Alconox, LLC").
 const OUR_SUBJECT = /[—–-]\s*Alconox, L(LC|…)?\s*$/i
 // Staff-named automation: survey sends, assignment notices, shipping notices, the trade-show
@@ -52,10 +56,13 @@ const CLEANING_INTENT = /clean|deterg|residue|rinse|wash|validation|sample|quot(
 const PITCH = /suspected as spam|invite you to exhibit|dear (valued )?supplier|media kit|eblasts?|content syndication|specializes in|data erasure|we (help|work with) companies|book a (call|demo)/i
 // Phrases that look like asks but close the loop ("exactly what I'm looking for", "will get in touch
 // if questions come up", "thank you for arranging the samples"). Blanked before the ASKS test.
-const SATISFIED = /\b(exactly |just )?what (i|we)('m| am| was| were|'re| are)? ?(looking for|needed|wanted)\b|\b(will|i'll|we'll) (get in touch|reach out|let you know|contact you)( if [^.!]*)?|\bif (any )?questions? (come|comes) up\b|\bthanks?( you)?( so much| again)? for [^.!?\n]*|\b(i|we) ?(will|'ll) (send|share|set up)[^.!?\n]*|\bno,? but thank(s| you)\b|\bdon'?t have any (\*?new\*? )?news\b/gi
+const SATISFIED = /\b(exactly |just )?what (i|we)('m| am| was| were|'re| are)? ?(looking for|needed|wanted)\b|\b(will|i'll|we'll) (get in touch|reach out|let you know|contact you)( if [^.!]*)?|\bif (any )?questions? (come|comes) up\b|\bthanks?( you)?( so much| again)? for [^.!?\n]*|\b(i|we) ?(will|'ll) (send|share|set up)[^.!?\n]*|\bno,? but thank(s| you)\b|\bdon'?t have any (\*?new\*? )?news\b|\b(we|i)('re| are| am|'m)? ?look(ing)? forward to [^.!?\n]*|\bif (it|all|everything) works( out| well)?[^.!?\n]*/gi
 // Signature and disclaimer: everything after a sign-off line, a legal footer, or a Chinese reply header.
 const SIGN_OFF_LINE = /^\s*((best|kind|warm|warmest)?\s*regards|sincere\w*|best( wishes)?|cheers|respectfully|thanks|thank you|many thanks)\b[^a-z0-9]*([a-z]+[^a-z0-9]*)?$/i
 const FOOTER = /\n\s*(this (e-?mail|message) (and any|is|may)|confidential(ity)? notice|寄件者|已傳送)/i
+// Ask Alconox submissions that aren't cleaning questions: hotel-block scams, partnership and
+// retail pitches, "look at our project and quote" spam.
+const ASK_SPAM = /hotel rooms|room block|housing (bureau|block)|partnership with your brand|long-term partnership|(take a look at|review) our project|fix a meeting|guest post|seo services|web(site)? (design|development) services|marketing services/i
 function closerText(body) {
   const kept = []
   for (const line of String(body || '').split(/\n\s*(From:|On .{0,80}wrote:|-----Original|Sent from my)/)[0].split(FOOTER)[0].split('\n')) {
@@ -67,7 +74,8 @@ function closerText(body) {
 const thankYouEvidence = ({ at, body }) => `Customer's last email was a thank-you (${fmt(at)}): "${oneLine(closerText(body), 140)}"`
 function isCloser(body) {
   const t = closerText(body)
-  return t.length <= 300 && CLOSER_WORDS.test(t) && !ASKS.test(t.replace(SATISFIED, ' '))
+  const rest = t.replace(SATISFIED, ' ')
+  return rest.replace(/\s+/g, ' ').length <= 300 && CLOSER_WORDS.test(t) && !ASKS.test(rest)
 }
 
 // ---------- helpers ----------
@@ -166,16 +174,27 @@ function detect(data) {
   const out = new Map()
   // Items that dropped off because the customer's last word was a thank-you; reconcile says so.
   const thanks = data.thanks = new Map()
+  // Other reasons an item left the list on purpose (spam, duplicate question, newsletter-only click).
+  const skipped = data.skipped = new Map()
   const byPerson = new Set() // emails already on the list from a stronger signal
   const contactByEmail = e => data.contactsByEmail?.get(lower(e)) || null
   const inWindow = (signal, at) => ts(now) - ts(at) <= WINDOW_DAYS[signal] * DAY
+  // One item per person: a later signal for someone already on the list is folded into their item.
+  const merged = data.merged = new Map()
+  const itemByPerson = new Map()
   const add = c => {
     if (out.has(c.dedupe_key)) return
+    const first = c.person_email && itemByPerson.get(lower(c.person_email))
+    if (first) {
+      first.evidence = `${first.evidence} Also: ${c.evidence}`
+      merged.set(c.dedupe_key, first)
+      return
+    }
     c.owner_name = ownerOf(c.owner_name)
     c.score = score(c.signal, { signalAt: c.signal_at, now, hot: c.hot, email: c.person_email, company: c.company })
     delete c.hot
     out.set(c.dedupe_key, c)
-    if (c.person_email) byPerson.add(lower(c.person_email))
+    if (c.person_email) { byPerson.add(lower(c.person_email)); itemByPerson.set(lower(c.person_email), c) }
   }
 
   // S1 / S2: sample survey answers
@@ -206,8 +225,14 @@ function detect(data) {
     })
   }
 
-  // S3 / S4: Ask Alconox
-  for (const q of data.questions || []) {
+  // S3 / S4: Ask Alconox. The same question sent twice counts once: skip a copy if another copy
+  // was answered, and otherwise keep the copy with a real owner (not the queue).
+  const qText = q => `${lower(q.email)}|${oneLine(q.question_text, 200).toLowerCase()}`
+  const answeredText = new Set((data.questions || []).filter(q => q.first_answer_at || q.status === 'Response Emailed').map(qText))
+  const queueOwner = q => !ownerOf(q.owner_name) || /queue/i.test(q.owner_name)
+  const seenText = new Set()
+  const questionsInOrder = [...(data.questions || [])].sort((a, b) => queueOwner(a) - queueOwner(b) || ts(a.sf_created_at) - ts(b.sf_created_at))
+  for (const q of questionsInOrder) {
     if (q.visible_in_last_snapshot === false) continue
     const contact = contactByEmail(q.email)
     const base = {
@@ -218,6 +243,13 @@ function detect(data) {
     }
     if (!q.first_answer_at && q.status !== 'Response Emailed') {
       if (!inWindow('S3', q.sf_created_at) || businessDaysBetween(q.sf_created_at, now) < 2) continue
+      if (ASK_SPAM.test(q.question_text || '') || PITCH.test(q.question_text || '')) {
+        skipped.set(`S3:${q.salesforce_id}`, ['not a cleaning question (spam or a sales pitch)', `${q.name}: "${oneLine(q.question_text, 120)}"`]); continue
+      }
+      if (answeredText.has(qText(q)) || seenText.has(qText(q))) {
+        skipped.set(`S3:${q.salesforce_id}`, ['same question sent twice', `${q.name} repeats another submission${answeredText.has(qText(q)) ? ' that was answered' : ' already on the list'}`]); continue
+      }
+      seenText.add(qText(q))
       add({ ...base, dedupe_key: `S3:${q.salesforce_id}`, signal: 'S3', signal_at: q.sf_created_at,
         evidence: `${q.name} asked ${fmt(q.sf_created_at)}, no answer recorded (status: ${q.status || 'none'}).` })
     } else if (q.first_answer_at && q.last_message_incoming && q.last_message_at) {
@@ -247,7 +279,7 @@ function detect(data) {
     const t0 = ts(after)
     const e = lower(email)
     const hits = []
-    const click = firstAfter(clicksBy.get(e), 'timestamp', t0)
+    const click = firstAfter((clicksBy.get(e) || []).filter(c => !c.newsletter), 'timestamp', t0)
     if (click) hits.push({ at: click.timestamp, what: 'clicked a campaign email' })
     const ask = firstAfter(questionsBy.get(e), 'sf_created_at', t0)
     if (ask) hits.push({ at: ask.sf_created_at, what: `asked Ask Alconox (${ask.name})` })
@@ -265,7 +297,10 @@ function detect(data) {
     const email = contact?.email
     if (!email) continue
     const hits = engagedAfter(email, t.sf_created_at)
-    if (!hits.length) continue
+    if (!hits.length) {
+      if (firstAfter(clicksBy.get(lower(email)), 'timestamp', ts(t.sf_created_at))) skipped.set(`S6:${t.salesforce_id}`, ['only engagement was a newsletter click', null])
+      continue
+    }
     const last = hits[hits.length - 1]
     if (!inWindow('S6', t.sf_created_at)) continue
     if (follow.after(hits[0].at, { address: email, ids: [t.who_id] })) continue
@@ -295,6 +330,15 @@ function detect(data) {
       message_at: c.created_at, ours: true }
     if (!prev || ts(m.message_at) > ts(prev.message_at)) latestBySender.set(a, m)
   }
+  // Alconox staff names from their own sent mail, so "wrote to Reggie Balines" can be said.
+  const staffName = new Map()
+  for (const m of data.emails || []) {
+    if (!m.incoming && /@alconox\.com$/i.test(m.from_address || '') && /\S \S/.test(m.from_name || '') && !SHARED_MAILBOX.test(m.from_name)) staffName.set(lower(m.from_address), m.from_name)
+  }
+  const wroteTo = m => {
+    const to = String(m.to_address || '').split(/[;,]/).map(lower).find(a => staffName.has(a))
+    return to ? staffName.get(to) : null
+  }
   for (const [address, m] of latestBySender) {
     if (byPerson.has(address)) continue
     const signal = m.ours || OUR_SUBJECT.test(m.subject || '') ? 'S7' : 'S5'
@@ -311,7 +355,7 @@ function detect(data) {
       owner_name: contact?.salesforce_owner_name || null, signal_at: m.message_at,
       evidence: signal === 'S7'
         ? `Replied ${fmt(m.message_at)} to our email "${oneLine(m.subject, 70)}"; no reply logged since.`
-        : `Emailed ${fmt(m.message_at)} "${oneLine(m.subject, 70)}"${m.related_to_name ? ` (on ${m.related_to_name})` : ''}; no reply logged since.`,
+        : `Emailed ${wroteTo(m) ? `${wroteTo(m)} ` : ''}${fmt(m.message_at)} "${oneLine(m.subject, 70)}"${m.related_to_name ? ` (on ${m.related_to_name})` : ''}; no reply logged since.`,
       quote: oneLine(m.body, 160) || null,
       sf_url: contact?.salesforce_id ? sfUrl(instanceUrl, contact.salesforce_id) : null,
     })
@@ -371,6 +415,19 @@ function reconcile(existing, candidates, data) {
     if (!touched && ts(now) - ts(item.signal_at) > window * DAY) {
       updates.push({ id: item.id, patch: { status: 'expired', closed_at: nowIso, closed_by: 'auto',
         close_reason: `older than ${window} days with no follow-up seen` }, event: ['expired', null] })
+      continue
+    }
+    const into = !touched && data.merged?.get(item.dedupe_key)
+    if (into) {
+      updates.push({ id: item.id, patch: { status: 'handled', closed_at: nowIso, closed_by: 'auto',
+        close_reason: 'same person as another item on the list', close_evidence: `Folded into ${into.evidence.split(' Also: ')[0]}` },
+        event: ['auto_closed', 'merged with the same person\'s other item'] })
+      continue
+    }
+    const skip = !touched && data.skipped?.get(item.dedupe_key)
+    if (skip) {
+      updates.push({ id: item.id, patch: { status: 'handled', closed_at: nowIso, closed_by: 'auto', close_reason: skip[0], close_evidence: skip[1] },
+        event: ['auto_closed', skip[0]] })
       continue
     }
     const thx = !touched && data.thanks?.get(item.dedupe_key)
@@ -484,7 +541,7 @@ async function loadData(supabase, clientId, now = new Date()) {
       .eq('client_id', clientId).eq('direction', 'inbound').gte('created_at', since(WINDOW_DAYS.S7))
       .not('body', 'like', '[auto-response]%')),
     pageAll(() => supabase.from('woocommerce_orders').select('email, order_date').eq('client_id', clientId).gte('order_date', since(150))),
-    pageAll(() => supabase.from('campaigns').select('id').eq('client_id', clientId).gte('created_at', since(200))),
+    pageAll(() => supabase.from('campaigns').select('id, name').eq('client_id', clientId).gte('created_at', since(200))),
   ])
 
   // The customer's last message on each Ask Alconox thread, so "Thanks!" doesn't count as waiting.
@@ -523,12 +580,13 @@ async function loadData(supabase, clientId, now = new Date()) {
   const taskEmails = [...new Set(tasks.filter(t => t.is_closed === false && /^(HOT|Warm)\b/i.test(t.subject || ''))
     .map(t => contactsBySfId.get(t.who_id)?.email).filter(Boolean).map(lower))]
   const campaignIds = new Set(campaigns.map(c => c.id))
+  const newsletterIds = new Set(campaigns.filter(c => NEWSLETTER.test(c.name || '')).map(c => c.id))
   const clicks = []
   for (let i = 0; i < taskEmails.length; i += 150) {
     const { data, error } = await supabase.from('analytics_events').select('email, campaign_id, timestamp')
       .eq('event_type', 'click').in('email', taskEmails.slice(i, i + 150)).gte('timestamp', since(WINDOW_DAYS.S6))
     if (error) throw error
-    clicks.push(...(data || []).filter(c => campaignIds.has(c.campaign_id)))
+    clicks.push(...(data || []).filter(c => campaignIds.has(c.campaign_id)).map(c => ({ ...c, newsletter: newsletterIds.has(c.campaign_id) })))
   }
 
   const conversations = convs.filter(c => c.contact?.email).map(c => ({

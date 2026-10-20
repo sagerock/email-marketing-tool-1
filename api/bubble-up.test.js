@@ -165,3 +165,31 @@ test('an item that drops off because of a thank-you says so and quotes it', () =
   assert.equal(updates[0].patch.close_reason, 'customer’s last email was a thank-you')
   assert.equal(updates[0].patch.close_evidence, `Customer's last email was a thank-you (9/25): "Great, this is exactly what I'm looking for. Thank you, Marius! Regards,"`)
 })
+
+test('spam, duplicate questions, newsletter-only clicks and one item per person', () => {
+  const q = (id, over) => ({ salesforce_id: id, name: `AA-${id}`, status: 'New Question', sf_created_at: '2026-10-01T14:00:00Z', visible_in_last_snapshot: true, ...over })
+  const questions = [
+    q('1', { email: 'a@x.com', owner_name: 'Ask Alconox Queue', question_text: 'Events Plus has negotiated a block of discounted hotel rooms in Anaheim for MD&M West' }),
+    q('2', { email: 'w@werfen.com', owner_name: 'Ask Alconox Queue', question_text: 'Can we rinse Liquinox with tap water?' }),
+    q('3', { email: 'w@werfen.com', owner_name: 'Marius Dräger', question_text: 'Can we rinse Liquinox with tap water?' }),
+    q('4', { email: 'v@alkali.com', status: 'Response Emailed', first_answer_at: '2026-10-05T14:00:00Z', question_text: 'Is the expiry two years?' }),
+    q('5', { email: 'v@alkali.com', question_text: 'Is the expiry two years?' }),
+  ]
+  const data = base({ questions })
+  const items = detect(data)
+  assert.deepEqual(keys(items), ['S3:3'])
+  assert.equal(items[0].owner_name, 'Marius Dräger')
+  assert.equal(data.skipped.get('S3:1')[0], 'not a cleaning question (spam or a sales pitch)')
+  assert.equal(data.skipped.get('S3:2')[0], 'same question sent twice')
+  assert.equal(data.skipped.get('S3:5')[0], 'same question sent twice')
+  // A thank-you that looks ahead isn't waiting.
+  const { isCloser } = require('./bubble-up')
+  assert.equal(isCloser("Hi,\nNo worries there I was late responding also so figured I'd reach back out. Great we look forward to getting and using the citranox sample if all works well I'm sure we will be purchasing more to use as our main cleaning agent for all glass labware that we have.\nThank you for the explanation on the processes that we could use and for the important reminder of rinsing it.\n\nBryant Meinel\nCity of Elkhorn Water Dept."), true)
+  // Same person twice: folded into the first item, not two lines.
+  const opp = { salesforce_id: '006A', name: 'Elkhorn - SR-1', contact_email: 'b@elk.gov', survey_completed_date: '2026-10-01', survey_planning_purchase: 'Yes' }
+  const d2 = base({ opps: [opp], questions: [q('9', { email: 'b@elk.gov', owner_name: 'Marius Dräger', question_text: 'Which product?' })] })
+  const two = detect(d2)
+  assert.equal(two.length, 1)
+  assert.match(two[0].evidence, /Also: AA-9 asked/)
+  assert.ok(d2.merged.has('S3:9'))
+})
