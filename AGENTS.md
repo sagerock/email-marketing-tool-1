@@ -288,6 +288,14 @@ through the REST API (RLS scopes rows, not columns). Two consequences:
   `ENCRYPTION_KEY` like the Salesforce/WooCommerce connect routes. Settings' Edit form leaves the key
   blank to keep the current one. Tests: `node --test api/client-credentials.test.js`.
 
+Function hardening (migration 121, 2026-10-20): every function has a fixed `search_path`
+(`public, pg_temp`), trigger functions and the user-id-probing helper overloads
+(`has_client_access(uuid,uuid)`, `is_admin(uuid)`, `is_super_admin(uuid)`) have no `anon`/
+`authenticated` EXECUTE. The RLS helpers that policies call (`can_access_client`, `is_internal_staff`,
+`is_super_admin()`, `is_admin()`, `get_user_client_id`) must keep browser-role EXECUTE: ~200 policies
+on anon-readable tables evaluate them, and a missing EXECUTE turns an empty result into a permission
+error for every app sharing this Supabase project. New functions follow the same convention.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`
