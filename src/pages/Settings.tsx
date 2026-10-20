@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import { useClient } from '../context/ClientContext'
-import type { Client, VerifiedSender, IndustryLink } from '../types/index.js'
+import type { Client, ClientCredentials, VerifiedSender, IndustryLink } from '../types/index.js'
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 // Settings page - includes client management, Salesforce integration, and UTM tracking
 import Button from '../components/ui/Button'
@@ -35,6 +35,19 @@ export default function Settings() {
   const { refreshClients, selectedClient } = useClient()
   const [showAddModal, setShowAddModal] = useState(false)
   const [editingClient, setEditingClient] = useState<Client | null>(null)
+  // Configured/hint summary from the server; the browser can't read the secret columns.
+  const [credentials, setCredentials] = useState<ClientCredentials | null>(null)
+
+  const fetchCredentials = async (clientId: string) => {
+    setCredentials(null)
+    try {
+      const res = await apiFetch(`/api/clients/${clientId}/credentials`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setCredentials(await res.json())
+    } catch (error) {
+      console.error('Error loading client credentials:', error)
+    }
+  }
 
   // Salesforce integration state
   const [sfStatus, setSfStatus] = useState<SalesforceStatus | null>(null)
@@ -96,6 +109,7 @@ export default function Settings() {
     if (selectedClient) {
       fetchSalesforceStatus()
       fetchIndustryLinks()
+      fetchCredentials(selectedClient.id)
     }
   }, [selectedClient])
 
@@ -496,7 +510,11 @@ export default function Settings() {
                     <div>
                       <span className="text-gray-500">SendGrid API Key: </span>
                       <span className="font-mono text-gray-900">
-                        {selectedClient.sendgrid_api_key.substring(0, 20)}...
+                        {credentials === null
+                          ? '…'
+                          : credentials.sendgrid.configured
+                            ? `configured${credentials.sendgrid.hint ? ` (ends in ${credentials.sendgrid.hint})` : ''}`
+                            : 'not set'}
                       </span>
                     </div>
                     {selectedClient.ip_pool && (
@@ -1165,15 +1183,30 @@ export default function Settings() {
       {editingClient && (
         <EditClientModal
           client={editingClient}
+          sendgridHint={credentials?.sendgrid.configured ? credentials.sendgrid.hint : null}
           onClose={() => setEditingClient(null)}
           onSuccess={() => {
             setEditingClient(null)
             refreshClients()
+            fetchCredentials(editingClient.id)
           }}
         />
       )}
     </div>
   )
+}
+
+// Hands a SendGrid key to the server, which validates, encrypts and stores it.
+// Super admin only (the server checks). Throws with the server's message.
+async function saveSendgridKey(clientId: string, apiKey: string) {
+  const res = await apiFetch(`/api/clients/${clientId}/sendgrid-key`, {
+    method: 'PUT',
+    body: JSON.stringify({ apiKey }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(body.error || `Could not save the SendGrid key (HTTP ${res.status})`)
+  }
 }
 
 function AddClientModal({
@@ -1205,22 +1238,28 @@ function AddClientModal({
     setSubmitting(true)
 
     try {
-      const { error } = await supabase.from('clients').insert({
-        name: formData.name,
-        sendgrid_api_key: formData.sendgrid_api_key,
-        ip_pool: formData.ip_pool.trim() || null,
-        mailing_address: formData.mailing_address || null,
-        default_utm_params: formData.default_utm_params || null,
-        default_reply_to_email: formData.default_reply_to_email || null,
-        s3_prefix: formData.s3_prefix.trim().toLowerCase() || null,
-        verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
-      })
+      // The SendGrid key never goes through the browser's table access
+      // (migration 120): create the client, then hand the key to the server.
+      const { data: created, error } = await supabase
+        .from('clients')
+        .insert({
+          name: formData.name,
+          ip_pool: formData.ip_pool.trim() || null,
+          mailing_address: formData.mailing_address || null,
+          default_utm_params: formData.default_utm_params || null,
+          default_reply_to_email: formData.default_reply_to_email || null,
+          s3_prefix: formData.s3_prefix.trim().toLowerCase() || null,
+          verified_senders: verifiedSenders.length > 0 ? verifiedSenders : [],
+        })
+        .select('id')
+        .single()
 
       if (error) throw error
+      await saveSendgridKey(created.id, formData.sendgrid_api_key)
       onSuccess()
     } catch (error) {
       console.error('Error adding client:', error)
-      alert('Failed to add client')
+      alert(error instanceof Error && error.message ? `Failed to add client: ${error.message}` : 'Failed to add client')
     } finally {
       setSubmitting(false)
     }
@@ -1418,16 +1457,18 @@ function AddClientModal({
 
 function EditClientModal({
   client,
+  sendgridHint,
   onClose,
   onSuccess,
 }: {
   client: Client
+  sendgridHint: string | null
   onClose: () => void
   onSuccess: () => void
 }) {
   const [formData, setFormData] = useState({
     name: client.name,
-    sendgrid_api_key: client.sendgrid_api_key,
+    sendgrid_api_key: '', // blank = keep the current key (the browser never sees it)
     ip_pool: client.ip_pool || '',
     mailing_address: client.mailing_address || '',
     default_utm_params: client.default_utm_params || '',
@@ -1460,7 +1501,6 @@ function EditClientModal({
         .from('clients')
         .update({
           name: formData.name,
-          sendgrid_api_key: formData.sendgrid_api_key,
           ip_pool: formData.ip_pool.trim() || null,
           mailing_address: formData.mailing_address || null,
           default_utm_params: formData.default_utm_params || null,
@@ -1472,10 +1512,13 @@ function EditClientModal({
         .eq('id', client.id)
 
       if (error) throw error
+      if (formData.sendgrid_api_key.trim()) {
+        await saveSendgridKey(client.id, formData.sendgrid_api_key)
+      }
       onSuccess()
     } catch (error) {
       console.error('Error updating client:', error)
-      alert('Failed to update client')
+      alert(error instanceof Error && error.message ? `Failed to update client: ${error.message}` : 'Failed to update client')
     } finally {
       setSubmitting(false)
     }
@@ -1499,16 +1542,20 @@ function EditClientModal({
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
           />
-          <Input
-            label="SendGrid API Key *"
-            required
-            type="password"
-            placeholder="SG.xxx..."
-            value={formData.sendgrid_api_key}
-            onChange={(e) =>
-              setFormData({ ...formData, sendgrid_api_key: e.target.value })
-            }
-          />
+          <div>
+            <Input
+              label="SendGrid API Key"
+              type="password"
+              placeholder={sendgridHint ? `Current key ends in ${sendgridHint}. Paste a new key to replace it.` : 'SG.xxx...'}
+              value={formData.sendgrid_api_key}
+              onChange={(e) =>
+                setFormData({ ...formData, sendgrid_api_key: e.target.value })
+              }
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Leave blank to keep the current key. Keys are stored encrypted and never shown again.
+            </p>
+          </div>
           <Input
             label="IP Pool (optional)"
             placeholder="my-ip-pool"

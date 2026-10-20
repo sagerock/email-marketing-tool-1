@@ -271,6 +271,23 @@ for the other (on 2026-10-08 the panel said "Free photo search isn't set up yet"
 510x293 slot as a 1020x586, 56 KB JPEG in 0.3s; an Unsplash pick came back as a 1020x586 JPEG.
 Tests: `api/unsplash.test.js`, `api/pixabay.test.js`, same browser test.
 
+### Client credentials stay server-side (migration 120, 2026-10-20)
+
+The browser roles (`anon`, `authenticated`) and the RomaLume database role have column-level grants
+on `clients`: every column except `sendgrid_api_key`, `salesforce_client_id`, `salesforce_client_secret`,
+`salesforce_access_token`, `salesforce_refresh_token`, `woocommerce_consumer_key` and
+`woocommerce_consumer_secret`. Before this, any client admin could read their client's SendGrid key
+through the REST API (RLS scopes rows, not columns). Two consequences:
+
+- **`select('*')` on `clients` fails for the browser.** Read it through `CLIENT_SELECT` from
+  `src/lib/clientColumns.ts`. A new app-visible column on `clients` must be added there AND to the
+  grants in `supabase/migrations/120_client_secret_columns.sql` (otherwise the app never sees it).
+- The UI learns whether a key is set, and its last four characters, from
+  `GET /api/clients/:id/credentials` (`api/client-credentials.js`); a super admin sets the SendGrid key
+  with `PUT /api/clients/:id/sendgrid-key`, which validates the `SG.` shape and encrypts it with
+  `ENCRYPTION_KEY` like the Salesforce/WooCommerce connect routes. Settings' Edit form leaves the key
+  blank to keep the current one. Tests: `node --test api/client-credentials.test.js`.
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

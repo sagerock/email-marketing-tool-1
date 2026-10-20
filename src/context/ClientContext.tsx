@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { supabase } from '../lib/supabase'
 import type { Client } from '../types/index.js'
 import { useAuth } from '../contexts/AuthContext'
+import { CLIENT_SELECT } from '../lib/clientColumns'
 
 interface ClientContextType {
   selectedClient: Client | null
@@ -36,7 +37,8 @@ export function ClientProvider({ children }: { children: ReactNode }) {
     try {
       let query = supabase
         .from('clients')
-        .select('*')
+        // Named columns: the browser role can't `select *` on clients (migration 120)
+        .select(CLIENT_SELECT)
         .order('created_at', { ascending: false })
 
       // Client admins only see their assigned client
@@ -44,7 +46,8 @@ export function ClientProvider({ children }: { children: ReactNode }) {
         query = query.eq('id', assignedClientId)
       }
 
-      const { data, error } = await query
+      // supabase-js can't infer a row type from a column list built at runtime
+      const { data, error } = await query.overrideTypes<Client[], { merge: false }>()
 
       if (error) throw error
       setClients(data || [])

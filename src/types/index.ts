@@ -117,10 +117,12 @@ export interface VerifiedSender {
   name: string
 }
 
+// Secret columns (SendGrid key, Salesforce consumer key/secret/tokens,
+// WooCommerce consumer key/secret) are not readable by the browser since
+// migration 120. Use ClientCredentials from GET /api/clients/:id/credentials.
 export interface Client {
   id: string
   name: string
-  sendgrid_api_key: string
   ip_pool?: string
   mailing_address?: string
   default_utm_params?: string
@@ -132,13 +134,19 @@ export interface Client {
   updated_at: string
   // Salesforce integration fields
   salesforce_instance_url?: string
-  salesforce_client_id?: string
-  salesforce_client_secret?: string
   salesforce_connected_at?: string
   last_salesforce_sync?: string
   salesforce_sync_status?: string
   salesforce_sync_message?: string
   salesforce_sync_count?: number
+}
+
+// What the server tells the UI about a client's stored credentials. Never the
+// values themselves; `hint` is the last four characters of the key.
+export interface ClientCredentials {
+  sendgrid: { configured: boolean; hint: string | null; ip_pool: string | null }
+  salesforce: { configured: boolean; instance_url: string | null; connected_at: string | null }
+  woocommerce: { configured: boolean; url: string | null; connected_at: string | null }
 }
 
 export interface Tag {

@@ -9246,6 +9246,13 @@ require('./bubble-up')(app, {
   syncActivity: clientId => syncSalesforceActivity({ supabase, getSalesforceConnection }, clientId),
   syncOpportunities: (clientId, since) => syncSalesforceOpportunities({ supabase, getSalesforceConnection }, clientId, since),
 })
+// Client credentials (migration 120): the browser can no longer read the secret
+// columns on `clients`; it asks for a configured/hint summary and super admins
+// set the SendGrid key here, encrypted like the Salesforce/WooCommerce routes.
+require('./client-credentials').register(app, {
+  supabase, authenticateUser, requireSuperAdmin,
+  encryptionKey: ENCRYPTION_KEY, encrypt: encryptValue, decrypt: decryptValue,
+})
 
 // Handle SPA routing - serve index.html for all non-API routes
 // This allows React Router to handle client-side routing
