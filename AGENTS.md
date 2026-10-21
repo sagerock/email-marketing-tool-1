@@ -296,6 +296,25 @@ Function hardening (migration 121, 2026-10-20): every function has a fixed `sear
 on anon-readable tables evaluate them, and a missing EXECUTE turns an empty result into a permission
 error for every app sharing this Supabase project. New functions follow the same convention.
 
+### Two-factor authentication (2026-10-21)
+
+TOTP via Supabase Auth MFA (project already had `mfa_totp_enroll/verify_enabled`). Rules live in
+`src/lib/mfa.ts` and `api/mfa.js` (same logic, both tested): anyone with a verified factor must enter
+a code once per session (AAL2) before the app or the API will serve them; **super admins must be
+enrolled**, and until they are they only see the setup screen. Other roles opt in from Settings →
+"Your account" (`SecurityCard.tsx`: status, Turn off, Set up). `MfaGate` sits inside `ProtectedRoute`
+after the admin record is known and renders `MfaEnroll` (QR + secret + first code; abandoned
+unverified factors are removed first) or `MfaVerify` (`challengeAndVerify`) in an `AuthShell`. State
+is cached per access token and kept during token refreshes so open pages aren't unmounted; enrolling,
+verifying or unenrolling fires `sagerock:mfa-changed`. The server reads `user.factors` from the
+verified token's user and the token's `aal` claim; failures are `403 {code: 'mfa_step_up_required' |
+'mfa_enrollment_required'}`. Routes with their own bearer secrets (Ask/Jax/Polaris) are untouched.
+**The database RLS helpers deliberately do not require AAL2**: `sagerock-schools/api` queries this
+project as the signed-in user through `can_access_client` with no step-up prompt, so a database-level
+rule would silently empty its contacts and dashboards for enrolled users. Adding it there is the
+follow-up once Schools gets a code prompt. Tests: `node --test api/mfa.test.js`,
+`scripts/test-mfa.cjs` (build command in its header).
+
 ### Media uploads are resized
 
 Since 2026-10-07, `POST /api/media/upload` runs every image through `api/image-optimize.js`

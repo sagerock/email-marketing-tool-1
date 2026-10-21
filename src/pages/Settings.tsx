@@ -10,6 +10,7 @@ import { Plus, Settings as SettingsIcon, X, Trash2, Cloud, CloudOff, RefreshCw, 
 import Badge from '../components/ui/Badge'
 
 import { apiFetch } from '../lib/api'
+import SecurityCard from '../components/mfa/SecurityCard'
 
 interface SalesforceStatus {
   connected: boolean
@@ -489,6 +490,9 @@ export default function Settings() {
           Add Client
         </Button>
       </div>
+
+      {/* Your account: two-factor authentication (account-level, independent of the selected client) */}
+      <SecurityCard />
 
       {/* Client Configuration */}
       <Card>

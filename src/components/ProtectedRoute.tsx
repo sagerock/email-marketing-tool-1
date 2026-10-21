@@ -2,6 +2,7 @@ import { Navigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { useEffect, useState } from 'react'
 import { ShieldX, RefreshCw } from 'lucide-react'
+import MfaGate from './MfaGate'
 
 export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const location = useLocation()
@@ -123,5 +124,6 @@ export default function ProtectedRoute({ children }: { children: React.ReactNode
     )
   }
 
-  return <>{children}</>
+  // Two-factor: code prompt for enrolled users, required setup for super admins (src/lib/mfa.ts).
+  return <MfaGate>{children}</MfaGate>
 }

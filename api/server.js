@@ -247,6 +247,8 @@ async function markCampaignSendFailed(campaignId, error, context) {
 
 // ---- Auth Middleware ----
 
+const { mfaCheck } = require('./mfa')
+
 async function authenticateUser(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) return res.status(401).json({ error: 'Missing authorization token' })
@@ -262,6 +264,10 @@ async function authenticateUser(req, res, next) {
       .single()
 
     if (!adminUser) return res.status(403).json({ error: 'Access denied' })
+
+    // Two-factor rules (api/mfa.js): enrolled users must be at AAL2, super admins must be enrolled.
+    const mfa = mfaCheck({ token, user, adminUser })
+    if (!mfa.ok) return res.status(403).json({ error: mfa.error, code: mfa.code })
 
     req.user = user
     req.adminUser = adminUser
