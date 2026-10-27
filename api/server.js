@@ -151,6 +151,9 @@ const corsOptions = {
       'https://www.sagerock.com',  // WordPress site (www variant)
       'https://sagerock-web.onrender.com', // Astro site rebuild (public forms)
       'http://localhost:4321',     // Astro local dev
+      'https://querystead.com',    // Querystead site (request-access form)
+      'https://www.querystead.com',
+      'https://querystead-site.pages.dev',
     ]
 
     // Allow requests with no origin (like mobile apps or curl requests)

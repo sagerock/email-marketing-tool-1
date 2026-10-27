@@ -18,7 +18,7 @@ const SAGE = 'sage@sagerock.com'
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const CODE_RE = /^[a-z0-9]{4,10}$/
 // Which form sent it; unknown values fall back to /sage.
-const PAGES = { sage: 'sagerock.com/sage', contact: 'sagerock.com/contact' }
+const PAGES = { sage: 'sagerock.com/sage', contact: 'sagerock.com/contact', querystead: 'querystead.com' }
 
 // Same X-Forwarded-For keying as public-list-signup.js (no 'trust proxy' behind Railway).
 function clientIp(req) {
