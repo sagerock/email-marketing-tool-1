@@ -32,6 +32,10 @@ test('S1: survey asked for an expert and nobody followed up', () => {
   // A real task Sage logs by hand still counts.
   const real = detect(base({ opps: [opp], tasks: [{ what_id: '006A', created_by_name: 'Sage Lewis', sf_created_at: '2026-09-20T10:00:00Z', subject: 'Follow up with International sample request' }] }))
   assert.equal(real.length, 0)
+  // A Jax follow-up task counts only once the owner completes it.
+  const jaxTask = { what_id: '006A', created_by_name: 'Sage Lewis', owner_name: 'Marius Dräger', sf_created_at: '2026-09-20T10:00:00Z', subject: 'Jax follow-up: reply to Darrin Daggitt' }
+  assert.equal(detect(base({ opps: [opp], tasks: [{ ...jaxTask, is_closed: false }] })).length, 1)
+  assert.equal(detect(base({ opps: [opp], tasks: [{ ...jaxTask, is_closed: true, completed_at: '2026-09-21T10:00:00Z' }] })).length, 0)
 })
 
 test('S2: plans to buy, not sure where', () => {
