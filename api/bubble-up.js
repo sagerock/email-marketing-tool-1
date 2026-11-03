@@ -31,6 +31,10 @@ const SIGNAL_LABEL = {
 const OPEN = new Set(['new', 'notified'])
 // Users whose Tasks are automation, not a person following up.
 const AUTOMATION_USERS = /^(Automated Process|Alconox Forms|Cleaning|Integration|Platform Integration)/i
+// Since 2026-10-20 our own Salesforce logging (salesforce/clicks/sf_clicks.py + sf_followups.py in the
+// hub) writes campaign clicks and AI follow-ups as EmailMessages created by Sage's login; Salesforce
+// shows them as Tasks titled "Email: ...". They are our automation, not a person following up.
+const isOurLoggedEmail = t => /^Sage Lewis$/i.test(t.created_by_name || '') && /^Email:/i.test(t.subject || '')
 const ownerOf = name => (!name || AUTOMATION_USERS.test(name) ? null : name)
 const FREEMAIL = /@(gmail|yahoo|hotmail|outlook|aol|icloud|live|msn|comcast|protonmail|mail)\./i
 // Mail that isn't a prospect asking for something: auto-replies, bounces, and order / billing /
@@ -129,6 +133,7 @@ function buildFollowupIndex({ emails = [], tasks = [] }) {
   const tasksById = new Map()
   for (const t of tasks) {
     if (AUTOMATION_USERS.test(t.created_by_name || '')) continue
+    if (isOurLoggedEmail(t)) continue
     if (AUTOMATED_SUBJECT.test(t.subject || '')) continue
     for (const id of [t.who_id, t.what_id]) if (id) (tasksById.get(id) || tasksById.set(id, []).get(id)).push(t)
   }

@@ -26,6 +26,12 @@ test('S1: survey asked for an expert and nobody followed up', () => {
   assert.equal(followed.length, 0)
   const automated = detect(base({ opps: [opp], tasks: [{ what_id: '006A', created_by_name: 'Automated Process', sf_created_at: '2026-09-20T10:00:00Z', subject: 'Survey sent' }] }))
   assert.equal(automated.length, 1)
+  // Our own Salesforce click/follow-up log (created as Sage, "Email: ...") is automation too.
+  const logged = detect(base({ opps: [opp], tasks: [{ who_id: '006A', created_by_name: 'Sage Lewis', sf_created_at: '2026-09-20T10:00:00Z', subject: 'Email: The Scoop: Filter Reuse with CPF — Alconox, LLC' }] }))
+  assert.equal(logged.length, 1)
+  // A real task Sage logs by hand still counts.
+  const real = detect(base({ opps: [opp], tasks: [{ what_id: '006A', created_by_name: 'Sage Lewis', sf_created_at: '2026-09-20T10:00:00Z', subject: 'Follow up with International sample request' }] }))
+  assert.equal(real.length, 0)
 })
 
 test('S2: plans to buy, not sure where', () => {
