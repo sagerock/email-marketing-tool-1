@@ -288,14 +288,24 @@ through the REST API (RLS scopes rows, not columns). Two consequences:
   `ENCRYPTION_KEY` like the Salesforce/WooCommerce connect routes. Settings' Edit form leaves the key
   blank to keep the current one. Tests: `node --test api/client-credentials.test.js`.
 
-**Per-client SendGrid keys after the 10/26 rotation (Jax, 2026-11-09, item #3262).** Rotating Railway
-variables does not touch `clients.sendgrid_api_key`. CfA's stored key was dead (401); it now holds a
-scoped parent-account key (vault `SENDGRID_CFA_EMAIL_TOOL`, 10 scopes: mail.send, suppression read/
-bounces/blocks, messages.read, stats, categories.stats, ips.pools.read), written the way the PUT route
-does it (encrypt with `ENCRYPTION_KEY`, which matches Railway's frontend and backend) and checked with a
-sandbox mail.send from communications@centerforanthroposophy.org (200). Still broken, no campaigns yet:
-Spring Garden (decrypts, SendGrid 401) and The Waldorf School of Philadelphia (does not decrypt with the
-Railway key). Re-key them before their first send.
+**Per-client SendGrid keys are limited, one per client (Jax, 2026-11-09, item #3262).** Rotating Railway
+variables does not touch `clients.sendgrid_api_key`. After the 10/26 rotation CfA's stored key was dead,
+Spring Garden's was rejected (401) and Waldorf Philadelphia's didn't decrypt. Every client with a key
+now has its own limited parent-account key named "<client> email tool (mail.sagerock.com) <date>", saved
+in 1Password (Jax vault, `SENDGRID_<CLIENT>_EMAIL_TOOL`) and stored encrypted with `ENCRYPTION_KEY` (same
+on Railway frontend, backend and local `.env`). Scopes are exactly what the app calls: mail.send,
+ips.pools.read, messages.read, stats.read, categories.stats.read, categories.stats.sums.read,
+suppression.read, suppression.bounces.read, suppression.bounces.delete, suppression.blocks.read. A new
+endpoint needs its scope added to these keys. IP pools are chosen per send (`ip_pool_name`), not by key.
+Each key was checked with a sandbox mail.send through the client's pool before the swap. The old
+full-access keys were not deleted (other apps may share them); rollback copies of the old encrypted
+values are in `~/.sendgrid-rotation-rollback-2026-11-09.jsonl`. Domain authentication (2026-11-09): sgws.org valid;
+phillywaldorf.com authenticated and valid (SendGrid id 33919681, CNAMEs em5083/s1/s2 in Cloudflare, DNS only);
+howbig.co authenticated and valid (SendGrid id 33919688); its DNS is at GoDaddy, not Cloudflare,
+so the CNAMEs em8575, s1._domainkey, s2._domainkey were added in Elsy's GoDaddy through the
+"godaddy.com SageRock" login's delegate access (Products & Domains). GoDaddy asks for a step-up
+code before delegate access and before each DNS save; choose the "1password" authenticator, whose
+code is the OTP on that vault item.
 
 Function hardening (migration 121, 2026-10-20): every function has a fixed `search_path`
 (`public, pg_temp`), trigger functions and the user-id-probing helper overloads
