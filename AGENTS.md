@@ -288,6 +288,15 @@ through the REST API (RLS scopes rows, not columns). Two consequences:
   `ENCRYPTION_KEY` like the Salesforce/WooCommerce connect routes. Settings' Edit form leaves the key
   blank to keep the current one. Tests: `node --test api/client-credentials.test.js`.
 
+**Per-client SendGrid keys after the 10/26 rotation (Jax, 2026-11-09, item #3262).** Rotating Railway
+variables does not touch `clients.sendgrid_api_key`. CfA's stored key was dead (401); it now holds a
+scoped parent-account key (vault `SENDGRID_CFA_EMAIL_TOOL`, 10 scopes: mail.send, suppression read/
+bounces/blocks, messages.read, stats, categories.stats, ips.pools.read), written the way the PUT route
+does it (encrypt with `ENCRYPTION_KEY`, which matches Railway's frontend and backend) and checked with a
+sandbox mail.send from communications@centerforanthroposophy.org (200). Still broken, no campaigns yet:
+Spring Garden (decrypts, SendGrid 401) and The Waldorf School of Philadelphia (does not decrypt with the
+Railway key). Re-key them before their first send.
+
 Function hardening (migration 121, 2026-10-20): every function has a fixed `search_path`
 (`public, pg_temp`), trigger functions and the user-id-probing helper overloads
 (`has_client_access(uuid,uuid)`, `is_admin(uuid)`, `is_super_admin(uuid)`) have no `anon`/
