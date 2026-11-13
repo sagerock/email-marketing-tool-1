@@ -26,6 +26,7 @@ const { encrypt: encryptValue, decrypt: decryptValue } = require('./crypto-utils
 const { webhookLimiter, upsertLimiter, engagementReportingLimiter } = require('./rate-limiters')
 const { listSignupLimiter, validateListSignup, upsertListContact } = require('./public-list-signup')
 const { sageNoteLimiter, createSageNoteHandler } = require('./public-sage-note')
+const { CLIENT_ID: INTAKE_CLIENT_ID, intakeGuideLimiter, createIntakeGuideHandler, createIntakeGuideStore } = require('./public-intake-guide')
 const { BrandStoryError, normalizeBrandStoryInput, brandStoryPrompt, runBrandInterview } = require('./brand-story')
 const { optimizeImage, withExtension } = require('./image-optimize')
 const {
@@ -330,6 +331,7 @@ app.use('/api', (req, res, next) => {
   if (req.path === '/public/list-signup') return next()
   // sagerock.com/sage note form: emails Sage only (rate-limited, honeypot)
   if (req.path === '/public/sage-note') return next()
+  if (req.path === '/public/intake-guide') return next()
   // Chat follow-up review pages/actions are authorized by signed, reviewer-bound tokens
   if (req.path.startsWith('/ai-followup/review/')) return next()
   // Skip auth for ip-pools (public)
@@ -7534,6 +7536,21 @@ app.post('/api/public/list-signup', listSignupLimiter, async (req, res) => {
     res.status(500).json({ error: 'Something went wrong. Please try again.' })
   }
 })
+
+// Requested intake-guide delivery: isolated from newsletters and sales sequences.
+app.post('/api/public/intake-guide', intakeGuideLimiter, createIntakeGuideHandler({
+  store: createIntakeGuideStore(supabase),
+  sendMail: async (message) => {
+    const { data, error } = await supabase.from('clients').select('id,sendgrid_api_key,ip_pool').eq('id', INTAKE_CLIENT_ID).single()
+    const client = decryptClient(data)
+    if (error || !client?.sendgrid_api_key) throw new Error('Guide sender unavailable')
+    const mailer = new (require('@sendgrid/mail').MailService)()
+    mailer.setApiKey(client.sendgrid_api_key)
+    mailer.client.setDefaultRequest('timeout', 8000)
+    const [response] = await mailer.send({ ...message, ...(client.ip_pool ? { ipPoolName: client.ip_pool } : {}) })
+    return { messageId: response.headers?.['x-message-id'] || null }
+  },
+}))
 
 // sagerock.com/sage "send Sage a note" form (api/public-sage-note.js)
 app.post('/api/public/sage-note', sageNoteLimiter, createSageNoteHandler({

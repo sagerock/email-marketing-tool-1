@@ -347,6 +347,22 @@ place (same key and format, so sent emails keep working), backing originals up t
 
 ### Public List Signups
 
+**Intake guide delivery (2026-11-13, Sage authorized setup and publication):**
+`POST /api/public/intake-guide` is separate from list signup. It records the business
+request with `record_intake_guide_request` and sends the fixed PDF link from
+`jax@sagerock.com`, using SageRock's per-client SendGrid key/IP pool. Migration 123
+adds a service-role-only delivery ledger and atomic contact merge. Each recipient
+gets at most one delivery attempt per resource per UTC day, across retries/replicas.
+An uncertain send keeps its reservation; never delete/reword/retry to bypass it.
+An email failure still returns the saved request with an honest delivery status,
+so the page can offer the immediate PDF. New download-only contacts are excluded
+from marketing (`unsubscribed=true`); existing unsubscribe/bounce flags are never
+changed. Optional consent is stored in submission history and the dedicated
+`intake-guide-opt-in` tag, but no newsletter/sequence is started. A later opt-in
+does not silently clear an existing unsubscribe. No historical contacts are mailed.
+Tests: `node --test api/public-intake-guide.test.js`; migration helper:
+`scripts/apply-intake-guide-migration.mjs`. Details: `docs/intake-guide-delivery.md`.
+
 `POST /api/public/list-signup` (body: `email`, optional `first_name`, `list`) lets a
 public page add someone to a named list on the `PUBLIC_SIGNUP_CLIENT_ID` client
 (SageRock). Lists are allowlisted in `api/public-list-signup.js`; each maps to contact
