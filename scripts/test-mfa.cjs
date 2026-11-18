@@ -2,8 +2,9 @@
 //   VITE_SUPABASE_URL=https://mfa-test.supabase.co VITE_SUPABASE_ANON_KEY=test-only-key npx vite build --outDir /tmp/sagerock-mfa-ui-build
 //   node scripts/test-mfa.cjs
 // Mocks Supabase Auth (password grant, /user, factors enroll/challenge/verify/unenroll) and REST.
-// Scenarios: super admin without a factor is forced to enroll; an enrolled user is asked for a
-// code each session, then can see and turn off the factor in Settings; a client admin passes through.
+// Scenarios: super admin and admin (every-client roles, 2026-11-18) without a factor are forced to
+// enroll; an enrolled user is asked for a code each session, then can see and turn off the factor in
+// Settings (a required role goes straight back to setup); a client admin passes through.
 const assert = require('node:assert/strict')
 const express = require('../api/node_modules/express')
 const puppeteer = require('../api/node_modules/puppeteer')
@@ -122,13 +123,39 @@ async function enterCode(page, code) {
       await page.waitForFunction(() => document.querySelector('[data-testid="security-card"]')?.textContent.includes('Authenticator app (test)'), { timeout: 10000 })
       const text = await page.$eval('[data-testid="security-card"]', (el) => el.textContent)
       assert.match(text, /Two-factor authentication/)
-      assert.match(text, /Required for super admins/)
+      assert.match(text, /Required for accounts with access to every client/)
       const [turnOff] = await page.$$('xpath/.//*[@data-testid="security-card"]//button[contains(., "Turn off")]')
       assert.ok(turnOff, 'Turn off button')
       await turnOff.click()
       // Factor removed → super admin is sent straight back to setup by the gate.
       await testid(page, 'mfa-enroll')
       assert.ok(state.calls.some((c) => c === 'DELETE /auth/v1/factors/factor-verified'), 'unenroll was called')
+    })
+
+    await run('admin (every client) without a factor must enroll before seeing the app', scenario({ role: 'admin', factors: [], aal: 'aal1' }), async (page) => {
+      await login(page, base)
+      await testid(page, 'mfa-enroll')
+      assert.equal(await page.$('a[href="/contacts"]'), null, 'app nav must not render before enrollment')
+      await enterCode(page, '123456')
+      await nav(page)
+      assert.equal(await page.$('[data-testid="mfa-shell"]'), null)
+    })
+
+    await run('enrolled admin who turns it off is sent straight back to setup', scenario({ role: 'admin', factors: [verifiedFactor], aal: 'aal1' }), async (page, state) => {
+      await login(page, base)
+      await testid(page, 'mfa-verify')
+      await enterCode(page, '123456')
+      await nav(page)
+      await page.goto(`${base}/settings`, { waitUntil: 'networkidle0' })
+      await page.waitForFunction(() => document.querySelector('[data-testid="security-card"]')?.textContent.includes('Authenticator app (test)'), { timeout: 10000 })
+      const text = await page.$eval('[data-testid="security-card"]', (el) => el.textContent)
+      assert.match(text, /Required for accounts with access to every client/)
+      const [turnOff] = await page.$$('xpath/.//*[@data-testid="security-card"]//button[contains(., "Turn off")]')
+      await turnOff.click()
+      await testid(page, 'mfa-enroll')
+      assert.ok(state.calls.some((c) => c === 'DELETE /auth/v1/factors/factor-verified'), 'unenroll was called')
+      await enterCode(page, '123456')
+      await nav(page)
     })
 
     await run('client admin without a factor passes straight through and can opt in', scenario({ role: 'client_admin', factors: [], aal: 'aal1' }), async (page) => {
@@ -139,7 +166,7 @@ async function enterCode(page, code) {
       await testid(page, 'security-card')
       await page.waitForFunction(() => document.querySelector('[data-testid="security-card"]')?.textContent.includes('Set up two-factor'), { timeout: 10000 })
       const text = await page.$eval('[data-testid="security-card"]', (el) => el.textContent)
-      assert.doesNotMatch(text, /Required for super admins/)
+      assert.doesNotMatch(text, /Required for accounts with access to every client/)
       const [setup] = await page.$$('xpath/.//*[@data-testid="security-card"]//button[contains(., "Set up two-factor")]')
       await setup.click()
       await testid(page, 'mfa-qr')

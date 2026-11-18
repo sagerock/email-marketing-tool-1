@@ -270,7 +270,7 @@ async function authenticateUser(req, res, next) {
 
     if (!adminUser) return res.status(403).json({ error: 'Access denied' })
 
-    // Two-factor rules (api/mfa.js): enrolled users must be at AAL2, super admins must be enrolled.
+    // Two-factor rules (api/mfa.js): enrolled users must be at AAL2, super_admin/admin must be enrolled.
     const mfa = mfaCheck({ token, user, adminUser })
     if (!mfa.ok) return res.status(403).json({ error: mfa.error, code: mfa.code })
 

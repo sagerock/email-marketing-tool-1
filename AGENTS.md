@@ -320,7 +320,9 @@ error for every app sharing this Supabase project. New functions follow the same
 TOTP via Supabase Auth MFA (project already had `mfa_totp_enroll/verify_enabled`). Rules live in
 `src/lib/mfa.ts` and `api/mfa.js` (same logic, both tested): anyone with a verified factor must enter
 a code once per session (AAL2) before the app or the API will serve them; **super admins must be
-enrolled**, and until they are they only see the setup screen. Other roles opt in from Settings →
+enrolled**, and until they are they only see the setup screen. Since 2026-11-18 `admin` must be enrolled
+too (`CROSS_CLIENT_ROLES` in both files): the RLS helpers and `validateClientAccess` give that role every
+client whatever `admin_users.client_id` says, so the rule follows the role. `client_admin` opts in from Settings →
 "Your account" (`SecurityCard.tsx`: status, Turn off, Set up). `MfaGate` sits inside `ProtectedRoute`
 after the admin record is known and renders `MfaEnroll` (QR + secret + first code; abandoned
 unverified factors are removed first) or `MfaVerify` (`challengeAndVerify`) in an `AuthShell`. State

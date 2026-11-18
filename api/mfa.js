@@ -6,7 +6,7 @@
 // user object carries `factors`, and the token's `aal` claim says whether this session passed
 // a second factor. The rules mirror src/lib/mfa.ts:
 //   - a verified factor exists and the session is not AAL2  → 403 mfa_step_up_required
-//   - super admin with no verified factor                    → 403 mfa_enrollment_required
+//   - super_admin or admin (every-client roles) with no factor → 403 mfa_enrollment_required
 // Everyone else passes. The database RLS helpers deliberately don't require AAL2 yet (the
 // schools app queries as the user through them without a step-up prompt), so this middleware
 // plus the browser gate are the enforcement for the email tool's API and UI.
@@ -28,8 +28,14 @@ function countVerifiedFactors(user) {
   return factors.filter((f) => f && f.status === 'verified').length
 }
 
+// Roles with access to every client (2026-11-18). Cross-client access follows the role alone:
+// can_access_client / is_internal_staff and validateClientAccess grant every client to
+// role IN ('super_admin','admin') whatever admin_users.client_id says. client_admin stays opt-in.
+// Keep in step with src/lib/mfa.ts.
+const CROSS_CLIENT_ROLES = ['super_admin', 'admin']
+
 function mfaRequiredForRole(role) {
-  return role === 'super_admin'
+  return CROSS_CLIENT_ROLES.includes(role)
 }
 
 function assuranceDecision({ role, aal, verifiedFactorCount }) {
@@ -44,7 +50,7 @@ function assuranceDecision({ role, aal, verifiedFactorCount }) {
     return {
       ok: false,
       code: 'mfa_enrollment_required',
-      error: 'Super admin accounts must set up two-factor authentication first (Settings → Your account).',
+      error: 'Accounts with access to every client must set up two-factor authentication first. Reload the app to set it up.',
     }
   }
   return { ok: true }
@@ -59,4 +65,4 @@ function mfaCheck({ token, user, adminUser }) {
   })
 }
 
-module.exports = { decodeJwtClaims, countVerifiedFactors, mfaRequiredForRole, assuranceDecision, mfaCheck }
+module.exports = { CROSS_CLIENT_ROLES, decodeJwtClaims, countVerifiedFactors, mfaRequiredForRole, assuranceDecision, mfaCheck }

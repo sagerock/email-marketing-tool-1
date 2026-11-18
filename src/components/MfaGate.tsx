@@ -7,8 +7,8 @@ import MfaVerify from './mfa/MfaVerify'
 import Button from './ui/Button'
 
 // Sits inside ProtectedRoute once the admin record is known. Shows the code prompt to anyone
-// with a verified factor whose session is still AAL1, and the setup screen to super admins
-// with no factor. Everyone else passes straight through. State is cached per access token
+// with a verified factor whose session is still AAL1, and the setup screen to every-client
+// roles (super_admin, admin) with no factor. Everyone else passes straight through. State is cached per access token
 // (src/lib/mfa.ts) and kept during token refreshes so open pages are not unmounted.
 export default function MfaGate({ children }: { children: React.ReactNode }) {
   const { session, adminUser } = useAuth()
@@ -62,7 +62,7 @@ export default function MfaGate({ children }: { children: React.ReactNode }) {
     return (
       <AuthShell
         title="Set up two-factor authentication"
-        subtitle="Super admin accounts can see every client's data, so they need an authenticator app before continuing."
+        subtitle="Your account can see every client's data, so it needs an authenticator app before continuing."
       >
         <MfaEnroll onDone={reload} />
       </AuthShell>
