@@ -66,9 +66,9 @@ function calendarFile(key) {
 
 function googleCalendarUrl(key) {
   const e = EVENTS[key]
-  const q = new URLSearchParams({ action: 'TEMPLATE', text: e.title, dates: `${e.start}/${e.end}`,
+  const q = new URLSearchParams({ action: 'TEMPLATE', text: e.title,
     details: `A free live conversation with ${e.hosts}. The Zoom link comes in the reminder emails. ${e.page}`, location: 'Zoom' })
-  return `https://calendar.google.com/calendar/render?${q}`
+  return `https://calendar.google.com/calendar/render?${q}&dates=${e.start}/${e.end}`
 }
 
 // Fixed confirmation. Nothing from the request appears in the content, so the form
