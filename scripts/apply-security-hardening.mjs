@@ -24,9 +24,11 @@ if (process.argv.includes('--apply')) {
 }
 console.log(JSON.stringify(await query(`BEGIN READ ONLY;
 SELECT now() AS checked_at,
-  has_function_privilege('anon','public.execute_sql(text)','EXECUTE') AS anon_sql,
-  has_function_privilege('authenticated','public.execute_sql(text)','EXECUTE') AS authenticated_sql,
-  has_function_privilege('service_role','public.execute_sql(text)','EXECUTE') AS service_sql,
+  -- execute_sql is dropped by migration 127; the oid form returns NULL once it is gone.
+  to_regprocedure('public.execute_sql(text)') IS NOT NULL AS execute_sql_present,
+  has_function_privilege('anon',to_regprocedure('public.execute_sql(text)'),'EXECUTE') AS anon_sql,
+  has_function_privilege('authenticated',to_regprocedure('public.execute_sql(text)'),'EXECUTE') AS authenticated_sql,
+  has_function_privilege('service_role',to_regprocedure('public.execute_sql(text)'),'EXECUTE') AS service_sql,
   (SELECT count(*) FROM pg_policies WHERE schemaname='public'
     AND tablename IN ('contact_notes','contact_tasks','email_conversations','knowledge_bases',
       'discovered_media_urls','cc_contacts','cc_lists','cc_list_memberships','sync_runs')

@@ -190,8 +190,10 @@ def main():
             cur.execute(sql.SQL("SELECT md5(coalesce(string_agg(to_jsonb(s)::text,E'\\n' ORDER BY to_jsonb(s)::text),'')) FROM (SELECT * FROM public.{} ORDER BY id LIMIT 5) s").format(sql.Identifier(table)))
             if cur.fetchone()[0] != expected:
                 raise ValueError("Restored sample hash mismatch: " + table)
-        cur.execute("SELECT has_function_privilege('anon','public.execute_sql(text)','EXECUTE'),has_function_privilege('authenticated','public.execute_sql(text)','EXECUTE'),has_function_privilege('service_role','public.execute_sql(text)','EXECUTE')")
-        if cur.fetchone() != (False, False, True):
+        # execute_sql is dropped by migration 127. Backups from before then still contain it, and
+        # there it must remain service-role only. The oid form gives NULLs when it is absent.
+        cur.execute("SELECT has_function_privilege('anon',to_regprocedure('public.execute_sql(text)'),'EXECUTE'),has_function_privilege('authenticated',to_regprocedure('public.execute_sql(text)'),'EXECUTE'),has_function_privilege('service_role',to_regprocedure('public.execute_sql(text)'),'EXECUTE')")
+        if cur.fetchone() not in ((False, False, True), (None, None, None)):
             raise ValueError("Restored privileged RPC access differs")
         cur.execute("SELECT extname,extversion FROM pg_extension ORDER BY extname")
         restored_extensions = cur.fetchall()
