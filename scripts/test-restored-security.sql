@@ -9,7 +9,8 @@ DO $$ DECLARE t text; n integer; BEGIN
  END LOOP;
  IF (SELECT body FROM knowledge_bases WHERE id=1)<>'owned update' OR
     (SELECT body FROM knowledge_bases WHERE id=2)<>'synthetic B' THEN RAISE EXCEPTION 'Restored content differs'; END IF;
- IF has_function_privilege('anon','execute_sql(text)','EXECUTE') OR has_function_privilege('authenticated','execute_sql(text)','EXECUTE') THEN RAISE EXCEPTION 'Restored SQL RPC exposed'; END IF;
+ -- execute_sql may be absent (dropped by migration 127); if present it must stay server-only.
+ IF to_regprocedure('execute_sql(text)') IS NOT NULL AND (has_function_privilege('anon','execute_sql(text)','EXECUTE') OR has_function_privilege('authenticated','execute_sql(text)','EXECUTE')) THEN RAISE EXCEPTION 'Restored SQL RPC exposed'; END IF;
  IF has_function_privilege('authenticated','cfa_dashboard_stats(uuid)','EXECUTE') OR NOT has_function_privilege('service_role','cfa_dashboard_stats(uuid)','EXECUTE') THEN RAISE EXCEPTION 'Restored RPC grants wrong'; END IF;
  IF (SELECT proowner FROM pg_proc WHERE oid='can_access_client(uuid)'::regprocedure)<>'postgres'::regrole THEN RAISE EXCEPTION 'Function owner lost'; END IF;
 END $$;
