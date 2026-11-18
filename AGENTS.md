@@ -363,6 +363,16 @@ does not silently clear an existing unsubscribe. No historical contacts are mail
 Tests: `node --test api/public-intake-guide.test.js`; migration helper:
 `scripts/apply-intake-guide-migration.mjs`. Details: `docs/intake-guide-delivery.md`.
 
+**Webinar registration (2026-11-18, Sage approved the build):** `POST /api/public/webinar-registration`
+(`api/public-webinar-registration.js`, migration 125) backs `sagerock.com/budget-webinar/`. Events are a
+server-side allowlist (`EVENTS`). `record_webinar_registration` merges the SageRock contact like the intake
+guide (tag `webinar-<event>`, plus `-opt-in` with consent; new non-consenting contacts `unsubscribed=true`)
+and inserts one `webinar_registrations` row per event+email; only the insert winner sends the fixed
+confirmation (jax@, `- Jax`, .ics attached). Reminders are NOT built: campaigns and sequences skip
+unsubscribed contacts, so send event reminders from `webinar_registrations`, never by flipping
+`unsubscribed`. Tests: `node --test api/public-webinar-registration.test.js`,
+`node scripts/webinar-registration.pgtest.mjs`. Details: `docs/webinar-registration.md`.
+
 `POST /api/public/list-signup` (body: `email`, optional `first_name`, `list`) lets a
 public page add someone to a named list on the `PUBLIC_SIGNUP_CLIENT_ID` client
 (SageRock). Lists are allowlisted in `api/public-list-signup.js`; each maps to contact
