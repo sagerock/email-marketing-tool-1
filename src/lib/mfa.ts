@@ -2,7 +2,10 @@
 //
 // Decision rules, shared with the server (api/mfa.js):
 //   - anyone with a verified factor must verify it each session (AAL2) before using the app
-//   - super admins must have a factor; until they do, they only see the setup screen
+//   - roles that can see every client (super_admin and admin, 2026-11-18) must have a factor;
+//     until they do, they only see the setup screen. Cross-client access follows the role alone:
+//     can_access_client / is_internal_staff grant every client to role IN ('super_admin','admin')
+//     whatever admin_users.client_id says. client_admin (one client) stays opt-in.
 // The database-level RLS helpers deliberately do NOT require AAL2 yet: the schools app queries
 // this project as the signed-in user through the same helpers and has no step-up prompt.
 import type { Factor } from '@supabase/supabase-js'
@@ -20,8 +23,11 @@ export interface MfaState {
 
 export type MfaDecision = 'ok' | 'verify' | 'enroll'
 
+// Roles with access to every client. Keep in step with api/mfa.js and the RLS helpers.
+export const CROSS_CLIENT_ROLES: readonly AdminRole[] = ['super_admin', 'admin']
+
 export function mfaRequiredForRole(role: AdminRole | null | undefined): boolean {
-  return role === 'super_admin'
+  return !!role && CROSS_CLIENT_ROLES.includes(role)
 }
 
 export function needsStepUp(state: MfaState): boolean {

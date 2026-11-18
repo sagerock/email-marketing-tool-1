@@ -28,7 +28,7 @@ export default function SecurityCard() {
   useEffect(() => { reload() }, [])
 
   const turnOff = async (factorId: string) => {
-    const note = required ? ' You will be asked to set it up again right away, because super admins must have it.' : ''
+    const note = required ? ' You will be asked to set it up again right away, because accounts with access to every client must have it.' : ''
     if (!window.confirm(`Turn off two-factor authentication for ${user?.email}?${note}`)) return
     setBusy(true)
     setError('')
@@ -68,7 +68,7 @@ export default function SecurityCard() {
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium text-gray-900">Two-factor authentication</span>
               {on ? <Badge variant="success">On</Badge> : <Badge>Off</Badge>}
-              {required && <span className="text-xs text-gray-500">Required for super admins</span>}
+              {required && <span className="text-xs text-gray-500">Required for accounts with access to every client</span>}
             </div>
             {on ? (
               <ul className="space-y-2">
