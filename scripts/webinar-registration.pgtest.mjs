@@ -54,5 +54,11 @@ if (!process.argv.includes('--disposable-cluster')) {
   assert.throws(() => sql(`UPDATE webinar_registrations SET confirmation_status='bogus';`, 'service_role'))
   // Reminder list query the later reminder build will use.
   assert.equal(sql(`SELECT count(*) FROM webinar_registrations WHERE client_id='${T}' AND event='budget-2026-12-08'`), '3')
+  // Migration 128: one mailing row per (registration, kind); browser roles locked out.
+  sql(fs.readFileSync(new URL('../supabase/migrations/128_webinar_mailings.sql', import.meta.url), 'utf8'))
+  sql(`INSERT INTO webinar_mailings(registration_id,kind) VALUES ('${a.registration_id}','reminder-day');`, 'service_role')
+  assert.throws(() => sql(`INSERT INTO webinar_mailings(registration_id,kind) VALUES ('${a.registration_id}','reminder-day');`, 'service_role'))
+  assert.throws(() => sql(`INSERT INTO webinar_mailings(registration_id,kind) VALUES ('${a.registration_id}','bogus');`, 'service_role'))
+  for (const role of ['anon', 'authenticated']) assert.throws(() => sql(`SELECT count(*) FROM webinar_mailings;`, role))
   console.log('webinar-registration pgtest: all assertions passed')
 }
