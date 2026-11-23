@@ -370,7 +370,7 @@ Tests: `node --test api/public-intake-guide.test.js`; migration helper:
 server-side allowlist (`EVENTS`). `record_webinar_registration` merges the SageRock contact like the intake
 guide (tag `webinar-<event>`, plus `-opt-in` with consent; new non-consenting contacts `unsubscribed=true`)
 and inserts one `webinar_registrations` row per event+email; only the insert winner sends the fixed
-confirmation (jax@, `- Jax`, .ics attached). Reminders are NOT built: campaigns and sequences skip
+confirmation (jax@, `- Jax`, .ics attached). Reminders + follow-up: `api/webinar-mailings.js`, migration 128 (2026-11-23, see the doc). Campaigns and sequences skip
 unsubscribed contacts, so send event reminders from `webinar_registrations`, never by flipping
 `unsubscribed`. Tests: `node --test api/public-webinar-registration.test.js`,
 `node scripts/webinar-registration.pgtest.mjs`. Details: `docs/webinar-registration.md`.

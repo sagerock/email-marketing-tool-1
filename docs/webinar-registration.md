@@ -15,9 +15,25 @@ The confirmation is fixed content (nothing from the form appears in it), from an
 
 Same IP limiter as the intake guide (8 per 15 minutes). Neither anon nor authenticated can call the function or read the table.
 
-## Reminders (not built)
+## Reminders and follow-up (built 2026-11-23, Jax item #4351)
 
-The registrant list is `webinar_registrations WHERE event='budget-2026-12-08'` (also the contact tag `webinar-budget-2026-12-08`). **The campaign sender and sequence scheduler both skip `unsubscribed=true` contacts**, and new registrants who left marketing unticked are created that way. A tag-filtered campaign would therefore miss most registrants. Reminders and the recording are event mail the registrant asked for, so send them from `webinar_registrations` (same fixed-content, one-per-row ledger pattern as the confirmation), excluding hard bounces and anyone who unsubscribed after registering (`contacts.unsubscribed_at` later than the registration). Decide that path with the reminder build; do not flip registrants to `unsubscribed=false` to make a campaign reach them.
+`api/webinar-mailings.js` + migration 128 (`webinar_mailings`, one row per registration and kind, the reservation that makes
+each email send at most once). Kinds: `reminder-day` (Dec 7, window 8am ET to midnight), `reminder-hour` (Dec 8, 1:45-3:00pm ET)
+and `followup` (after 3:45pm Dec 8). Fixed content from jax@sagerock.com, signed `- Jax`, tracking off. Recipients come from
+`webinar_registrations` (not tag campaigns, which skip `unsubscribed=true`), minus the two test rows
+(`sage+webinar-test@`, `sage+webinar-test2@`), hard bounces and anyone whose `unsubscribed_at` is later than their registration.
+A send outside its window is refused (`not_due`); a timeout is recorded `uncertain` and never retried.
+
+Run on the Railway backend (`railway ssh`), from `api/`, dry run first:
+
+    node scripts/webinar-mailing.js reminder-day --join=<Zoom meeting Invite Link>        # preview
+    node scripts/webinar-mailing.js reminder-day --join=<link> --send [--only=addr]
+    node scripts/webinar-mailing.js followup --recording=<url> --checklist=<pdf url> --send
+
+The Zoom link is the meeting 863 7184 9307 "Invite Link" (with passcode) from the SageRock Zoom; it is passed on the command
+line, never stored here. The checklist draft is `sagerock/clients/alma-partners/budget-webinar/planning-checklist-2027-28.md`.
+Go-live: apply migration 128, merge and deploy, dry-run. Tests: `node --test api/webinar-mailings.test.js`,
+`node scripts/webinar-registration.pgtest.mjs` (also covers 128).
 
 Lead ownership (agreed with Alma): a school belongs to whoever invited it; a school on both lists is Alma's. `heard_from` and `attribution.utm_source` (`alma` on Alma's newsletter link) are recorded for that; the ownership decision itself is made when the list is reviewed, not in code. Don't market SageRock to Alma-attributed registrants without agreeing it with Vicki, even if they ticked the SageRock consent box.
 
